@@ -107,6 +107,80 @@ defmodule SymphonyElixirWeb.DashboardLive do
           </article>
         </section>
 
+        <section :if={@payload[:workflows]} class="section-card">
+          <div class="section-header">
+            <div>
+              <h2 class="section-title">Workflow Sections</h2>
+              <p class="section-copy">Per-workflow orchestration state within this Symphony instance.</p>
+            </div>
+          </div>
+
+          <div :for={workflow <- @payload.workflows} class="section-card" style="margin-top: 1rem;">
+            <div class="section-header">
+              <div>
+                <h3 class="section-title"><%= workflow.workflow_name %></h3>
+                <p class="section-copy">
+                  Running <span class="numeric"><%= workflow.counts.running %></span>
+                  · Retrying <span class="numeric"><%= workflow.counts.retrying %></span>
+                  · Tokens <span class="numeric"><%= format_int(workflow.codex_totals.total_tokens || 0) %></span>
+                </p>
+              </div>
+            </div>
+
+            <%= if workflow.running == [] and workflow.retrying == [] do %>
+              <p class="empty-state">No active or retrying issues for this workflow.</p>
+            <% else %>
+              <%= if workflow.running != [] do %>
+                <div class="table-wrap">
+                  <table class="data-table data-table-running">
+                    <thead>
+                      <tr>
+                        <th>Issue</th>
+                        <th>State</th>
+                        <th>Runtime / turns</th>
+                        <th>Codex update</th>
+                        <th>Tokens</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr :for={entry <- workflow.running}>
+                        <td><span class="issue-id"><%= entry.issue_identifier %></span></td>
+                        <td><span class={state_badge_class(entry.state)}><%= entry.state %></span></td>
+                        <td class="numeric"><%= format_runtime_and_turns(entry.started_at, entry.turn_count, @now) %></td>
+                        <td><%= entry.last_message || to_string(entry.last_event || "n/a") %></td>
+                        <td class="numeric"><%= format_int(entry.tokens.total_tokens) %></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              <% end %>
+
+              <%= if workflow.retrying != [] do %>
+                <div class="table-wrap" style="margin-top: 1rem;">
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>Issue</th>
+                        <th>Attempt</th>
+                        <th>Due at</th>
+                        <th>Error</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr :for={entry <- workflow.retrying}>
+                        <td><span class="issue-id"><%= entry.issue_identifier %></span></td>
+                        <td><%= entry.attempt %></td>
+                        <td class="mono"><%= entry.due_at || "n/a" %></td>
+                        <td><%= entry.error || "n/a" %></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              <% end %>
+            <% end %>
+          </div>
+        </section>
+
         <section class="section-card">
           <div class="section-header">
             <div>
@@ -311,7 +385,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp orchestrator do
-    Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator
+    Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator.default_source()
   end
 
   defp snapshot_timeout_ms do

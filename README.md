@@ -67,16 +67,21 @@ mise exec -- ./bin/symphony ./WORKFLOW.md
 
 ## Configuration
 
-Pass a custom workflow file path to `./bin/symphony` when starting the service:
+Pass one or more workflow file paths to `./bin/symphony` when starting the service:
 
 ```bash
 ./bin/symphony /path/to/custom/WORKFLOW.md
+./bin/symphony /path/to/WORKFLOW.md /path/to/ENRICHMENT.md
+./bin/symphony --workflows /path/to/workflows/
 ```
 
-If no path is passed, Symphony defaults to `./WORKFLOW.md`.
+If no path is passed, Symphony defaults to `./WORKFLOW.md`. When multiple workflow files are
+provided, Symphony starts one orchestrator per workflow while sharing the same TaskSupervisor,
+SQLite store, PubSub, and dashboard.
 
 Optional flags:
 
+- `--workflows` expands a directory of `*.md` workflow files (or accepts an explicit workflow file)
 - `--logs-root` tells Symphony to write logs under a different directory (default: `./log`)
 - `--port` also starts the Phoenix observability service (default: disabled)
 
@@ -89,6 +94,7 @@ Minimal example:
 ---
 tracker:
   kind: linear
+  filter_by: project
   project_slug: "..."
 workspace:
   root: ~/code/workspaces
@@ -128,6 +134,8 @@ Notes:
 - If a hook needs `mise exec` inside a freshly cloned workspace, trust the repo config and fetch
   the project dependencies in `hooks.after_create` before invoking `mise` later from other hooks.
 - `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.
+- `tracker.filter_by` defaults to `project`. Set `tracker.filter_by: label` together with
+  `tracker.label_name` to poll issues by label instead of project slug.
 - For path values, `~` is expanded to the home directory.
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
   while `codex.command` stays a shell command string and any `$VAR` expansion there happens in the
@@ -136,6 +144,8 @@ Notes:
 ```yaml
 tracker:
   api_key: $LINEAR_API_KEY
+  filter_by: label
+  label_name: enrich
 workspace:
   root: $SYMPHONY_WORKSPACE_ROOT
 hooks:
@@ -146,8 +156,8 @@ codex:
 ```
 
 - If `WORKFLOW.md` is missing or has invalid YAML at startup, Symphony does not boot.
-- If a later reload fails, Symphony keeps running with the last known good workflow and logs the
-  reload error until the file is fixed.
+- If a later reload fails, Symphony keeps running with the last known good workflow for that file
+  and logs the reload error until the file is fixed.
 - `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API at
   `/`, `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
 

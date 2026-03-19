@@ -53,25 +53,23 @@ defmodule SymphonyElixir.SessionLog do
 
       pid ->
         db_session_id = GenServer.call(pid, :get_db_session_id)
-
-        messages =
-          if db_session_id do
-            Store.get_session_messages(db_session_id)
-            |> Enum.map(fn m ->
-              %{
-                id: m.seq,
-                timestamp: m.timestamp,
-                type: String.to_existing_atom(m.type),
-                content: m.content,
-                metadata: parse_metadata(m.metadata)
-              }
-            end)
-          else
-            []
-          end
-
-        {:ok, messages}
+        {:ok, load_messages(db_session_id)}
     end
+  end
+
+  defp load_messages(nil), do: []
+
+  defp load_messages(db_session_id) do
+    Store.get_session_messages(db_session_id)
+    |> Enum.map(fn m ->
+      %{
+        id: m.seq,
+        timestamp: m.timestamp,
+        type: String.to_existing_atom(m.type),
+        content: m.content,
+        metadata: parse_metadata(m.metadata)
+      }
+    end)
   end
 
   @spec finalize(String.t(), String.t(), atom(), map()) :: :ok
@@ -405,8 +403,6 @@ defmodule SymphonyElixir.SessionLog do
     end
   end
 
-  defp content_blocks_have_type?(_params, _type), do: false
-
   defp extract_tool_name(payload) when is_map(payload) do
     params = Map.get(payload, "params", %{})
     result = Map.get(payload, "result", %{}) || %{}
@@ -472,7 +468,7 @@ defmodule SymphonyElixir.SessionLog do
         seq: message.id,
         type: to_string(message.type),
         content: message.content,
-        metadata: Jason.encode!(message.metadata || %{}),
+        metadata: Jason.encode!(message.metadata),
         timestamp: message.timestamp
       })
     end)
@@ -509,6 +505,7 @@ defmodule SymphonyElixir.SessionLog do
 
   defp cap_content(content) when byte_size(content) > @max_content_bytes do
     truncated_size = @max_content_bytes - 14
+
     binary_part(content, byte_size(content) - truncated_size, truncated_size)
     |> then(&("[truncated]…\n" <> &1))
   end
@@ -516,12 +513,14 @@ defmodule SymphonyElixir.SessionLog do
   defp cap_content(content), do: content
 
   defp parse_metadata(nil), do: %{}
+
   defp parse_metadata(json) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, map} when is_map(map) -> map
       _ -> %{}
     end
   end
+
   defp parse_metadata(map) when is_map(map), do: map
   defp parse_metadata(_), do: %{}
 

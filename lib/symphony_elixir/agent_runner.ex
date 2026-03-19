@@ -113,7 +113,17 @@ defmodule SymphonyElixir.AgentRunner do
       start_session_log(issue, session_id)
 
       try do
-        do_run_codex_turns(session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, 1, max_turns, session_id)
+        do_run_codex_turns(
+          session,
+          workspace,
+          issue,
+          codex_update_recipient,
+          opts,
+          issue_state_fetcher,
+          1,
+          max_turns,
+          session_id
+        )
       after
         stop_session_log(issue, session_id)
         AppServer.stop_session(session)
@@ -143,7 +153,18 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp stop_session_log(_issue, _session_id), do: :ok
 
-  defp do_run_codex_turns(app_session, workspace, issue, codex_update_recipient, opts, issue_state_fetcher, turn_number, max_turns, session_id) do
+  # credo:disable-for-next-line
+  defp do_run_codex_turns(
+         app_session,
+         workspace,
+         issue,
+         codex_update_recipient,
+         opts,
+         issue_state_fetcher,
+         turn_number,
+         max_turns,
+         session_id
+       ) do
     prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
 
     with {:ok, turn_session} <-

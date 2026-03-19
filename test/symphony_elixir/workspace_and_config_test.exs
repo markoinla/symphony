@@ -458,6 +458,52 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert log =~ "Variable \\\"$ids\\\" got invalid value"
   end
 
+  test "linear client supports label-based candidate issue filtering" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_filter_by: "label",
+      tracker_project_slug: nil,
+      tracker_label_name: "enrich"
+    )
+
+    graphql_fun = fn query, variables ->
+      send(self(), {:label_query, query, variables})
+
+      {:ok,
+       %{
+         "data" => %{
+           "issues" => %{
+             "nodes" => [
+               %{
+                 "id" => "issue-label-1",
+                 "identifier" => "SYM-ENRICH",
+                 "title" => "Label matched",
+                 "description" => "needs enrichment",
+                 "priority" => 1,
+                 "state" => %{"name" => "Todo"},
+                 "branchName" => nil,
+                 "url" => "https://example.test/issues/SYM-ENRICH",
+                 "assignee" => nil,
+                 "labels" => %{"nodes" => [%{"name" => "enrich"}]},
+                 "comments" => %{"nodes" => []},
+                 "inverseRelations" => %{"nodes" => []},
+                 "createdAt" => "2026-03-19T00:00:00Z",
+                 "updatedAt" => "2026-03-19T00:00:00Z"
+               }
+             ],
+             "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+           }
+         }
+       }}
+    end
+
+    assert {:ok, [%SymphonyElixir.Linear.Issue{identifier: "SYM-ENRICH", labels: ["enrich"]}]} =
+             Client.fetch_candidate_issues_for_test(graphql_fun)
+
+    assert_receive {:label_query, query, %{labelName: "enrich", stateNames: ["Todo", "In Progress"]}}
+    assert query =~ "SymphonyLinearPollByLabel"
+    assert query =~ "labels: {some: {name: {eq: $labelName}}}"
+  end
+
   test "orchestrator sorts dispatch by priority then oldest created_at" do
     issue_same_priority_older = %Issue{
       id: "issue-old-high",
@@ -938,6 +984,12 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     config = Config.settings!()
     assert config.tracker.api_key == "env:#{api_key_env_var}"
     assert config.workspace.root == "env:#{workspace_env_var}"
+  end
+
+  test "settings returns an empty overlay map when no local settings file exists" do
+    File.rm(SymphonyElixir.Settings.file_path())
+
+    assert SymphonyElixir.Settings.config_overlay() == %{}
   end
 
   test "config supports per-state max concurrent agent overrides" do

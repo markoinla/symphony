@@ -6,12 +6,13 @@ defmodule SymphonyElixir.CLI do
   alias SymphonyElixir.LogFile
 
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
-  @switches [{@acknowledgement_switch, :boolean}, logs_root: :string, port: :integer]
+  @switches [{@acknowledgement_switch, :boolean}, logs_root: :string, port: :integer, workflows: :string]
 
   @type ensure_started_result :: {:ok, [atom()]} | {:error, term()}
   @type deps :: %{
           file_regular?: (String.t() -> boolean()),
-          set_workflow_file_path: (String.t() -> :ok | {:error, term()}),
+          file_dir?: (String.t() -> boolean()),
+          set_workflow_file_paths: ([String.t()] -> :ok | {:error, term()}),
           set_logs_root: (String.t() -> :ok | {:error, term()}),
           set_server_port_override: (non_neg_integer() | nil -> :ok | {:error, term()}),
           ensure_all_started: (-> ensure_started_result())
@@ -32,18 +33,12 @@ defmodule SymphonyElixir.CLI do
   @spec evaluate([String.t()], deps()) :: :ok | {:error, String.t()}
   def evaluate(args, deps \\ runtime_deps()) do
     case OptionParser.parse(args, strict: @switches) do
-      {opts, [], []} ->
+      {opts, workflow_args, []} ->
         with :ok <- require_guardrails_acknowledgement(opts),
              :ok <- maybe_set_logs_root(opts, deps),
-             :ok <- maybe_set_server_port(opts, deps) do
-          run(Path.expand("WORKFLOW.md"), deps)
-        end
-
-      {opts, [workflow_path], []} ->
-        with :ok <- require_guardrails_acknowledgement(opts),
-             :ok <- maybe_set_logs_root(opts, deps),
-             :ok <- maybe_set_server_port(opts, deps) do
-          run(workflow_path, deps)
+             :ok <- maybe_set_server_port(opts, deps),
+             {:ok, workflow_paths} <- resolve_workflow_paths(opts, workflow_args, deps) do
+          run(workflow_paths, deps)
         end
 
       _ ->
@@ -51,40 +46,115 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  @spec run(String.t(), deps()) :: :ok | {:error, String.t()}
-  def run(workflow_path, deps) do
-    expanded_path = Path.expand(workflow_path)
+  @spec run([String.t()], deps()) :: :ok | {:error, String.t()}
+  def run(workflow_paths, deps) when is_list(workflow_paths) do
+    expanded_paths =
+      workflow_paths
+      |> Enum.map(&Path.expand/1)
+      |> Enum.uniq()
 
-    if deps.file_regular?.(expanded_path) do
-      :ok = deps.set_workflow_file_path.(expanded_path)
-      ensure_nif_code_paths()
+    case Enum.find(expanded_paths, fn path -> not deps.file_regular?.(path) end) do
+      nil ->
+        :ok = set_workflow_paths(deps, expanded_paths)
+        ensure_nif_code_paths()
 
-      case deps.ensure_all_started.() do
-        {:ok, _started_apps} ->
-          :ok
+        case deps.ensure_all_started.() do
+          {:ok, _started_apps} ->
+            :ok
 
-        {:error, reason} ->
-          {:error, "Failed to start Symphony with workflow #{expanded_path}: #{inspect(reason)}"}
-      end
-    else
-      {:error, "Workflow file not found: #{expanded_path}"}
+          {:error, reason} ->
+            {:error, "Failed to start Symphony with workflows #{Enum.join(expanded_paths, ", ")}: #{inspect(reason)}"}
+        end
+
+      missing_path ->
+        {:error, "Workflow file not found: #{missing_path}"}
     end
   end
 
   @spec usage_message() :: String.t()
   defp usage_message do
-    "Usage: symphony [--logs-root <path>] [--port <port>] [path-to-WORKFLOW.md]"
+    "Usage: symphony [--logs-root <path>] [--port <port>] [--workflows <dir-or-file>] [path-to-WORKFLOW.md ...]"
   end
 
   @spec runtime_deps() :: deps()
   defp runtime_deps do
     %{
       file_regular?: &File.regular?/1,
-      set_workflow_file_path: &SymphonyElixir.Workflow.set_workflow_file_path/1,
+      file_dir?: &File.dir?/1,
+      set_workflow_file_paths: &SymphonyElixir.Workflow.set_workflow_file_paths/1,
       set_logs_root: &set_logs_root/1,
       set_server_port_override: &set_server_port_override/1,
       ensure_all_started: fn -> Application.ensure_all_started(:symphony_elixir) end
     }
+  end
+
+  defp resolve_workflow_paths(opts, workflow_args, deps) do
+    explicit_paths =
+      opts
+      |> Keyword.get_values(:workflows)
+      |> Enum.reduce_while([], fn value, acc ->
+        case expand_workflow_argument(value, deps) do
+          {:ok, paths} -> {:cont, acc ++ paths}
+          {:error, reason} -> {:halt, {:error, reason}}
+        end
+      end)
+
+    case explicit_paths do
+      {:error, reason} ->
+        {:error, reason}
+
+      paths ->
+        resolved_paths =
+          case workflow_args ++ paths do
+            [] -> [Path.expand("WORKFLOW.md")]
+            values -> Enum.map(values, &Path.expand/1)
+          end
+
+        if resolved_paths == [] do
+          {:error, usage_message()}
+        else
+          {:ok, resolved_paths}
+        end
+    end
+  end
+
+  defp expand_workflow_argument(value, deps) when is_binary(value) do
+    expanded = Path.expand(value)
+
+    cond do
+      deps.file_regular?.(expanded) ->
+        {:ok, [expanded]}
+
+      deps.file_dir?.(expanded) ->
+        workflow_paths =
+          expanded
+          |> Path.join("*.md")
+          |> Path.wildcard()
+          |> Enum.filter(fn path -> deps.file_regular?.(path) end)
+          |> Enum.sort()
+
+        case workflow_paths do
+          [] -> {:error, "No workflow files found in directory: #{expanded}"}
+          paths -> {:ok, paths}
+        end
+
+      true ->
+        {:error, "Workflow path not found: #{expanded}"}
+    end
+  end
+
+  defp set_workflow_paths(%{set_workflow_file_paths: setter}, workflow_paths)
+       when is_function(setter, 1) do
+    setter.(workflow_paths)
+  end
+
+  defp set_workflow_paths(%{set_workflow_file_path: setter}, [workflow_path])
+       when is_function(setter, 1) do
+    setter.(workflow_path)
+  end
+
+  defp set_workflow_paths(_deps, workflow_paths) do
+    {:error, "Unable to configure workflows #{Enum.join(workflow_paths, ", ")}: runtime deps missing workflow setter"}
   end
 
   defp maybe_set_logs_root(opts, deps) do

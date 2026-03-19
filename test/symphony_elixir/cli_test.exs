@@ -136,4 +136,55 @@ defmodule SymphonyElixir.CLITest do
 
     assert :ok = CLI.evaluate([@ack_flag, "WORKFLOW.md"], deps)
   end
+
+  test "accepts multiple positional workflow paths" do
+    parent = self()
+    expanded_paths = [Path.expand("ONE.md"), Path.expand("TWO.md")]
+
+    deps = %{
+      file_regular?: fn path -> path in expanded_paths end,
+      file_dir?: fn _path -> false end,
+      set_workflow_file_paths: fn paths ->
+        send(parent, {:workflow_paths, paths})
+        :ok
+      end,
+      set_logs_root: fn _path -> :ok end,
+      set_server_port_override: fn _port -> :ok end,
+      ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
+    }
+
+    assert :ok = CLI.evaluate([@ack_flag, "ONE.md", "TWO.md"], deps)
+    assert_received {:workflow_paths, ^expanded_paths}
+  end
+
+  test "expands workflow directories passed with --workflows" do
+    workflow_dir = Path.join(System.tmp_dir!(), "symphony-cli-workflows-#{System.unique_integer([:positive])}")
+    first_path = Path.join(workflow_dir, "ENRICHMENT.md")
+    second_path = Path.join(workflow_dir, "IMPLEMENTATION.md")
+
+    File.mkdir_p!(workflow_dir)
+    File.write!(first_path, "---\n---\n")
+    File.write!(second_path, "---\n---\n")
+
+    parent = self()
+
+    deps = %{
+      file_regular?: &File.regular?/1,
+      file_dir?: &File.dir?/1,
+      set_workflow_file_paths: fn paths ->
+        send(parent, {:workflow_paths, paths})
+        :ok
+      end,
+      set_logs_root: fn _path -> :ok end,
+      set_server_port_override: fn _port -> :ok end,
+      ensure_all_started: fn -> {:ok, [:symphony_elixir]} end
+    }
+
+    try do
+      assert :ok = CLI.evaluate([@ack_flag, "--workflows", workflow_dir], deps)
+      assert_received {:workflow_paths, [^first_path, ^second_path]}
+    after
+      File.rm_rf(workflow_dir)
+    end
+  end
 end

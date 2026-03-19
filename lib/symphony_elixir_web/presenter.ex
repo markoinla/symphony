@@ -5,82 +5,55 @@ defmodule SymphonyElixirWeb.Presenter do
 
   alias SymphonyElixir.{Config, Orchestrator, SessionLog, StatusDashboard, Store}
 
-  @spec state_payload(GenServer.name(), timeout()) :: map()
+  @spec state_payload(GenServer.name() | [{String.t(), GenServer.name()}], timeout()) :: map()
   def state_payload(orchestrator, snapshot_timeout_ms) do
     generated_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
-    case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
-      %{} = snapshot ->
-        %{
-          generated_at: generated_at,
-          counts: %{
-            running: length(snapshot.running),
-            retrying: length(snapshot.retrying)
-          },
-          running: Enum.map(snapshot.running, &running_entry_payload/1),
-          retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
-          codex_totals: snapshot.codex_totals,
-          rate_limits: snapshot.rate_limits
-        }
+    case fetch_snapshots(orchestrator, snapshot_timeout_ms) do
+      {:ok, [{nil, snapshot}]} ->
+        single_state_payload(snapshot, generated_at)
 
-      :timeout ->
+      {:ok, snapshots} ->
+        multi_state_payload(snapshots, generated_at)
+
+      {:error, :timeout} ->
         %{generated_at: generated_at, error: %{code: "snapshot_timeout", message: "Snapshot timed out"}}
 
-      :unavailable ->
+      {:error, :unavailable} ->
         %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
     end
   end
 
-  @spec issue_payload(String.t(), GenServer.name(), timeout()) :: {:ok, map()} | {:error, :issue_not_found}
+  @spec issue_payload(String.t(), GenServer.name() | [{String.t(), GenServer.name()}], timeout()) ::
+          {:ok, map()} | {:error, :issue_not_found}
   def issue_payload(issue_identifier, orchestrator, snapshot_timeout_ms) when is_binary(issue_identifier) do
-    case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
-      %{} = snapshot ->
-        running = Enum.find(snapshot.running, &(&1.identifier == issue_identifier))
-        retry = Enum.find(snapshot.retrying, &(&1.identifier == issue_identifier))
-
-        if is_nil(running) and is_nil(retry) do
-          {:error, :issue_not_found}
-        else
-          {:ok, issue_payload_body(issue_identifier, running, retry)}
+    case fetch_snapshots(orchestrator, snapshot_timeout_ms) do
+      {:ok, snapshots} ->
+        case find_issue_entries(snapshots, issue_identifier) do
+          {nil, nil} -> {:error, :issue_not_found}
+          {running, retry} -> {:ok, issue_payload_body(issue_identifier, running, retry)}
         end
 
-      _ ->
+      {:error, _reason} ->
         {:error, :issue_not_found}
     end
   end
 
-  @spec messages_payload(String.t(), GenServer.name(), timeout()) ::
+  @spec messages_payload(String.t(), GenServer.name() | [{String.t(), GenServer.name()}], timeout()) ::
           {:ok, map()} | {:error, :issue_not_found | :session_log_not_found}
   def messages_payload(issue_identifier, orchestrator, snapshot_timeout_ms) do
-    case issue_payload(issue_identifier, orchestrator, snapshot_timeout_ms) do
-      {:ok, payload} ->
-        issue_id = payload[:issue_id]
-
-        session_id =
-          case payload[:running] do
-            %{session_id: sid} when is_binary(sid) -> sid
-            _ -> nil
-          end
-
-        if issue_id && session_id do
-          case SessionLog.get_messages(issue_id, session_id) do
-            {:ok, msgs} ->
-              {:ok,
-               %{
-                 issue_identifier: issue_identifier,
-                 session_id: session_id,
-                 messages: Enum.map(msgs, &message_payload/1)
-               }}
-
-            {:error, :not_found} ->
-              {:error, :session_log_not_found}
-          end
-        else
-          {:error, :session_log_not_found}
-        end
-
-      {:error, :issue_not_found} ->
-        {:error, :issue_not_found}
+    with {:ok, payload} <- issue_payload(issue_identifier, orchestrator, snapshot_timeout_ms),
+         {:ok, issue_id, session_id} <- payload_message_context(payload),
+         {:ok, msgs} <- SessionLog.get_messages(issue_id, session_id) do
+      {:ok,
+       %{
+         issue_identifier: issue_identifier,
+         session_id: session_id,
+         messages: Enum.map(msgs, &message_payload/1)
+       }}
+    else
+      {:error, :not_found} -> {:error, :session_log_not_found}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -94,15 +67,172 @@ defmodule SymphonyElixirWeb.Presenter do
     }
   end
 
-  @spec refresh_payload(GenServer.name()) :: {:ok, map()} | {:error, :unavailable}
+  defp payload_message_context(payload) when is_map(payload) do
+    issue_id = payload[:issue_id]
+
+    session_id =
+      case payload[:running] do
+        %{session_id: sid} when is_binary(sid) -> sid
+        _ -> nil
+      end
+
+    if issue_id && session_id do
+      {:ok, issue_id, session_id}
+    else
+      {:error, :session_log_not_found}
+    end
+  end
+
+  @spec refresh_payload(GenServer.name() | [{String.t(), GenServer.name()}]) :: {:ok, map()} | {:error, :unavailable}
   def refresh_payload(orchestrator) do
-    case Orchestrator.request_refresh(orchestrator) do
-      :unavailable ->
+    case request_refresh_results(orchestrator) do
+      [] ->
         {:error, :unavailable}
 
-      payload ->
+      [{nil, payload}] ->
         {:ok, Map.update!(payload, :requested_at, &DateTime.to_iso8601/1)}
+
+      payloads ->
+        requested_at =
+          payloads
+          |> Enum.map(fn {_workflow_name, payload} -> payload.requested_at end)
+          |> Enum.max_by(&DateTime.to_unix(&1, :microsecond))
+
+        {:ok,
+         %{
+           queued: true,
+           coalesced: Enum.all?(payloads, fn {_workflow_name, payload} -> payload.coalesced end),
+           requested_at: DateTime.to_iso8601(requested_at),
+           operations: ["poll", "reconcile"],
+           workflows:
+             Enum.map(payloads, fn {workflow_name, payload} ->
+               payload
+               |> Map.put(:workflow_name, workflow_name)
+               |> Map.update!(:requested_at, &DateTime.to_iso8601/1)
+             end)
+         }}
     end
+  end
+
+  defp fetch_snapshots(orchestrator, snapshot_timeout_ms) do
+    snapshots =
+      orchestrator_sources(orchestrator)
+      |> Enum.reduce([], fn {workflow_name, server}, acc ->
+        case Orchestrator.snapshot(server, snapshot_timeout_ms) do
+          %{} = snapshot -> [{workflow_name, snapshot} | acc]
+          :timeout -> [{:timeout, workflow_name} | acc]
+          :unavailable -> acc
+        end
+      end)
+      |> Enum.reverse()
+
+    ok_snapshots =
+      Enum.filter(snapshots, fn
+        {workflow_name, %{} = _snapshot} when is_binary(workflow_name) or is_nil(workflow_name) -> true
+        _ -> false
+      end)
+
+    case ok_snapshots do
+      [] ->
+        if Enum.any?(snapshots, &match?({:timeout, _workflow_name}, &1)) do
+          {:error, :timeout}
+        else
+          {:error, :unavailable}
+        end
+
+      ok_snapshots ->
+        {:ok, ok_snapshots}
+    end
+  end
+
+  defp orchestrator_sources(orchestrator) when is_list(orchestrator), do: orchestrator
+  defp orchestrator_sources(orchestrator), do: [{nil, orchestrator}]
+
+  defp request_refresh_results(orchestrator) do
+    orchestrator_sources(orchestrator)
+    |> Enum.reduce([], fn {workflow_name, server}, acc ->
+      case Orchestrator.request_refresh(server) do
+        :unavailable -> acc
+        payload -> [{workflow_name, payload} | acc]
+      end
+    end)
+    |> Enum.reverse()
+  end
+
+  defp single_state_payload(snapshot, generated_at) do
+    %{
+      generated_at: generated_at,
+      counts: %{
+        running: length(snapshot.running),
+        retrying: length(snapshot.retrying)
+      },
+      running: Enum.map(snapshot.running, &running_entry_payload/1),
+      retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
+      codex_totals: snapshot.codex_totals,
+      rate_limits: snapshot.rate_limits
+    }
+  end
+
+  defp multi_state_payload(snapshots, generated_at) do
+    workflows =
+      Enum.map(snapshots, fn {workflow_name, snapshot} ->
+        %{
+          workflow_name: workflow_name,
+          counts: %{
+            running: length(snapshot.running),
+            retrying: length(snapshot.retrying)
+          },
+          running: Enum.map(snapshot.running, &running_entry_payload(&1, workflow_name)),
+          retrying: Enum.map(snapshot.retrying, &retry_entry_payload(&1, workflow_name)),
+          codex_totals: snapshot.codex_totals,
+          rate_limits: snapshot.rate_limits,
+          polling: Map.get(snapshot, :polling)
+        }
+      end)
+
+    %{
+      generated_at: generated_at,
+      counts: %{
+        running: Enum.reduce(workflows, 0, fn workflow, total -> total + workflow.counts.running end),
+        retrying: Enum.reduce(workflows, 0, fn workflow, total -> total + workflow.counts.retrying end)
+      },
+      running: Enum.flat_map(workflows, & &1.running),
+      retrying: Enum.flat_map(workflows, & &1.retrying),
+      codex_totals: sum_codex_totals(workflows),
+      rate_limits: Map.new(workflows, fn workflow -> {workflow.workflow_name, workflow.rate_limits} end),
+      workflows: workflows
+    }
+  end
+
+  defp sum_codex_totals(workflows) do
+    Enum.reduce(workflows, %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}, fn workflow, totals ->
+      %{
+        input_tokens: totals.input_tokens + Map.get(workflow.codex_totals, :input_tokens, 0),
+        output_tokens: totals.output_tokens + Map.get(workflow.codex_totals, :output_tokens, 0),
+        total_tokens: totals.total_tokens + Map.get(workflow.codex_totals, :total_tokens, 0),
+        seconds_running: totals.seconds_running + Map.get(workflow.codex_totals, :seconds_running, 0)
+      }
+    end)
+  end
+
+  defp find_issue_entries(snapshots, issue_identifier) do
+    Enum.reduce_while(snapshots, {nil, nil}, fn {workflow_name, snapshot}, _acc ->
+      running =
+        snapshot.running
+        |> Enum.find(&(&1.identifier == issue_identifier))
+        |> maybe_put_workflow_name(workflow_name)
+
+      retry =
+        snapshot.retrying
+        |> Enum.find(&(&1.identifier == issue_identifier))
+        |> maybe_put_workflow_name(workflow_name)
+
+      if is_nil(running) and is_nil(retry) do
+        {:cont, {nil, nil}}
+      else
+        {:halt, {running, retry}}
+      end
+    end)
   end
 
   defp issue_payload_body(issue_identifier, running, retry) do
@@ -140,7 +270,7 @@ defmodule SymphonyElixirWeb.Presenter do
   defp issue_status(nil, _retry), do: "retrying"
   defp issue_status(_running, _retry), do: "running"
 
-  defp running_entry_payload(entry) do
+  defp running_entry_payload(entry, workflow_name \\ nil) do
     %{
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
@@ -159,9 +289,10 @@ defmodule SymphonyElixirWeb.Presenter do
         total_tokens: entry.codex_total_tokens
       }
     }
+    |> maybe_put_workflow_name_payload(workflow_name)
   end
 
-  defp retry_entry_payload(entry) do
+  defp retry_entry_payload(entry, workflow_name \\ nil) do
     %{
       issue_id: entry.issue_id,
       issue_identifier: entry.identifier,
@@ -171,6 +302,7 @@ defmodule SymphonyElixirWeb.Presenter do
       worker_host: Map.get(entry, :worker_host),
       workspace_path: Map.get(entry, :workspace_path)
     }
+    |> maybe_put_workflow_name_payload(workflow_name)
   end
 
   defp running_issue_payload(running) do
@@ -205,7 +337,7 @@ defmodule SymphonyElixirWeb.Presenter do
   defp workspace_path(issue_identifier, running, retry) do
     (running && Map.get(running, :workspace_path)) ||
       (retry && Map.get(retry, :workspace_path)) ||
-      Path.join(Config.settings!().workspace.root, issue_identifier)
+      Path.join(workspace_root_for_entry(running, retry), issue_identifier)
   end
 
   defp workspace_host(running, retry) do
@@ -234,6 +366,23 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp due_at_iso8601(_due_in_ms), do: nil
+
+  defp workspace_root_for_entry(running, retry) do
+    workflow_name =
+      (running && Map.get(running, :workflow_name)) || (retry && Map.get(retry, :workflow_name))
+
+    case workflow_name do
+      name when is_binary(name) -> Config.settings!(name).workspace.root
+      _ -> Config.settings!().workspace.root
+    end
+  end
+
+  defp maybe_put_workflow_name(nil, _workflow_name), do: nil
+  defp maybe_put_workflow_name(entry, nil), do: entry
+  defp maybe_put_workflow_name(entry, workflow_name), do: Map.put(entry, :workflow_name, workflow_name)
+
+  defp maybe_put_workflow_name_payload(payload, nil), do: payload
+  defp maybe_put_workflow_name_payload(payload, workflow_name), do: Map.put(payload, :workflow_name, workflow_name)
 
   @spec history_payload(keyword()) :: map()
   def history_payload(opts \\ []) do

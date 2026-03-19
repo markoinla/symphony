@@ -65,6 +65,60 @@ defmodule SymphonyElixir.Linear.Client do
   }
   """
 
+  @query_by_label """
+  query SymphonyLinearPollByLabel($labelName: String!, $stateNames: [String!]!, $first: Int!, $relationFirst: Int!, $commentFirst: Int!, $after: String) {
+    issues(filter: {labels: {some: {name: {eq: $labelName}}}, state: {name: {in: $stateNames}}}, first: $first, after: $after) {
+      nodes {
+        id
+        identifier
+        title
+        description
+        priority
+        state {
+          name
+        }
+        branchName
+        url
+        assignee {
+          id
+        }
+        labels {
+          nodes {
+            name
+          }
+        }
+        comments(first: $commentFirst) {
+          nodes {
+            body
+            user {
+              name
+            }
+            createdAt
+          }
+        }
+        inverseRelations(first: $relationFirst) {
+          nodes {
+            type
+            issue {
+              id
+              identifier
+              state {
+                name
+              }
+            }
+          }
+        }
+        createdAt
+        updatedAt
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+  """
+
   @query_by_ids """
   query SymphonyLinearIssuesById($ids: [ID!]!, $first: Int!, $relationFirst: Int!, $commentFirst: Int!) {
     issues(filter: {id: {in: $ids}}, first: $first) {
@@ -126,19 +180,10 @@ defmodule SymphonyElixir.Linear.Client do
   @spec fetch_candidate_issues() :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues do
     tracker = Config.settings!().tracker
-    project_slug = tracker.project_slug
 
-    cond do
-      is_nil(tracker.api_key) ->
-        {:error, :missing_linear_api_token}
-
-      is_nil(project_slug) ->
-        {:error, :missing_linear_project_slug}
-
-      true ->
-        with {:ok, assignee_filter} <- routing_assignee_filter() do
-          do_fetch_by_states(extract_slug_id(project_slug), tracker.active_states, assignee_filter)
-        end
+    with :ok <- validate_tracker_api_key(tracker),
+         {:ok, assignee_filter} <- routing_assignee_filter() do
+      fetch_candidate_issues_for_tracker(tracker, assignee_filter)
     end
   end
 
@@ -256,13 +301,85 @@ defmodule SymphonyElixir.Linear.Client do
     end
   end
 
+  @doc false
+  @spec fetch_candidate_issues_for_test((String.t(), map() -> {:ok, map()} | {:error, term()})) ::
+          {:ok, [Issue.t()]} | {:error, term()}
+  def fetch_candidate_issues_for_test(graphql_fun) when is_function(graphql_fun, 2) do
+    tracker = Config.settings!().tracker
+
+    with {:ok, assignee_filter} <- routing_assignee_filter_for_test(graphql_fun) do
+      case tracker.filter_by do
+        "label" ->
+          do_fetch_by_label_with(tracker.label_name, tracker.active_states, assignee_filter, graphql_fun)
+
+        _ ->
+          do_fetch_by_states_with(
+            extract_slug_id(tracker.project_slug),
+            tracker.active_states,
+            assignee_filter,
+            graphql_fun
+          )
+      end
+    end
+  end
+
+  defp fetch_candidate_issues_for_tracker(tracker, assignee_filter) do
+    case tracker.filter_by do
+      "label" ->
+        fetch_candidate_issues_by_label(tracker, assignee_filter)
+
+      _ ->
+        fetch_candidate_issues_by_project(tracker, assignee_filter)
+    end
+  end
+
+  defp fetch_candidate_issues_by_label(tracker, assignee_filter) do
+    case tracker.label_name do
+      label_name when is_binary(label_name) ->
+        do_fetch_by_label(label_name, tracker.active_states, assignee_filter)
+
+      _ ->
+        {:error, :missing_linear_label_name}
+    end
+  end
+
+  defp fetch_candidate_issues_by_project(tracker, assignee_filter) do
+    case tracker.project_slug do
+      project_slug when is_binary(project_slug) ->
+        do_fetch_by_states(extract_slug_id(project_slug), tracker.active_states, assignee_filter)
+
+      _ ->
+        {:error, :missing_linear_project_slug}
+    end
+  end
+
+  defp validate_tracker_api_key(%{api_key: api_key}) when is_binary(api_key), do: :ok
+  defp validate_tracker_api_key(_tracker), do: {:error, :missing_linear_api_token}
+
   defp do_fetch_by_states(project_slug, state_names, assignee_filter) do
     do_fetch_by_states_page(project_slug, state_names, assignee_filter, nil, [])
   end
 
+  defp do_fetch_by_states_with(project_slug, state_names, assignee_filter, graphql_fun) do
+    do_fetch_by_states_page(project_slug, state_names, assignee_filter, nil, [], graphql_fun)
+  end
+
+  defp do_fetch_by_label(label_name, state_names, assignee_filter) do
+    do_fetch_by_label_page(label_name, state_names, assignee_filter, nil, [])
+  end
+
+  defp do_fetch_by_label_with(label_name, state_names, assignee_filter, graphql_fun) do
+    do_fetch_by_label_page(label_name, state_names, assignee_filter, nil, [], graphql_fun)
+  end
+
   defp do_fetch_by_states_page(project_slug, state_names, assignee_filter, after_cursor, acc_issues) do
+    do_fetch_by_states_page(project_slug, state_names, assignee_filter, after_cursor, acc_issues, &graphql/2)
+  end
+
+  defp do_fetch_by_states_page(project_slug, state_names, assignee_filter, after_cursor, acc_issues, graphql_fun)
+       when is_function(graphql_fun, 2) do
     with {:ok, body} <-
-           graphql(@query, %{
+           graphql_fun.(@query, %{
              projectSlug: project_slug,
              stateNames: state_names,
              first: @issue_page_size,
@@ -275,7 +392,38 @@ defmodule SymphonyElixir.Linear.Client do
 
       case next_page_cursor(page_info) do
         {:ok, next_cursor} ->
-          do_fetch_by_states_page(project_slug, state_names, assignee_filter, next_cursor, updated_acc)
+          do_fetch_by_states_page(project_slug, state_names, assignee_filter, next_cursor, updated_acc, graphql_fun)
+
+        :done ->
+          {:ok, finalize_paginated_issues(updated_acc)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp do_fetch_by_label_page(label_name, state_names, assignee_filter, after_cursor, acc_issues) do
+    do_fetch_by_label_page(label_name, state_names, assignee_filter, after_cursor, acc_issues, &graphql/2)
+  end
+
+  defp do_fetch_by_label_page(label_name, state_names, assignee_filter, after_cursor, acc_issues, graphql_fun)
+       when is_function(graphql_fun, 2) do
+    with {:ok, body} <-
+           graphql_fun.(@query_by_label, %{
+             labelName: label_name,
+             stateNames: state_names,
+             first: @issue_page_size,
+             relationFirst: @issue_page_size,
+             commentFirst: @comment_page_size,
+             after: after_cursor
+           }),
+         {:ok, issues, page_info} <- decode_linear_page_response(body, assignee_filter) do
+      updated_acc = prepend_page_issues(issues, acc_issues)
+
+      case next_page_cursor(page_info) do
+        {:ok, next_cursor} ->
+          do_fetch_by_label_page(label_name, state_names, assignee_filter, next_cursor, updated_acc, graphql_fun)
 
         :done ->
           {:ok, finalize_paginated_issues(updated_acc)}
@@ -520,6 +668,16 @@ defmodule SymphonyElixir.Linear.Client do
     end
   end
 
+  defp routing_assignee_filter_for_test(graphql_fun) when is_function(graphql_fun, 2) do
+    case Config.settings!().tracker.assignee do
+      nil ->
+        {:ok, nil}
+
+      assignee ->
+        build_assignee_filter_for_test(assignee, graphql_fun)
+    end
+  end
+
   defp build_assignee_filter(assignee) when is_binary(assignee) do
     case normalize_assignee_match_value(assignee) do
       nil ->
@@ -535,6 +693,38 @@ defmodule SymphonyElixir.Linear.Client do
 
   defp resolve_viewer_assignee_filter do
     case graphql(@viewer_query, %{}) do
+      {:ok, %{"data" => %{"viewer" => viewer}}} when is_map(viewer) ->
+        case assignee_id(viewer) do
+          nil ->
+            {:error, :missing_linear_viewer_identity}
+
+          viewer_id ->
+            {:ok, %{configured_assignee: "me", match_values: MapSet.new([viewer_id])}}
+        end
+
+      {:ok, _body} ->
+        {:error, :missing_linear_viewer_identity}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp build_assignee_filter_for_test(assignee, graphql_fun) when is_binary(assignee) do
+    case normalize_assignee_match_value(assignee) do
+      nil ->
+        {:ok, nil}
+
+      "me" ->
+        resolve_viewer_assignee_filter_for_test(graphql_fun)
+
+      normalized ->
+        {:ok, %{configured_assignee: assignee, match_values: MapSet.new([normalized])}}
+    end
+  end
+
+  defp resolve_viewer_assignee_filter_for_test(graphql_fun) when is_function(graphql_fun, 2) do
+    case graphql_fun.(@viewer_query, %{}) do
       {:ok, %{"data" => %{"viewer" => viewer}}} when is_map(viewer) ->
         case assignee_id(viewer) do
           nil ->

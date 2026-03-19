@@ -332,6 +332,9 @@ defmodule SymphonyElixir.StatusDashboard do
 
   defp format_snapshot_content(snapshot_data, tps, terminal_columns_override \\ nil) do
     case snapshot_data do
+      {:ok, %{workflows: workflows} = snapshot} when is_list(workflows) and length(workflows) > 1 ->
+        format_multi_workflow_snapshot(snapshot, tps, terminal_columns_override)
+
       {:ok, %{running: running, retrying: retrying, codex_totals: codex_totals} = snapshot} ->
         rate_limits = Map.get(snapshot, :rate_limits)
         project_link_lines = format_project_link_lines()
@@ -392,6 +395,52 @@ defmodule SymphonyElixir.StatusDashboard do
     end
   end
 
+  defp format_multi_workflow_snapshot(snapshot, tps, terminal_columns_override) do
+    running = Map.get(snapshot, :running, [])
+    retrying = Map.get(snapshot, :retrying, [])
+    codex_totals = Map.get(snapshot, :codex_totals, %{})
+    rate_limits = Map.get(snapshot, :rate_limits)
+    codex_input_tokens = Map.get(codex_totals, :input_tokens, 0)
+    codex_output_tokens = Map.get(codex_totals, :output_tokens, 0)
+    codex_total_tokens = Map.get(codex_totals, :total_tokens, 0)
+    codex_seconds_running = Map.get(codex_totals, :seconds_running, 0)
+    running_event_width = running_event_width(terminal_columns_override)
+    running_rows = format_running_rows(running, running_event_width)
+    running_to_backoff_spacer = if(running == [], do: [], else: ["│"])
+    backoff_rows = format_retry_rows(retrying)
+    workflow_rows = format_workflow_rows(Map.get(snapshot, :workflows, []))
+
+    ([
+       colorize("╭─ SYMPHONY STATUS", @ansi_bold),
+       colorize("│ Workflows: ", @ansi_bold) <>
+         colorize("#{length(Map.get(snapshot, :workflows, []))}", @ansi_green),
+       colorize("│ Throughput: ", @ansi_bold) <> colorize("#{format_tps(tps)} tps", @ansi_cyan),
+       colorize("│ Runtime: ", @ansi_bold) <>
+         colorize(format_runtime_seconds(codex_seconds_running), @ansi_magenta),
+       colorize("│ Tokens: ", @ansi_bold) <>
+         colorize("in #{format_count(codex_input_tokens)}", @ansi_yellow) <>
+         colorize(" | ", @ansi_gray) <>
+         colorize("out #{format_count(codex_output_tokens)}", @ansi_yellow) <>
+         colorize(" | ", @ansi_gray) <>
+         colorize("total #{format_count(codex_total_tokens)}", @ansi_yellow),
+       colorize("│ Rate Limits: ", @ansi_bold) <> format_rate_limits(rate_limits),
+       format_dashboard_link_line(),
+       colorize("├─ Running", @ansi_bold),
+       "│",
+       running_table_header_row(running_event_width),
+       running_table_separator_row(running_event_width)
+     ] ++
+       running_rows ++
+       running_to_backoff_spacer ++
+       [colorize("├─ Backoff queue", @ansi_bold), "│"] ++
+       backoff_rows ++
+       ["│", colorize("├─ Workflows", @ansi_bold), "│"] ++
+       workflow_rows ++
+       [closing_border()])
+    |> List.flatten()
+    |> Enum.join("\n")
+  end
+
   defp format_project_link_lines do
     tracker = Config.settings!().tracker
 
@@ -441,6 +490,64 @@ defmodule SymphonyElixir.StatusDashboard do
   defp dashboard_url do
     dashboard_url(Config.settings!().server.host, Config.server_port(), HttpServer.bound_port())
   end
+
+  defp format_dashboard_link_line do
+    case dashboard_url() do
+      url when is_binary(url) ->
+        colorize("│ Dashboard: ", @ansi_bold) <> colorize(url, @ansi_cyan)
+
+      _ ->
+        colorize("│ Dashboard: ", @ansi_bold) <> colorize("n/a", @ansi_gray)
+    end
+  end
+
+  defp format_workflow_rows(workflows) do
+    Enum.flat_map(workflows, fn workflow ->
+      workflow_name = Map.get(workflow, :workflow_name, "unknown")
+      config = Config.settings!(workflow_name)
+      tracker = config.tracker
+      agent_count = workflow.counts.running
+      retry_count = workflow.counts.retrying
+      max_agents = config.agent.max_concurrent_agents
+      tokens = Map.get(workflow, :codex_totals, %{}) |> Map.get(:total_tokens, 0)
+
+      [
+        colorize("│ " <> workflow_name, @ansi_cyan),
+        colorize("│   Agents: ", @ansi_bold) <>
+          colorize("#{agent_count}", @ansi_green) <>
+          colorize("/", @ansi_gray) <>
+          colorize("#{max_agents}", @ansi_gray) <>
+          colorize("  Retries: ", @ansi_bold) <>
+          colorize("#{retry_count}", @ansi_orange) <>
+          colorize("  Tokens: ", @ansi_bold) <>
+          colorize(format_count(tokens), @ansi_yellow),
+        colorize("│   Target: ", @ansi_bold) <> colorize(workflow_target(tracker), @ansi_cyan),
+        colorize("│   Next refresh: ", @ansi_bold) <> colorize(next_refresh_value(Map.get(workflow, :polling)), @ansi_cyan),
+        colorize("│   Rate Limits: ", @ansi_bold) <> format_rate_limits(Map.get(workflow, :rate_limits)),
+        "│"
+      ]
+    end)
+  end
+
+  defp workflow_target(%{filter_by: "label", label_name: label_name}) when is_binary(label_name),
+    do: "label=#{label_name}"
+
+  defp workflow_target(%{organization_slug: org_slug, project_slug: project_slug})
+       when is_binary(project_slug) and project_slug != "" do
+    linear_project_url(org_slug, project_slug)
+  end
+
+  defp workflow_target(_tracker), do: "n/a"
+
+  defp next_refresh_value(%{checking?: true}), do: "checking now…"
+
+  defp next_refresh_value(%{next_poll_in_ms: due_in_ms}) when is_integer(due_in_ms) do
+    due_in_ms = max(due_in_ms, 0)
+    seconds = div(due_in_ms + 999, 1000)
+    "#{seconds}s"
+  end
+
+  defp next_refresh_value(_polling), do: "n/a"
 
   defp dashboard_url(_host, nil, _bound_port), do: nil
 
@@ -557,29 +664,101 @@ defmodule SymphonyElixir.StatusDashboard do
     do: dashboard_url(host, configured_port, bound_port)
 
   defp snapshot_payload do
-    if Process.whereis(Orchestrator) do
-      case Orchestrator.snapshot() do
-        %{
-          running: running,
-          retrying: retrying,
-          codex_totals: codex_totals
-        } = snapshot
-        when is_list(running) and is_list(retrying) ->
-          {:ok,
-           %{
-             running: running,
-             retrying: retrying,
-             codex_totals: codex_totals,
-             rate_limits: Map.get(snapshot, :rate_limits),
-             polling: Map.get(snapshot, :polling)
-           }}
+    case Orchestrator.default_source() do
+      sources when is_list(sources) ->
+        snapshot_payload_for_workflows(sources)
 
-        _ ->
-          :error
-      end
-    else
-      :error
+      server ->
+        snapshot_payload_for_server(server)
     end
+  end
+
+  defp snapshot_payload_for_server(server) do
+    case Orchestrator.snapshot(server, 15_000) do
+      %{
+        running: running,
+        retrying: retrying,
+        codex_totals: codex_totals
+      } = snapshot
+      when is_list(running) and is_list(retrying) ->
+        {:ok,
+         %{
+           running: running,
+           retrying: retrying,
+           codex_totals: codex_totals,
+           rate_limits: Map.get(snapshot, :rate_limits),
+           polling: Map.get(snapshot, :polling)
+         }}
+
+      _ ->
+        :error
+    end
+  end
+
+  defp snapshot_payload_for_workflows(sources) do
+    workflows =
+      Enum.reduce(sources, [], fn {workflow_name, server}, acc ->
+        case Orchestrator.snapshot(server, 15_000) do
+          %{} = snapshot ->
+            [
+              %{
+                workflow_name: workflow_name,
+                counts: %{
+                  running: length(Map.get(snapshot, :running, [])),
+                  retrying: length(Map.get(snapshot, :retrying, []))
+                },
+                running: Map.get(snapshot, :running, []),
+                retrying: Map.get(snapshot, :retrying, []),
+                codex_totals: Map.get(snapshot, :codex_totals, %{}),
+                rate_limits: Map.get(snapshot, :rate_limits),
+                polling: Map.get(snapshot, :polling)
+              }
+              | acc
+            ]
+
+          _ ->
+            acc
+        end
+      end)
+      |> Enum.reverse()
+
+    case workflows do
+      [] ->
+        :error
+
+      [workflow] ->
+        {:ok,
+         %{
+           running: workflow.running,
+           retrying: workflow.retrying,
+           codex_totals: workflow.codex_totals,
+           rate_limits: workflow.rate_limits,
+           polling: workflow.polling
+         }}
+
+      workflows ->
+        {:ok,
+         %{
+           workflows: workflows,
+           running: Enum.flat_map(workflows, & &1.running),
+           retrying: Enum.flat_map(workflows, & &1.retrying),
+           codex_totals: sum_codex_totals(workflows),
+           rate_limits: Map.new(workflows, fn workflow -> {workflow.workflow_name, workflow.rate_limits} end)
+         }}
+    end
+  end
+
+  defp sum_codex_totals(workflows) do
+    Enum.reduce(workflows, %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}, fn workflow, totals ->
+      codex_totals = Map.get(workflow, :codex_totals, %{})
+
+      %{
+        input_tokens: totals.input_tokens + Map.get(codex_totals, :input_tokens, 0),
+        output_tokens: totals.output_tokens + Map.get(codex_totals, :output_tokens, 0),
+        total_tokens: totals.total_tokens + Map.get(codex_totals, :total_tokens, 0),
+        seconds_running: totals.seconds_running + Map.get(codex_totals, :seconds_running, 0)
+      }
+    end)
   end
 
   defp format_running_rows(running, running_event_width) do

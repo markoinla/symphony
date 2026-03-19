@@ -48,7 +48,9 @@ defmodule SymphonyElixir.Config.Schema do
       field(:kind, :string)
       field(:endpoint, :string, default: "https://api.linear.app/graphql")
       field(:api_key, :string)
+      field(:filter_by, :string, default: "project")
       field(:project_slug, :string)
+      field(:label_name, :string)
       field(:organization_slug, :string)
       field(:assignee, :string)
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
@@ -60,9 +62,21 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(
         attrs,
-        [:kind, :endpoint, :api_key, :project_slug, :organization_slug, :assignee, :active_states, :terminal_states],
+        [
+          :kind,
+          :endpoint,
+          :api_key,
+          :filter_by,
+          :project_slug,
+          :label_name,
+          :organization_slug,
+          :assignee,
+          :active_states,
+          :terminal_states
+        ],
         empty_values: []
       )
+      |> validate_inclusion(:filter_by, ["project", "label"])
     end
   end
 
