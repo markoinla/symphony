@@ -223,7 +223,7 @@ defmodule SymphonyElixir.AgentRunner do
   defp continue_with_issue?(%Issue{id: issue_id} = issue, issue_state_fetcher) when is_binary(issue_id) do
     case issue_state_fetcher.([issue_id]) do
       {:ok, [%Issue{} = refreshed_issue | _]} ->
-        if active_issue_state?(refreshed_issue.state) do
+        if active_issue_state?(refreshed_issue.state) and issue_still_matches_label_filter?(refreshed_issue) do
           {:continue, refreshed_issue}
         else
           {:done, refreshed_issue}
@@ -238,6 +238,18 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp continue_with_issue?(issue, _issue_state_fetcher), do: {:done, issue}
+
+  defp issue_still_matches_label_filter?(%Issue{labels: labels}) do
+    tracker = Config.settings!().tracker
+
+    case tracker.filter_by do
+      "label" when is_binary(tracker.label_name) ->
+        tracker.label_name in labels
+
+      _ ->
+        true
+    end
+  end
 
   defp active_issue_state?(state_name) when is_binary(state_name) do
     normalized_state = normalize_issue_state(state_name)

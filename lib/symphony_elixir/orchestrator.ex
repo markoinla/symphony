@@ -1390,7 +1390,20 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp retry_candidate_issue?(%Issue{} = issue, terminal_states) do
     candidate_issue?(issue, active_state_set(), terminal_states) and
-      !todo_issue_blocked_by_non_terminal?(issue, terminal_states)
+      !todo_issue_blocked_by_non_terminal?(issue, terminal_states) and
+      issue_still_matches_label_filter?(issue)
+  end
+
+  defp issue_still_matches_label_filter?(%Issue{labels: labels}) do
+    tracker = Config.settings!().tracker
+
+    case tracker.filter_by do
+      "label" when is_binary(tracker.label_name) ->
+        tracker.label_name in labels
+
+      _ ->
+        true
+    end
   end
 
   defp dispatch_slots_available?(%Issue{} = issue, %State{} = state) do
