@@ -1,0 +1,224 @@
+defmodule SymphonyElixirWeb.HistorySessionLive do
+  @moduledoc """
+  Historical session detail — shows full conversation from SQLite storage.
+  """
+
+  use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
+
+  alias SymphonyElixirWeb.Presenter
+
+  @impl true
+  def mount(%{"id" => id_str}, _session, socket) do
+    case Integer.parse(id_str) do
+      {id, ""} ->
+        case Presenter.historical_messages_payload(id) do
+          {:ok, %{session: session, messages: messages}} ->
+            socket =
+              socket
+              |> assign(:session, session)
+              |> assign(:messages, messages)
+              |> assign(:not_found, false)
+
+            {:ok, socket}
+
+          {:error, :not_found} ->
+            {:ok, assign(socket, session: nil, messages: [], not_found: true)}
+        end
+
+      _ ->
+        {:ok, assign(socket, session: nil, messages: [], not_found: true)}
+    end
+  end
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <section class="chat-layout">
+      <header class="chat-topbar">
+        <a href="/history" class="chat-topbar-back" title="Back to history">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10 12L6 8l4-4"/>
+          </svg>
+        </a>
+
+        <%= if @session do %>
+          <div class="chat-topbar-info">
+            <span class="chat-topbar-title"><%= @session.issue_identifier || "Session ##{@session.id}" %></span>
+
+            <%= if @session.issue_title do %>
+              <span class="chat-topbar-meta"><%= @session.issue_title %></span>
+            <% end %>
+          </div>
+
+          <div class="chat-topbar-badges">
+            <span class={status_badge_class(@session.status)}>
+              <%= @session.status %>
+            </span>
+            <span class="state-badge">Historical</span>
+          </div>
+        <% end %>
+      </header>
+
+      <%= if @session do %>
+        <div class="history-detail-meta" style="padding: 0.5rem 0;">
+          <span>Turns: <%= @session.turn_count %></span>
+          <span class="history-detail-meta-sep">Tokens: <%= format_int(@session.total_tokens) %></span>
+          <span class="history-detail-meta-sep"><%= format_datetime(@session.started_at) %> &rarr; <%= format_datetime(@session.ended_at) || "ongoing" %></span>
+        </div>
+      <% end %>
+
+      <%= if @not_found do %>
+        <div class="chat-messages" style="padding: 3rem 0; text-align: center;">
+          <p class="empty-state">Session not found.</p>
+        </div>
+      <% else %>
+        <div class="chat-thread" id="message-list">
+          <%= if @messages == [] do %>
+            <div class="chat-messages">
+              <p class="empty-state" style="text-align: center; padding: 3rem 0;">No conversation messages recorded.</p>
+            </div>
+          <% else %>
+            <div class="chat-messages">
+              <div :for={msg <- @messages}>
+                <%= case msg.type do %>
+                  <% "response" -> %>
+                    <div class="chat-msg">
+                      <div class="chat-msg-header">
+                        <div class="chat-msg-avatar">
+                          <svg viewBox="0 0 16 16"><path d="M4 12l4-8 4 8"/></svg>
+                        </div>
+                        <span class="chat-msg-sender">Agent</span>
+                        <span class="chat-msg-time"><%= format_time(msg.timestamp) %></span>
+                      </div>
+                      <div class="chat-msg-body"><%= msg.content %></div>
+                    </div>
+
+                  <% "tool_call" -> %>
+                    <div class={"chat-tool #{if tool_failed?(msg.metadata), do: "chat-tool-failed", else: ""}"}>
+                      <details class="chat-tool-pill">
+                        <summary class="chat-tool-summary">
+                          <svg class="chat-tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="8" cy="8" r="2.5"/><path d="M8 1v2m0 10v2M1 8h2m10 0h2m-2.05-4.95-1.41 1.41m-7.08 7.08-1.41 1.41m0-9.9 1.41 1.41m7.08 7.08 1.41 1.41"/>
+                          </svg>
+                          <span class="chat-tool-name"><%= msg.content %></span>
+                          <span class={"chat-tool-badge chat-tool-badge-#{meta_status(msg.metadata)}"}>
+                            <%= meta_status(msg.metadata) %>
+                          </span>
+                        </summary>
+                        <%= if has_args?(msg.metadata) do %>
+                          <div class="chat-tool-body">
+                            <pre class="chat-tool-args"><%= format_args(meta_args(msg.metadata)) %></pre>
+                          </div>
+                        <% end %>
+                      </details>
+                      <%= if meta_error(msg.metadata) do %>
+                        <div class="chat-tool-error"><%= meta_error(msg.metadata) %></div>
+                      <% end %>
+                    </div>
+
+                  <% "reasoning_summary" -> %>
+                    <div class="chat-reasoning-summary">
+                      <div class="chat-reasoning-summary-header">
+                        <svg class="chat-reasoning-summary-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                          <circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/>
+                        </svg>
+                        <span>Reasoning</span>
+                      </div>
+                      <div class="chat-reasoning-summary-body"><%= msg.content %></div>
+                    </div>
+
+                  <% "thinking" -> %>
+                    <details class="chat-thinking">
+                      <summary class="chat-thinking-toggle">
+                        <svg class="chat-thinking-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M6 4l4 4-4 4"/>
+                        </svg>
+                        Thinking
+                      </summary>
+                      <div class="chat-thinking-body"><%= msg.content %></div>
+                    </details>
+
+                  <% "turn_boundary" -> %>
+                    <div class="chat-divider">
+                      <span class="chat-divider-text"><%= msg.content %></span>
+                    </div>
+
+                  <% "error" -> %>
+                    <div class="chat-error">
+                      <div class="chat-error-content"><%= msg.content %></div>
+                    </div>
+
+                  <% _ -> %>
+                    <div class="chat-msg">
+                      <div class="chat-msg-body"><%= msg.content %></div>
+                    </div>
+                <% end %>
+              </div>
+            </div>
+          <% end %>
+        </div>
+      <% end %>
+    </section>
+    """
+  end
+
+  defp status_badge_class(status) do
+    base = "state-badge"
+
+    case status do
+      "completed" -> "#{base} state-badge-active"
+      "running" -> "#{base} state-badge-active"
+      "failed" -> "#{base} state-badge-danger"
+      "cancelled" -> "#{base} state-badge-warning"
+      _ -> base
+    end
+  end
+
+  defp format_int(value) when is_integer(value) do
+    value
+    |> Integer.to_string()
+    |> String.reverse()
+    |> String.replace(~r/.{3}(?=.)/, "\\0,")
+    |> String.reverse()
+  end
+
+  defp format_int(_value), do: "n/a"
+
+  defp format_time(ts) when is_binary(ts) do
+    case DateTime.from_iso8601(ts) do
+      {:ok, dt, _offset} -> Calendar.strftime(dt, "%H:%M:%S")
+      _ -> ts
+    end
+  end
+
+  defp format_time(_), do: ""
+
+  defp format_datetime(nil), do: nil
+
+  defp format_datetime(ts) when is_binary(ts) do
+    case DateTime.from_iso8601(ts) do
+      {:ok, dt, _offset} -> Calendar.strftime(dt, "%Y-%m-%d %H:%M")
+      _ -> ts
+    end
+  end
+
+  defp format_datetime(_), do: nil
+
+  defp has_args?(metadata) do
+    args = metadata[:args] || metadata["args"]
+    is_map(args) and args != %{}
+  end
+
+  defp meta_status(metadata), do: metadata[:status] || metadata["status"] || "unknown"
+  defp meta_args(metadata), do: metadata[:args] || metadata["args"]
+  defp meta_error(metadata), do: metadata[:error] || metadata["error"]
+  defp tool_failed?(metadata), do: meta_status(metadata) == "failed"
+
+  defp format_args(args) when is_map(args) do
+    Jason.encode!(args, pretty: true)
+  rescue
+    _ -> inspect(args, pretty: true)
+  end
+
+  defp format_args(_), do: ""
+end
