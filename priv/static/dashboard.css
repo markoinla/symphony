@@ -122,6 +122,40 @@ code, pre, .mono {
   border-color: var(--surface-dim);
 }
 
+/* ── Global Nav ────────────────────────────────────────────────── */
+
+.global-nav {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0.75rem 1.5rem 0;
+}
+
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.35rem 0.65rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--ink-secondary);
+  text-decoration: none;
+  transition: all 120ms ease;
+}
+
+.nav-link:hover {
+  background: var(--surface-raised);
+  color: var(--ink);
+}
+
+.nav-link-active {
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 600;
+}
+
 /* ── App Shell ──────────────────────────────────────────────────── */
 
 .app-shell {
@@ -1031,6 +1065,103 @@ code, pre, .mono {
   max-height: 72vh;
   overflow-y: auto;
   padding-right: 0.25rem;
+}
+
+/* ── Flash Messages ────────────────────────────────────────────── */
+
+.flash-container {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+.flash {
+  padding: 0.625rem 1rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-bottom: 0.75rem;
+}
+
+.flash-info {
+  background: var(--success-soft);
+  color: var(--success-ink);
+  border: 1px solid rgba(45, 138, 86, 0.15);
+}
+
+.flash-error {
+  background: var(--danger-soft);
+  color: var(--danger-ink);
+  border: 1px solid rgba(196, 48, 43, 0.15);
+}
+
+/* ── Settings Form ─────────────────────────────────────────────── */
+
+.settings-form {
+  max-width: 40rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.settings-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.field-label {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.field-input {
+  appearance: none;
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  transition: border-color 120ms ease;
+}
+
+.field-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.field-input::placeholder {
+  color: var(--ink-tertiary);
+}
+
+.field-hint {
+  font-size: 0.75rem;
+  color: var(--ink-tertiary);
+}
+
+.field-error-text {
+  font-size: 0.75rem;
+  color: var(--danger);
+  font-weight: 500;
+}
+
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-top: 0.5rem;
 }
 
 /* ── Responsive ─────────────────────────────────────────────────── */

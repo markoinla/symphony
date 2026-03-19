@@ -48,6 +48,21 @@ defmodule SymphonyElixirWeb.Layouts do
   @spec app(map()) :: Phoenix.LiveView.Rendered.t()
   def app(assigns) do
     ~H"""
+    <nav class="global-nav">
+      <a href="/" class="nav-link">Dashboard</a>
+      <a href="/history" class="nav-link">History</a>
+      <a href="/settings" class="nav-link">Settings</a>
+    </nav>
+    <%= if info = Phoenix.Flash.get(@flash, :info) do %>
+      <div class="flash-container">
+        <div class="flash flash-info" role="alert" phx-click="lv:clear-flash" phx-value-key="info"><%= info %></div>
+      </div>
+    <% end %>
+    <%= if error = Phoenix.Flash.get(@flash, :error) do %>
+      <div class="flash-container">
+        <div class="flash flash-error" role="alert" phx-click="lv:clear-flash" phx-value-key="error"><%= error %></div>
+      </div>
+    <% end %>
     <main class="app-shell">
       {@inner_content}
     </main>

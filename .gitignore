@@ -43,6 +43,7 @@ erl_crash.dump
 .env.*
 .secrets
 .credentials
+.symphony_settings.json
 status.txt
 .codex/original-user-prompt.txt
 

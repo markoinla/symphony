@@ -28,6 +28,7 @@ defmodule SymphonyElixirWeb.Router do
     live("/session/:issue_identifier", SessionLive, :show)
     live("/history", HistoryLive, :index)
     live("/history/:id", HistorySessionLive, :show)
+    live("/settings", SettingsLive, :index)
   end
 
   scope "/", SymphonyElixirWeb do

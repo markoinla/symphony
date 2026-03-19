@@ -15,15 +15,8 @@ tracker:
     - Done
 polling:
   interval_ms: 5000
-workspace:
-  root: ~/code/bloomwise-workspaces
 hooks:
   timeout_ms: 300000
-  after_create: |
-    gh repo clone markoinla/violaflow . -- --depth 1
-    pnpm install --frozen-lockfile
-    ln -sf ~/Projects/bloomwise/bloomwise-mono-repo/apps/web/.env.local apps/web/.env.local
-    ln -sf ~/Projects/bloomwise/bloomwise-mono-repo/apps/jobs/.env apps/jobs/.env
   before_remove: |
     echo "Cleaning up workspace"
 agent:
@@ -39,7 +32,7 @@ server:
   host: "0.0.0.0"
 ---
 
-You are working on a Linear ticket `{{ issue.identifier }}` for the **Bloomwise** florist shop management SaaS platform.
+You are working on a Linear ticket `{{ issue.identifier }}`.
 
 {% if attempt %}
 Continuation context:
@@ -75,24 +68,14 @@ Comments (oldest first):
 ---
 {% endif %}
 
-## Project context: Bloomwise
+## Project context
 
-Bloomwise is a pnpm monorepo with these apps:
+Before starting any implementation work, discover and read the project's context files:
 
-- **apps/web** — Next.js 15 florist management dashboard (port 3000)
-- **apps/jobs** — BullMQ background job processor (port 3001)
-- **apps/auth-proxy** — Cloudflare Workers OAuth proxy
-- **apps/flora-chef** — Cloudflare Workers AI service for floral arrangement analysis
-
-Key tech: Drizzle ORM, Neon PostgreSQL, Better Auth, Shopify integration, Cloudflare R2.
-
-Read the root `CLAUDE.md` and the relevant app-level `CLAUDE.md` files before starting work. They contain architecture details, testing conventions, and important development notes.
-
-**Commands:**
-- `pnpm install` — install deps (run from root)
-- `cd apps/web && npm test` — run web tests
-- `cd apps/web && npx drizzle-kit generate` — generate DB migrations
-- `pnpm lint` — lint all apps
+1. Check the workspace root for `CLAUDE.md` and/or `AGENTS.md`.
+2. Check subdirectories for additional `CLAUDE.md` or `AGENTS.md` files relevant to the area you will be working in.
+3. These files contain architecture details, testing conventions, build commands, and important development notes — treat their contents as authoritative project context.
+4. If no context files are found, infer project structure from the repository layout, README, and package manifests.
 
 Instructions:
 
@@ -114,7 +97,7 @@ A Playwright MCP server is available globally. Use its tools (`browser_navigate`
 - Validate UI changes after implementation.
 - Capture screenshot evidence for the workpad (see "Uploading media to Linear comments" below).
 
-Test credentials for authentication are available in `apps/web/.env.local` as `TEST_USER_EMAIL` and `TEST_USER_PASSWORD`.
+If the project provides test credentials (e.g. in `.env.local` or a `CLAUDE.md` file), use them for authentication during validation.
 
 ## Linear GraphQL reference
 

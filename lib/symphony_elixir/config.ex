@@ -30,7 +30,8 @@ defmodule SymphonyElixir.Config do
   def settings do
     case Workflow.current() do
       {:ok, %{config: config}} when is_map(config) ->
-        Schema.parse(config)
+        merged = deep_merge(config, SymphonyElixir.Settings.config_overlay())
+        Schema.parse(merged)
 
       {:error, reason} ->
         {:error, reason}
@@ -132,6 +133,23 @@ defmodule SymphonyElixir.Config do
         :ok
     end
   end
+
+  defp deep_merge(base, overlay) when is_map(base) and is_map(overlay) do
+    Map.merge(base, overlay, fn
+      _key, base_val, overlay_val when is_map(base_val) and is_map(overlay_val) ->
+        deep_merge(base_val, overlay_val)
+
+      _key, base_val, nil ->
+        base_val
+
+      _key, _base_val, overlay_val ->
+        overlay_val
+    end)
+  end
+
+  defp deep_merge(base, nil) when is_map(base), do: base
+  defp deep_merge(_base, overlay) when is_map(overlay), do: overlay
+  defp deep_merge(base, _overlay), do: base
 
   defp format_config_error(reason) do
     case reason do
