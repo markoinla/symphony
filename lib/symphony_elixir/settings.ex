@@ -94,6 +94,27 @@ defmodule SymphonyElixir.Settings do
 
   def parse_project_slug(input), do: input
 
+  @spec parse_organization_slug(String.t()) :: String.t() | nil
+  def parse_organization_slug(input) when is_binary(input) do
+    input = String.trim(input)
+
+    if String.contains?(input, "linear.app") do
+      input
+      |> URI.parse()
+      |> Map.get(:path, "")
+      |> String.split("/")
+      |> Enum.reject(&(&1 == ""))
+      |> case do
+        [org_slug | _] -> org_slug
+        _ -> nil
+      end
+    else
+      nil
+    end
+  end
+
+  def parse_organization_slug(_input), do: nil
+
   @spec default_after_create_hook(String.t()) :: String.t()
   def default_after_create_hook(github_repo) when is_binary(github_repo) do
     "gh repo clone #{github_repo} . -- --depth 1"

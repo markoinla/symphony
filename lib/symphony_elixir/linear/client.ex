@@ -137,7 +137,7 @@ defmodule SymphonyElixir.Linear.Client do
 
       true ->
         with {:ok, assignee_filter} <- routing_assignee_filter() do
-          do_fetch_by_states(project_slug, tracker.active_states, assignee_filter)
+          do_fetch_by_states(extract_slug_id(project_slug), tracker.active_states, assignee_filter)
         end
     end
   end
@@ -160,7 +160,7 @@ defmodule SymphonyElixir.Linear.Client do
           {:error, :missing_linear_project_slug}
 
         true ->
-          do_fetch_by_states(project_slug, normalized_states, nil)
+          do_fetch_by_states(extract_slug_id(project_slug), normalized_states, nil)
       end
     end
   end
@@ -618,4 +618,14 @@ defmodule SymphonyElixir.Linear.Client do
 
   defp parse_priority(priority) when is_integer(priority), do: priority
   defp parse_priority(_priority), do: nil
+
+  # Linear's GraphQL `slugId` filter expects only the hex hash portion
+  # of the project slug (e.g. "1b3188ca0747"), not the full URL slug
+  # (e.g. "agent-workflow-1b3188ca0747"). Extract the trailing hex segment.
+  defp extract_slug_id(project_slug) when is_binary(project_slug) do
+    case Regex.run(~r/-([0-9a-f]{10,})$/, project_slug) do
+      [_, hex_id] -> hex_id
+      _ -> project_slug
+    end
+  end
 end

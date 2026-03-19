@@ -11,6 +11,7 @@ defmodule SymphonyElixirWeb.SettingsLive do
   @field_keys [
     "tracker.api_key",
     "tracker.project_slug",
+    "tracker.organization_slug",
     "github.repo",
     "agent.max_concurrent_agents",
     "polling.interval_ms",
@@ -80,6 +81,18 @@ defmodule SymphonyElixirWeb.SettingsLive do
                 <%= if err = @errors["tracker.project_slug"] do %>
                   <span class="field-error-text"><%= err %></span>
                 <% end %>
+              </div>
+              <div class="field-group">
+                <label class="field-label" for="tracker_organization_slug">Linear Organization</label>
+                <input
+                  id="tracker_organization_slug"
+                  name="tracker.organization_slug"
+                  type="text"
+                  value={@fields["tracker.organization_slug"]}
+                  class="field-input"
+                  placeholder="your-org"
+                />
+                <span class="field-hint">Your Linear workspace slug (auto-filled from project URL).</span>
               </div>
             </div>
           </div>
@@ -236,7 +249,19 @@ defmodule SymphonyElixirWeb.SettingsLive do
   defp maybe_parse_slug(fields) do
     case fields["tracker.project_slug"] do
       slug when is_binary(slug) and slug != "" ->
-        Map.put(fields, "tracker.project_slug", Settings.parse_project_slug(slug))
+        fields
+        |> Map.put("tracker.project_slug", Settings.parse_project_slug(slug))
+        |> maybe_extract_org_slug(slug)
+
+      _ ->
+        fields
+    end
+  end
+
+  defp maybe_extract_org_slug(fields, input) do
+    case Settings.parse_organization_slug(input) do
+      org when is_binary(org) and org != "" ->
+        Map.put(fields, "tracker.organization_slug", org)
 
       _ ->
         fields
@@ -264,6 +289,7 @@ defmodule SymphonyElixirWeb.SettingsLive do
         %{
           "tracker.api_key" => get_in(config, ["tracker", "api_key"]) || "",
           "tracker.project_slug" => get_in(config, ["tracker", "project_slug"]) || "",
+          "tracker.organization_slug" => get_in(config, ["tracker", "organization_slug"]) || "",
           "agent.max_concurrent_agents" => get_in(config, ["agent", "max_concurrent_agents"]) || "",
           "polling.interval_ms" => get_in(config, ["polling", "interval_ms"]) || "",
           "codex.command" => get_in(config, ["codex", "command"]) || ""
