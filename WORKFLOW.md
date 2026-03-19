@@ -17,6 +17,9 @@ polling:
   interval_ms: 5000
 hooks:
   timeout_ms: 300000
+  after_create: |
+    git clone --depth 1 "https://github.com/$GITHUB_REPO" .
+    pnpm install --frozen-lockfile
   before_remove: |
     echo "Cleaning up workspace"
 agent:

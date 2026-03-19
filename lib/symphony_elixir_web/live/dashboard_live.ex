@@ -155,6 +155,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                       <div class="issue-stack">
                         <a class="issue-id issue-link-primary" href={"/session/#{entry.issue_identifier}"}><%= entry.issue_identifier %></a>
                         <a class="issue-link" href={"/api/v1/#{entry.issue_identifier}"}>JSON details</a>
+                        <button class="subtle-button copy-id-btn" data-id={entry.issue_id} title="Copy issue UUID">Copy ID</button>
                       </div>
                     </td>
                     <td>
