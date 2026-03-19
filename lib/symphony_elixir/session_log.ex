@@ -14,7 +14,7 @@ defmodule SymphonyElixir.SessionLog do
   alias SymphonyElixir.Store
   alias SymphonyElixirWeb.ObservabilityPubSub
 
-  @max_messages 500
+  @max_content_bytes 102_400
 
   # ── Public API ──────────────────────────────────────────────────────
 
@@ -48,8 +48,29 @@ defmodule SymphonyElixir.SessionLog do
   @spec get_messages(String.t(), String.t()) :: {:ok, [message()]} | {:error, :not_found}
   def get_messages(issue_id, session_id) do
     case lookup(issue_id, session_id) do
-      nil -> {:error, :not_found}
-      pid -> GenServer.call(pid, :get_messages)
+      nil ->
+        {:error, :not_found}
+
+      pid ->
+        db_session_id = GenServer.call(pid, :get_db_session_id)
+
+        messages =
+          if db_session_id do
+            Store.get_session_messages(db_session_id)
+            |> Enum.map(fn m ->
+              %{
+                id: m.seq,
+                timestamp: m.timestamp,
+                type: String.to_existing_atom(m.type),
+                content: m.content,
+                metadata: parse_metadata(m.metadata)
+              }
+            end)
+          else
+            []
+          end
+
+        {:ok, messages}
     end
   end
 
@@ -93,9 +114,9 @@ defmodule SymphonyElixir.SessionLog do
     state = %{
       issue_id: issue_id,
       session_id: session_id,
-      messages: [],
       next_id: 1,
-      db_session_id: db_session_id
+      db_session_id: db_session_id,
+      last_streamable: nil
     }
 
     Logger.info("SessionLog started for issue_id=#{issue_id} session_id=#{session_id} db_session_id=#{inspect(db_session_id)}")
@@ -125,13 +146,10 @@ defmodule SymphonyElixir.SessionLog do
           metadata: metadata
         }
 
-        messages = cap_messages([message | state.messages])
-
         ObservabilityPubSub.broadcast_session_message(state.issue_id, message)
-
         persist_message(state.db_session_id, message)
 
-        {:noreply, %{state | messages: messages, next_id: state.next_id + 1}}
+        {:noreply, %{state | next_id: state.next_id + 1, last_streamable: nil}}
     end
   end
 
@@ -156,22 +174,20 @@ defmodule SymphonyElixir.SessionLog do
   end
 
   @impl true
-  def handle_call(:get_messages, _from, state) do
-    {:reply, {:ok, Enum.reverse(state.messages)}, state}
+  def handle_call(:get_db_session_id, _from, state) do
+    {:reply, state.db_session_id, state}
   end
 
   # ── Streamable delta aggregation ────────────────────────────────────
 
-  # Aggregate consecutive deltas of the same streamable type into a single message
-  defp handle_streamable_delta(type, content, _metadata, _codex_message, %{messages: [%{type: type} = last | rest]} = state) do
-    updated = %{last | content: last.content <> content}
-    messages = cap_messages([updated | rest])
+  # Aggregate consecutive deltas of the same streamable type into the current message
+  defp handle_streamable_delta(type, content, _metadata, _codex_message, %{last_streamable: %{type: type} = last} = state) do
+    updated = %{last | content: cap_content(last.content <> content)}
 
     ObservabilityPubSub.broadcast_session_message_update(state.issue_id, updated)
-
     update_persisted_message(state.db_session_id, updated)
 
-    {:noreply, %{state | messages: messages}}
+    {:noreply, %{state | last_streamable: updated}}
   end
 
   # First delta of this type — create a new message
@@ -184,13 +200,10 @@ defmodule SymphonyElixir.SessionLog do
       metadata: metadata
     }
 
-    messages = cap_messages([message | state.messages])
-
     ObservabilityPubSub.broadcast_session_message(state.issue_id, message)
-
     persist_message(state.db_session_id, message)
 
-    {:noreply, %{state | messages: messages, next_id: state.next_id + 1}}
+    {:noreply, %{state | next_id: state.next_id + 1, last_streamable: message}}
   end
 
   # ── Message classification ──────────────────────────────────────────
@@ -494,11 +507,23 @@ defmodule SymphonyElixir.SessionLog do
 
   defp maybe_sync_codex_session_id(_msg, state), do: state
 
-  defp cap_messages(messages) when length(messages) > @max_messages do
-    Enum.take(messages, @max_messages)
+  defp cap_content(content) when byte_size(content) > @max_content_bytes do
+    truncated_size = @max_content_bytes - 14
+    binary_part(content, byte_size(content) - truncated_size, truncated_size)
+    |> then(&("[truncated]…\n" <> &1))
   end
 
-  defp cap_messages(messages), do: messages
+  defp cap_content(content), do: content
+
+  defp parse_metadata(nil), do: %{}
+  defp parse_metadata(json) when is_binary(json) do
+    case Jason.decode(json) do
+      {:ok, map} when is_map(map) -> map
+      _ -> %{}
+    end
+  end
+  defp parse_metadata(map) when is_map(map), do: map
+  defp parse_metadata(_), do: %{}
 
   defp via(issue_id, session_id) do
     {:via, Registry, {SymphonyElixir.SessionLogRegistry, {issue_id, session_id}}}
