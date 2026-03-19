@@ -6,6 +6,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   alias SymphonyElixir.Linear.Adapter
   alias SymphonyElixir.Tracker.Memory
+  alias SymphonyElixirWeb.Presenter
 
   @endpoint SymphonyElixirWeb.Endpoint
 
@@ -125,6 +126,21 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:ok, %{prompt: "Third prompt"}} = WorkflowStore.current()
     assert :ok = WorkflowStore.force_reload()
     assert {:ok, _pid} = Supervisor.restart_child(SymphonyElixir.Supervisor, WorkflowStore)
+  end
+
+  test "workflow store tracks multiple workflows by filename-derived name" do
+    ensure_workflow_store_running()
+    workflow_root = Path.dirname(Workflow.workflow_file_path())
+    enrichment_workflow = Path.join(workflow_root, "ENRICHMENT.md")
+
+    write_workflow_file!(enrichment_workflow, prompt: "Enrichment prompt", tracker_filter_by: "label", tracker_label_name: "enrich")
+    Workflow.set_workflow_file_paths([Workflow.workflow_file_path(), enrichment_workflow])
+
+    assert {:ok, %{prompt: "You are an agent for this repository."}} = WorkflowStore.current("WORKFLOW")
+    assert {:ok, %{prompt: "Enrichment prompt"}} = WorkflowStore.current("ENRICHMENT")
+
+    assert {:ok, workflows} = WorkflowStore.all()
+    assert Map.keys(workflows) |> Enum.sort() == ["ENRICHMENT", "WORKFLOW"]
   end
 
   test "workflow store init stops on missing workflow file" do
@@ -317,6 +333,65 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Odd")
+  end
+
+  test "presenter aggregates multi-workflow state payloads" do
+    first_orchestrator = Module.concat(__MODULE__, :ImplementationOrchestrator)
+    second_orchestrator = Module.concat(__MODULE__, :EnrichmentOrchestrator)
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(
+        name: first_orchestrator,
+        snapshot: %{
+          running: [
+            %{
+              issue_id: "issue-1",
+              identifier: "SYM-1",
+              state: "In Progress",
+              session_id: "thread-1",
+              turn_count: 1,
+              last_codex_event: :notification,
+              last_codex_message: %{event: :notification, message: "work"},
+              started_at: DateTime.utc_now(),
+              last_codex_timestamp: nil,
+              codex_input_tokens: 1,
+              codex_output_tokens: 2,
+              codex_total_tokens: 3
+            }
+          ],
+          retrying: [],
+          codex_totals: %{input_tokens: 1, output_tokens: 2, total_tokens: 3, seconds_running: 10},
+          rate_limits: %{primary: %{remaining: 9}},
+          polling: %{checking?: false, next_poll_in_ms: 1_000, poll_interval_ms: 5_000}
+        }
+      )
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(
+        name: second_orchestrator,
+        snapshot: %{
+          running: [],
+          retrying: [
+            %{issue_id: "issue-2", identifier: "SYM-2", attempt: 2, due_in_ms: 1_500, error: "boom"}
+          ],
+          codex_totals: %{input_tokens: 4, output_tokens: 5, total_tokens: 9, seconds_running: 20},
+          rate_limits: %{primary: %{remaining: 7}},
+          polling: %{checking?: true, next_poll_in_ms: nil, poll_interval_ms: 10_000}
+        }
+      )
+
+    payload =
+      Presenter.state_payload(
+        [{"implementation", first_orchestrator}, {"enrichment", second_orchestrator}],
+        50
+      )
+
+    assert payload.counts.running == 1
+    assert payload.counts.retrying == 1
+    assert payload.codex_totals.total_tokens == 12
+    assert Enum.map(payload.workflows, & &1.workflow_name) == ["implementation", "enrichment"]
+    assert Enum.any?(payload.running, &(&1.workflow_name == "implementation"))
+    assert Enum.any?(payload.retrying, &(&1.workflow_name == "enrichment"))
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do

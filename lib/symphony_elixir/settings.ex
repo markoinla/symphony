@@ -71,24 +71,22 @@ defmodule SymphonyElixir.Settings do
     |> maybe_auto_hook(settings)
     |> maybe_auto_workspace_root(settings)
     |> drop_nil_leaves()
+    |> Kernel.||(%{})
   end
 
   @spec parse_project_slug(String.t()) :: String.t()
   def parse_project_slug(input) when is_binary(input) do
     input = String.trim(input)
 
-    cond do
-      # Linear project URL: https://linear.app/team/project/slug-xxx
-      String.contains?(input, "linear.app") ->
-        input
-        |> URI.parse()
-        |> Map.get(:path, "")
-        |> String.split("/")
-        |> Enum.reject(&(&1 == ""))
-        |> extract_project_slug()
-
-      true ->
-        input
+    if String.contains?(input, "linear.app") do
+      input
+      |> URI.parse()
+      |> Map.get(:path, "")
+      |> String.split("/")
+      |> Enum.reject(&(&1 == ""))
+      |> extract_project_slug()
+    else
+      input
     end
   end
 

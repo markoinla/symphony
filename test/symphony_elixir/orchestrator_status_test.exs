@@ -1127,19 +1127,23 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
   test "status dashboard coalesces rapid updates to one render per interval" do
     dashboard_name = Module.concat(__MODULE__, :RenderDashboard)
     parent = self()
-    orchestrator_pid = Process.whereis(SymphonyElixir.Orchestrator)
+    workflow_name = Workflow.default_workflow_name()
+    orchestrator_server = Orchestrator.workflow_server(workflow_name)
+    orchestrator_child_id = {SymphonyElixir.Orchestrator, workflow_name}
+    orchestrator_pid = GenServer.whereis(orchestrator_server)
 
     on_exit(fn ->
-      if is_nil(Process.whereis(SymphonyElixir.Orchestrator)) do
-        case Supervisor.restart_child(SymphonyElixir.Supervisor, SymphonyElixir.Orchestrator) do
+      if is_nil(GenServer.whereis(orchestrator_server)) do
+        case Supervisor.restart_child(SymphonyElixir.Supervisor, orchestrator_child_id) do
           {:ok, _pid} -> :ok
           {:error, {:already_started, _pid}} -> :ok
+          {:error, :not_found} -> :ok
         end
       end
     end)
 
     if is_pid(orchestrator_pid) do
-      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.Orchestrator)
+      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, orchestrator_child_id)
     end
 
     {:ok, pid} =

@@ -7,8 +7,9 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Store, Tracker, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Store, Tracker, Workflow, Workspace}
   alias SymphonyElixir.Linear.Issue
+  @registry SymphonyElixir.OrchestratorRegistry
 
   @continuation_retry_delay_ms 1_000
   @failure_retry_base_ms 10_000
@@ -27,6 +28,7 @@ defmodule SymphonyElixir.Orchestrator do
     """
 
     defstruct [
+      :workflow_name,
       :poll_interval_ms,
       :max_concurrent_agents,
       :next_poll_due_at_ms,
@@ -42,18 +44,52 @@ defmodule SymphonyElixir.Orchestrator do
     ]
   end
 
+  @spec child_spec(keyword()) :: Supervisor.child_spec()
+  def child_spec(opts) do
+    workflow_name = Keyword.get(opts, :workflow_name, Workflow.default_workflow_name())
+
+    %{
+      id: {__MODULE__, workflow_name},
+      start: {__MODULE__, :start_link, [opts]}
+    }
+  end
+
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    name = Keyword.get(opts, :name, __MODULE__)
+    workflow_name = Keyword.get(opts, :workflow_name, Workflow.default_workflow_name())
+    name = Keyword.get(opts, :name, workflow_server(workflow_name))
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
+  @spec workflow_server(String.t()) :: {:via, Registry, {module(), String.t()}}
+  def workflow_server(workflow_name) when is_binary(workflow_name) do
+    {:via, Registry, {@registry, workflow_name}}
+  end
+
+  @spec workflow_servers() :: [{String.t(), GenServer.name()}]
+  def workflow_servers do
+    Enum.map(Workflow.workflow_names(), fn workflow_name ->
+      {workflow_name, workflow_server(workflow_name)}
+    end)
+  end
+
+  @spec default_source() :: GenServer.name() | [{String.t(), GenServer.name()}]
+  def default_source do
+    case workflow_servers() do
+      [{_workflow_name, server}] -> server
+      servers -> servers
+    end
+  end
+
   @impl true
-  def init(_opts) do
+  def init(opts) do
+    workflow_name = Keyword.get(opts, :workflow_name, Workflow.default_workflow_name())
+    :ok = Workflow.put_current_workflow_name(workflow_name)
     now_ms = System.monotonic_time(:millisecond)
-    config = Config.settings!()
+    config = Config.settings!(workflow_name)
 
     state = %State{
+      workflow_name: workflow_name,
       poll_interval_ms: config.polling.interval_ms,
       max_concurrent_agents: config.agent.max_concurrent_agents,
       next_poll_due_at_ms: now_ms,
@@ -226,8 +262,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp maybe_dispatch(%State{} = state) do
     state = reconcile_running_issues(state)
 
-    with :ok <- Config.validate!(),
-         {:ok, issues} <- Tracker.fetch_candidate_issues(),
+    with :ok <- Config.validate!(state.workflow_name),
+         {:ok, issues} <- Tracker.fetch_candidate_issues(state.workflow_name),
          true <- available_slots(state) > 0 do
       choose_issues(issues, state)
     else
@@ -239,6 +275,10 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.error("Linear project slug missing in WORKFLOW.md")
         state
 
+      {:error, :missing_linear_label_name} ->
+        Logger.error("Linear label name missing in WORKFLOW.md")
+        state
+
       {:error, :missing_tracker_kind} ->
         Logger.error("Tracker kind missing in WORKFLOW.md")
 
@@ -246,6 +286,10 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:error, {:unsupported_tracker_kind, kind}} ->
         Logger.error("Unsupported tracker kind in WORKFLOW.md: #{inspect(kind)}")
+        state
+
+      {:error, {:unsupported_linear_filter_by, filter_by}} ->
+        Logger.error("Unsupported Linear filter_by in WORKFLOW.md: #{inspect(filter_by)}")
 
         state
 
@@ -274,14 +318,14 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp reconcile_running_issues(%State{} = state) do
+  defp reconcile_running_issues(%State{workflow_name: workflow_name} = state) do
     state = reconcile_stalled_running_issues(state)
     running_ids = Map.keys(state.running)
 
     if running_ids == [] do
       state
     else
-      case Tracker.fetch_issue_states_by_ids(running_ids) do
+      case Tracker.fetch_issue_states_by_ids(running_ids, workflow_name) do
         {:ok, issues} ->
           issues
           |> reconcile_running_issue_states(
@@ -660,7 +704,9 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil) do
-    case revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, terminal_state_set()) do
+    issue_fetcher = fn issue_ids -> Tracker.fetch_issue_states_by_ids(issue_ids, state.workflow_name) end
+
+    case revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_state_set()) do
       {:ok, %Issue{} = refreshed_issue} ->
         do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host)
 
@@ -693,9 +739,10 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host) do
-    case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-           AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host)
-         end) do
+    case Task.Supervisor.start_child(
+           SymphonyElixir.TaskSupervisor,
+           fn -> run_issue_task(state.workflow_name, issue, recipient, attempt, worker_host) end
+         ) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
 
@@ -742,6 +789,13 @@ defmodule SymphonyElixir.Orchestrator do
           worker_host: worker_host
         })
     end
+  end
+
+  defp run_issue_task(workflow_name, issue, recipient, attempt, worker_host)
+       when is_binary(workflow_name) do
+    Workflow.with_workflow(workflow_name, fn ->
+      AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host)
+    end)
   end
 
   defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states)
@@ -829,7 +883,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_retry_issue(%State{} = state, issue_id, attempt, metadata) do
-    case Tracker.fetch_candidate_issues() do
+    case Tracker.fetch_candidate_issues(state.workflow_name) do
       {:ok, issues} ->
         issues
         |> find_issue_by_id(issue_id)
@@ -1062,7 +1116,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp available_slots(%State{} = state) do
     max(
-      (state.max_concurrent_agents || Config.settings!().agent.max_concurrent_agents) -
+      (state.max_concurrent_agents || Config.settings!(state.workflow_name).agent.max_concurrent_agents) -
         map_size(state.running),
       0
     )
@@ -1070,12 +1124,12 @@ defmodule SymphonyElixir.Orchestrator do
 
   @spec request_refresh() :: map() | :unavailable
   def request_refresh do
-    request_refresh(__MODULE__)
+    request_refresh(workflow_server(Workflow.default_workflow_name()))
   end
 
   @spec request_refresh(GenServer.server()) :: map() | :unavailable
   def request_refresh(server) do
-    if Process.whereis(server) do
+    if GenServer.whereis(server) do
       GenServer.call(server, :request_refresh)
     else
       :unavailable
@@ -1083,11 +1137,11 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @spec snapshot() :: map() | :timeout | :unavailable
-  def snapshot, do: snapshot(__MODULE__, 15_000)
+  def snapshot, do: snapshot(workflow_server(Workflow.default_workflow_name()), 15_000)
 
   @spec snapshot(GenServer.server(), timeout()) :: map() | :timeout | :unavailable
   def snapshot(server, timeout) do
-    if Process.whereis(server) do
+    if GenServer.whereis(server) do
       try do
         GenServer.call(server, :snapshot, timeout)
       catch
@@ -1144,6 +1198,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     {:reply,
      %{
+       workflow_name: state.workflow_name,
        running: running,
        retrying: retrying,
        codex_totals: state.codex_totals,
@@ -1324,7 +1379,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp finalize_db_session(_running_entry, _reason), do: :ok
 
   defp refresh_runtime_config(%State{} = state) do
-    config = Config.settings!()
+    config = Config.settings!(state.workflow_name)
 
     %{
       state

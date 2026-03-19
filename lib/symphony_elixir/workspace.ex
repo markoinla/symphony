@@ -210,30 +210,28 @@ defmodule SymphonyElixir.Workspace do
   defp maybe_run_after_create_hook(workspace, issue_context, created?, worker_host) do
     hooks = Config.settings!().hooks
 
-    case created? do
-      true ->
-        case hooks.after_create do
-          nil ->
-            :ok
+    case {created?, hooks.after_create} do
+      {true, command} when is_binary(command) ->
+        handle_after_create_hook(command, workspace, issue_context, worker_host)
 
-          command ->
-            case run_hook(command, workspace, issue_context, "after_create", worker_host) do
-              :ok ->
-                :ok
-
-              {:error, reason} = error ->
-                Logger.warning(
-                  "after_create hook failed, removing workspace to allow re-creation on next attempt " <>
-                    "#{issue_log_context(issue_context)} workspace=#{workspace} reason=#{inspect(reason)}"
-                )
-
-                cleanup_failed_workspace(workspace, worker_host)
-                error
-            end
-        end
-
-      false ->
+      _ ->
         :ok
+    end
+  end
+
+  defp handle_after_create_hook(command, workspace, issue_context, worker_host) do
+    case run_hook(command, workspace, issue_context, "after_create", worker_host) do
+      :ok ->
+        :ok
+
+      {:error, reason} = error ->
+        Logger.warning(
+          "after_create hook failed, removing workspace to allow re-creation on next attempt " <>
+            "#{issue_log_context(issue_context)} workspace=#{workspace} reason=#{inspect(reason)}"
+        )
+
+        cleanup_failed_workspace(workspace, worker_host)
+        error
     end
   end
 

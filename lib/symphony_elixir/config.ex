@@ -28,7 +28,12 @@ defmodule SymphonyElixir.Config do
 
   @spec settings() :: {:ok, Schema.t()} | {:error, term()}
   def settings do
-    case Workflow.current() do
+    settings(Workflow.current_workflow_name())
+  end
+
+  @spec settings(String.t()) :: {:ok, Schema.t()} | {:error, term()}
+  def settings(workflow_name) when is_binary(workflow_name) do
+    case Workflow.current(workflow_name) do
       {:ok, %{config: config}} when is_map(config) ->
         merged = deep_merge(config, SymphonyElixir.Settings.config_overlay())
         Schema.parse(merged)
@@ -40,7 +45,12 @@ defmodule SymphonyElixir.Config do
 
   @spec settings!() :: Schema.t()
   def settings! do
-    case settings() do
+    settings!(Workflow.current_workflow_name())
+  end
+
+  @spec settings!(String.t()) :: Schema.t()
+  def settings!(workflow_name) when is_binary(workflow_name) do
+    case settings(workflow_name) do
       {:ok, settings} ->
         settings
 
@@ -75,7 +85,12 @@ defmodule SymphonyElixir.Config do
 
   @spec workflow_prompt() :: String.t()
   def workflow_prompt do
-    case Workflow.current() do
+    workflow_prompt(Workflow.current_workflow_name())
+  end
+
+  @spec workflow_prompt(String.t()) :: String.t()
+  def workflow_prompt(workflow_name) when is_binary(workflow_name) do
+    case Workflow.current(workflow_name) do
       {:ok, %{prompt_template: prompt}} ->
         if String.trim(prompt) == "", do: @default_prompt_template, else: prompt
 
@@ -86,15 +101,25 @@ defmodule SymphonyElixir.Config do
 
   @spec server_port() :: non_neg_integer() | nil
   def server_port do
+    server_port(Workflow.default_workflow_name())
+  end
+
+  @spec server_port(String.t()) :: non_neg_integer() | nil
+  def server_port(workflow_name) when is_binary(workflow_name) do
     case Application.get_env(:symphony_elixir, :server_port_override) do
       port when is_integer(port) and port >= 0 -> port
-      _ -> settings!().server.port
+      _ -> settings!(workflow_name).server.port
     end
   end
 
   @spec validate!() :: :ok | {:error, term()}
   def validate! do
-    with {:ok, settings} <- settings() do
+    validate!(Workflow.current_workflow_name())
+  end
+
+  @spec validate!(String.t()) :: :ok | {:error, term()}
+  def validate!(workflow_name) when is_binary(workflow_name) do
+    with {:ok, settings} <- settings(workflow_name) do
       validate_semantics(settings)
     end
   end
@@ -123,11 +148,27 @@ defmodule SymphonyElixir.Config do
       settings.tracker.kind not in ["linear", "memory"] ->
         {:error, {:unsupported_tracker_kind, settings.tracker.kind}}
 
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.api_key) ->
+      settings.tracker.kind == "linear" ->
+        validate_linear_semantics(settings.tracker)
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_linear_semantics(tracker) do
+    cond do
+      not is_binary(tracker.api_key) ->
         {:error, :missing_linear_api_token}
 
-      settings.tracker.kind == "linear" and not is_binary(settings.tracker.project_slug) ->
+      tracker.filter_by == "project" and not is_binary(tracker.project_slug) ->
         {:error, :missing_linear_project_slug}
+
+      tracker.filter_by == "label" and not is_binary(tracker.label_name) ->
+        {:error, :missing_linear_label_name}
+
+      tracker.filter_by not in ["project", "label"] ->
+        {:error, {:unsupported_linear_filter_by, tracker.filter_by}}
 
       true ->
         :ok
@@ -146,10 +187,6 @@ defmodule SymphonyElixir.Config do
         overlay_val
     end)
   end
-
-  defp deep_merge(base, nil) when is_map(base), do: base
-  defp deep_merge(_base, overlay) when is_map(overlay), do: overlay
-  defp deep_merge(base, _overlay), do: base
 
   defp format_config_error(reason) do
     case reason do

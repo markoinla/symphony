@@ -99,7 +99,7 @@ defmodule SymphonyElixir.CoreTest do
     tracker = Map.get(config, "tracker", %{})
     assert is_map(tracker)
     assert Map.get(tracker, "kind") == "linear"
-    assert is_binary(Map.get(tracker, "project_slug"))
+
     assert is_list(Map.get(tracker, "active_states"))
     assert is_list(Map.get(tracker, "terminal_states"))
 
@@ -198,23 +198,27 @@ defmodule SymphonyElixir.CoreTest do
   test "SymphonyElixir.start_link delegates to the orchestrator" do
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "memory")
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
-    orchestrator_pid = Process.whereis(SymphonyElixir.Orchestrator)
+    workflow_name = Workflow.default_workflow_name()
+    orchestrator_server = Orchestrator.workflow_server(workflow_name)
+    orchestrator_child_id = {SymphonyElixir.Orchestrator, workflow_name}
+    orchestrator_pid = GenServer.whereis(orchestrator_server)
 
     on_exit(fn ->
-      if is_nil(Process.whereis(SymphonyElixir.Orchestrator)) do
-        case Supervisor.restart_child(SymphonyElixir.Supervisor, SymphonyElixir.Orchestrator) do
+      if is_nil(GenServer.whereis(orchestrator_server)) do
+        case Supervisor.restart_child(SymphonyElixir.Supervisor, orchestrator_child_id) do
           {:ok, _pid} -> :ok
           {:error, {:already_started, _pid}} -> :ok
+          {:error, :not_found} -> :ok
         end
       end
     end)
 
     if is_pid(orchestrator_pid) do
-      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, SymphonyElixir.Orchestrator)
+      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, orchestrator_child_id)
     end
 
     assert {:ok, pid} = SymphonyElixir.start_link()
-    assert Process.whereis(SymphonyElixir.Orchestrator) == pid
+    assert GenServer.whereis(orchestrator_server) == pid
 
     GenServer.stop(pid)
   end

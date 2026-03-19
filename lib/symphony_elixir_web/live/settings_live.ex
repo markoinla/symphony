@@ -272,15 +272,19 @@ defmodule SymphonyElixirWeb.SettingsLive do
     Enum.reduce(keys, fields, fn key, acc ->
       case acc[key] do
         val when is_binary(val) and val != "" ->
-          case Integer.parse(val) do
-            {n, ""} -> Map.put(acc, key, n)
-            _ -> acc
-          end
+          maybe_coerce_integer(acc, key, val)
 
         _ ->
           acc
       end
     end)
+  end
+
+  defp maybe_coerce_integer(fields, key, value) do
+    case Integer.parse(value) do
+      {n, ""} -> Map.put(fields, key, n)
+      _ -> fields
+    end
   end
 
   defp workflow_defaults do

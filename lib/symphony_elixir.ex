@@ -8,7 +8,8 @@ defmodule SymphonyElixir do
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    SymphonyElixir.Orchestrator.start_link(opts)
+    workflow_name = Keyword.get(opts, :workflow_name, SymphonyElixir.Workflow.default_workflow_name())
+    SymphonyElixir.Orchestrator.start_link(Keyword.put(opts, :workflow_name, workflow_name))
   end
 end
 
@@ -24,17 +25,21 @@ defmodule SymphonyElixir.Application do
     :ok = SymphonyElixir.LogFile.configure()
     ensure_db_directory()
 
-    children = [
-      {Phoenix.PubSub, name: SymphonyElixir.PubSub},
-      {Registry, keys: :unique, name: SymphonyElixir.SessionLogRegistry},
-      SymphonyElixir.Repo,
-      SymphonyElixir.Store.Migrator,
-      {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
-      SymphonyElixir.WorkflowStore,
-      SymphonyElixir.Orchestrator,
-      SymphonyElixir.HttpServer,
-      SymphonyElixir.StatusDashboard
-    ]
+    children =
+      [
+        {Phoenix.PubSub, name: SymphonyElixir.PubSub},
+        {Registry, keys: :unique, name: SymphonyElixir.SessionLogRegistry},
+        {Registry, keys: :unique, name: SymphonyElixir.OrchestratorRegistry},
+        SymphonyElixir.Repo,
+        SymphonyElixir.Store.Migrator,
+        {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
+        SymphonyElixir.WorkflowStore
+      ] ++
+        orchestrator_children() ++
+        [
+          SymphonyElixir.HttpServer,
+          SymphonyElixir.StatusDashboard
+        ]
 
     Supervisor.start_link(
       children,
@@ -54,5 +59,12 @@ defmodule SymphonyElixir.Application do
       path when is_binary(path) -> path |> Path.dirname() |> File.mkdir_p!()
       _ -> :ok
     end
+  end
+
+  defp orchestrator_children do
+    SymphonyElixir.Workflow.workflow_names()
+    |> Enum.map(fn workflow_name ->
+      {SymphonyElixir.Orchestrator, workflow_name: workflow_name}
+    end)
   end
 end
