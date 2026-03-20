@@ -3,11 +3,19 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   Executes client-side tool calls requested by Codex app-server turns.
   """
 
-  alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.{Linear.Client, Linear.Comment, Tracker}
 
   @linear_graphql_tool "linear_graphql"
+  @linear_create_comment_tool "linear_create_comment"
+  @linear_update_comment_tool "linear_update_comment"
   @linear_graphql_description """
   Execute a raw GraphQL query or mutation against Linear using Symphony's configured auth.
+  """
+  @linear_create_comment_description """
+  Create a Linear issue comment using Symphony's tracker integration. Use this instead of raw GraphQL for agent replies.
+  """
+  @linear_update_comment_description """
+  Update an existing Linear comment using Symphony's tracker integration.
   """
   @linear_graphql_input_schema %{
     "type" => "object",
@@ -25,12 +33,48 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     }
   }
+  @linear_create_comment_input_schema %{
+    "type" => "object",
+    "additionalProperties" => false,
+    "required" => ["issue_id", "body"],
+    "properties" => %{
+      "issue_id" => %{
+        "type" => "string",
+        "description" => "Linear issue UUID that should receive the comment."
+      },
+      "body" => %{
+        "type" => "string",
+        "description" => "Markdown comment body."
+      }
+    }
+  }
+  @linear_update_comment_input_schema %{
+    "type" => "object",
+    "additionalProperties" => false,
+    "required" => ["comment_id", "body"],
+    "properties" => %{
+      "comment_id" => %{
+        "type" => "string",
+        "description" => "Linear comment UUID to update."
+      },
+      "body" => %{
+        "type" => "string",
+        "description" => "Full Markdown comment body."
+      }
+    }
+  }
 
   @spec execute(String.t() | nil, term(), keyword()) :: map()
   def execute(tool, arguments, opts \\ []) do
     case tool do
       @linear_graphql_tool ->
         execute_linear_graphql(arguments, opts)
+
+      @linear_create_comment_tool ->
+        execute_linear_create_comment(arguments, opts)
+
+      @linear_update_comment_tool ->
+        execute_linear_update_comment(arguments, opts)
 
       other ->
         failure_response(%{
@@ -49,6 +93,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
         "name" => @linear_graphql_tool,
         "description" => @linear_graphql_description,
         "inputSchema" => @linear_graphql_input_schema
+      },
+      %{
+        "name" => @linear_create_comment_tool,
+        "description" => @linear_create_comment_description,
+        "inputSchema" => @linear_create_comment_input_schema
+      },
+      %{
+        "name" => @linear_update_comment_tool,
+        "description" => @linear_update_comment_description,
+        "inputSchema" => @linear_update_comment_input_schema
       }
     ]
   end
@@ -59,6 +113,30 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     with {:ok, query, variables} <- normalize_linear_graphql_arguments(arguments),
          {:ok, response} <- linear_client.(query, variables, []) do
       graphql_response(response)
+    else
+      {:error, reason} ->
+        failure_response(tool_error_payload(reason))
+    end
+  end
+
+  defp execute_linear_create_comment(arguments, opts) do
+    create_comment = Keyword.get(opts, :tracker_create_comment, &Tracker.create_comment/2)
+
+    with {:ok, issue_id, body} <- normalize_issue_comment_arguments(arguments, :create),
+         {:ok, comment_id} <- create_comment.(issue_id, Comment.tag_agent_reply(body)) do
+      graphql_response(%{"commentId" => comment_id, "issueId" => issue_id, "success" => true})
+    else
+      {:error, reason} ->
+        failure_response(tool_error_payload(reason))
+    end
+  end
+
+  defp execute_linear_update_comment(arguments, opts) do
+    update_comment = Keyword.get(opts, :tracker_update_comment, &Tracker.update_comment/2)
+
+    with {:ok, comment_id, body} <- normalize_issue_comment_arguments(arguments, :update),
+         :ok <- update_comment.(comment_id, body) do
+      graphql_response(%{"commentId" => comment_id, "success" => true})
     else
       {:error, reason} ->
         failure_response(tool_error_payload(reason))
@@ -89,6 +167,35 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   end
 
   defp normalize_linear_graphql_arguments(_arguments), do: {:error, :invalid_arguments}
+
+  defp normalize_issue_comment_arguments(arguments, mode) when is_map(arguments) do
+    id_key = if mode == :create, do: "issue_id", else: "comment_id"
+
+    with {:ok, id} <- normalize_required_string(arguments, id_key),
+         {:ok, body} <- normalize_required_string(arguments, "body") do
+      {:ok, id, body}
+    end
+  end
+
+  defp normalize_issue_comment_arguments(_arguments, :create), do: {:error, :invalid_create_comment_arguments}
+  defp normalize_issue_comment_arguments(_arguments, :update), do: {:error, :invalid_update_comment_arguments}
+
+  defp normalize_required_string(arguments, key) do
+    case argument_value(arguments, key) do
+      value when is_binary(value) ->
+        case String.trim(value) do
+          "" -> {:error, {:missing_required_argument, key}}
+          trimmed -> {:ok, trimmed}
+        end
+
+      _ ->
+        {:error, {:missing_required_argument, key}}
+    end
+  end
+
+  defp argument_value(arguments, "issue_id"), do: Map.get(arguments, "issue_id") || Map.get(arguments, :issue_id)
+  defp argument_value(arguments, "comment_id"), do: Map.get(arguments, "comment_id") || Map.get(arguments, :comment_id)
+  defp argument_value(arguments, "body"), do: Map.get(arguments, "body") || Map.get(arguments, :body)
 
   defp normalize_query(arguments) do
     case Map.get(arguments, "query") || Map.get(arguments, :query) do
@@ -190,6 +297,62 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       "error" => %{
         "message" => "Linear GraphQL request failed before receiving a successful response.",
         "reason" => inspect(reason)
+      }
+    }
+  end
+
+  defp tool_error_payload(:comment_create_failed) do
+    %{
+      "error" => %{
+        "message" => "Symphony could not create the Linear comment."
+      }
+    }
+  end
+
+  defp tool_error_payload(:comment_update_failed) do
+    %{
+      "error" => %{
+        "message" => "Symphony could not update the Linear comment."
+      }
+    }
+  end
+
+  defp tool_error_payload({:missing_required_argument, "issue_id"}) do
+    %{
+      "error" => %{
+        "message" => "`linear_create_comment` requires a non-empty `issue_id` string."
+      }
+    }
+  end
+
+  defp tool_error_payload({:missing_required_argument, "comment_id"}) do
+    %{
+      "error" => %{
+        "message" => "`linear_update_comment` requires a non-empty `comment_id` string."
+      }
+    }
+  end
+
+  defp tool_error_payload({:missing_required_argument, "body"}) do
+    %{
+      "error" => %{
+        "message" => "Comment tools require a non-empty `body` string."
+      }
+    }
+  end
+
+  defp tool_error_payload(:invalid_create_comment_arguments) do
+    %{
+      "error" => %{
+        "message" => "`linear_create_comment` expects an object with `issue_id` and `body`."
+      }
+    }
+  end
+
+  defp tool_error_payload(:invalid_update_comment_arguments) do
+    %{
+      "error" => %{
+        "message" => "`linear_update_comment` expects an object with `comment_id` and `body`."
       }
     }
   end

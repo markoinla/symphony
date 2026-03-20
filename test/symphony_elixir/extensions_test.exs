@@ -26,6 +26,11 @@ defmodule SymphonyElixir.ExtensionsTest do
       {:ok, issue_ids}
     end
 
+    def fetch_issue_comments(issue_id) do
+      send(self(), {:fetch_issue_comments_called, issue_id})
+      {:ok, [%{id: "comment-1", body: "hello"}]}
+    end
+
     def graphql(query, variables) do
       send(self(), {:graphql_called, query, variables})
 
@@ -208,13 +213,16 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_candidate_issues()
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issues_by_states([" in progress ", 42])
     assert {:ok, [^issue]} = SymphonyElixir.Tracker.fetch_issue_states_by_ids(["issue-1"])
-    assert :ok = SymphonyElixir.Tracker.create_comment("issue-1", "comment")
+    assert {:ok, nil} = SymphonyElixir.Tracker.create_comment("issue-1", "comment")
+    assert :ok = SymphonyElixir.Tracker.update_comment("comment-1", "updated")
     assert :ok = SymphonyElixir.Tracker.update_issue_state("issue-1", "Done")
     assert_receive {:memory_tracker_comment, "issue-1", "comment"}
+    assert_receive {:memory_tracker_comment_update, "comment-1", "updated"}
     assert_receive {:memory_tracker_state_update, "issue-1", "Done"}
 
     Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
-    assert :ok = Memory.create_comment("issue-1", "quiet")
+    assert {:ok, nil} = Memory.create_comment("issue-1", "quiet")
+    assert :ok = Memory.update_comment("comment-quiet", "quiet")
     assert :ok = Memory.update_issue_state("issue-1", "Quiet")
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
@@ -233,12 +241,15 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:ok, ["issue-1"]} = Adapter.fetch_issue_states_by_ids(["issue-1"])
     assert_receive {:fetch_issue_states_by_ids_called, ["issue-1"]}
 
+    assert {:ok, [%{id: "comment-1", body: "hello"}]} = Adapter.fetch_issue_comments("issue-1")
+    assert_receive {:fetch_issue_comments_called, "issue-1"}
+
     Process.put(
       {FakeLinearClient, :graphql_result},
-      {:ok, %{"data" => %{"commentCreate" => %{"success" => true}}}}
+      {:ok, %{"data" => %{"commentCreate" => %{"success" => true, "comment" => %{"id" => "comment-123"}}}}}
     )
 
-    assert :ok = Adapter.create_comment("issue-1", "hello")
+    assert {:ok, "comment-123"} = Adapter.create_comment("issue-1", "hello")
     assert_receive {:graphql_called, create_comment_query, %{body: "hello", issueId: "issue-1"}}
     assert create_comment_query =~ "commentCreate"
 
@@ -259,6 +270,22 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     Process.put({FakeLinearClient, :graphql_result}, :unexpected)
     assert {:error, :comment_create_failed} = Adapter.create_comment("issue-1", "odd")
+
+    Process.put(
+      {FakeLinearClient, :graphql_result},
+      {:ok, %{"data" => %{"commentUpdate" => %{"success" => true}}}}
+    )
+
+    assert :ok = Adapter.update_comment("comment-1", "edited")
+    assert_receive {:graphql_called, update_comment_query, %{body: "edited", commentId: "comment-1"}}
+    assert update_comment_query =~ "commentUpdate"
+
+    Process.put(
+      {FakeLinearClient, :graphql_result},
+      {:ok, %{"data" => %{"commentUpdate" => %{"success" => false}}}}
+    )
+
+    assert {:error, :comment_update_failed} = Adapter.update_comment("comment-1", "broken")
 
     Process.put(
       {FakeLinearClient, :graphql_results},

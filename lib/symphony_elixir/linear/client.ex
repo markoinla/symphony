@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Linear.Client do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, Linear.Issue}
+  alias SymphonyElixir.{Config, Linear.Comment, Linear.Issue}
 
   @issue_page_size 50
   @max_error_body_log_bytes 1_000
@@ -35,8 +35,10 @@ defmodule SymphonyElixir.Linear.Client do
         }
         comments(first: $commentFirst) {
           nodes {
+            id
             body
             user {
+              id
               name
             }
             createdAt
@@ -89,8 +91,10 @@ defmodule SymphonyElixir.Linear.Client do
         }
         comments(first: $commentFirst) {
           nodes {
+            id
             body
             user {
+              id
               name
             }
             createdAt
@@ -143,8 +147,10 @@ defmodule SymphonyElixir.Linear.Client do
         }
         comments(first: $commentFirst) {
           nodes {
+            id
             body
             user {
+              id
               name
             }
             createdAt
@@ -222,6 +228,15 @@ defmodule SymphonyElixir.Linear.Client do
         with {:ok, assignee_filter} <- routing_assignee_filter() do
           do_fetch_issue_states(ids, assignee_filter)
         end
+    end
+  end
+
+  @spec fetch_issue_comments(String.t()) :: {:ok, [Comment.t()]} | {:error, term()}
+  def fetch_issue_comments(issue_id) when is_binary(issue_id) do
+    case fetch_issue_states_by_ids([issue_id]) do
+      {:ok, [%Issue{comments: comments} | _]} -> {:ok, comments}
+      {:ok, []} -> {:ok, []}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -753,9 +768,11 @@ defmodule SymphonyElixir.Linear.Client do
 
   defp extract_comments(%{"comments" => %{"nodes" => comments}}) when is_list(comments) do
     Enum.map(comments, fn comment ->
-      %{
+      %Comment{
+        id: comment["id"],
         body: comment["body"],
         author: get_in(comment, ["user", "name"]),
+        author_id: get_in(comment, ["user", "id"]),
         created_at: comment["createdAt"]
       }
     end)

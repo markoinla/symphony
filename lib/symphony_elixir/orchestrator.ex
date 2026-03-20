@@ -7,7 +7,18 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, Settings, StatusDashboard, Store, Store.Project, Tracker, Workflow, Workspace}
+  alias SymphonyElixir.{
+    AgentRunner,
+    Config,
+    Settings,
+    StatusDashboard,
+    Store,
+    Store.Project,
+    Tracker,
+    Workflow,
+    Workspace
+  }
+
   alias SymphonyElixir.Linear.Issue
   @registry SymphonyElixir.OrchestratorRegistry
 
@@ -188,7 +199,8 @@ defmodule SymphonyElixir.Orchestrator do
                 identifier: running_entry.identifier,
                 delay_type: :continuation,
                 worker_host: Map.get(running_entry, :worker_host),
-                workspace_path: Map.get(running_entry, :workspace_path)
+                workspace_path: Map.get(running_entry, :workspace_path),
+                comment_watch_state: Map.get(running_entry, :comment_watch_state)
               })
 
             _ ->
@@ -200,7 +212,8 @@ defmodule SymphonyElixir.Orchestrator do
                 identifier: running_entry.identifier,
                 error: "agent exited: #{inspect(reason)}",
                 worker_host: Map.get(running_entry, :worker_host),
-                workspace_path: Map.get(running_entry, :workspace_path)
+                workspace_path: Map.get(running_entry, :workspace_path),
+                comment_watch_state: Map.get(running_entry, :comment_watch_state)
               })
           end
 
@@ -250,6 +263,18 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   def handle_info({:codex_worker_update, _issue_id, _update}, state), do: {:noreply, state}
+
+  def handle_info({:comment_watch_state, issue_id, comment_watch_state}, %{running: running} = state)
+      when is_binary(issue_id) and is_map(comment_watch_state) do
+    case Map.get(running, issue_id) do
+      nil ->
+        {:noreply, state}
+
+      running_entry ->
+        updated_running_entry = Map.put(running_entry, :comment_watch_state, comment_watch_state)
+        {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
+    end
+  end
 
   def handle_info({:retry_issue, issue_id, retry_token}, state) do
     result =
@@ -724,12 +749,12 @@ defmodule SymphonyElixir.Orchestrator do
     |> MapSet.new()
   end
 
-  defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil) do
+  defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil, comment_watch_state \\ nil) do
     issue_fetcher = fn issue_ids -> Tracker.fetch_issue_states_by_ids(issue_ids, state.workflow_name) end
 
     case revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_state_set()) do
       {:ok, %Issue{} = refreshed_issue} ->
-        do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host)
+        do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host, comment_watch_state)
 
       {:skip, :missing} ->
         Logger.info("Skipping dispatch; issue no longer active or visible: #{issue_context(issue)}")
@@ -746,7 +771,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp do_dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host) do
+  defp do_dispatch_issue(%State{} = state, issue, attempt, preferred_worker_host, comment_watch_state) do
     recipient = self()
 
     case select_worker_host(state, preferred_worker_host) do
@@ -755,14 +780,25 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       worker_host ->
-        spawn_issue_on_worker_host(state, issue, attempt, recipient, worker_host)
+        spawn_issue_on_worker_host(state, issue, attempt, recipient, worker_host, comment_watch_state)
     end
   end
 
-  defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host) do
+  defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host, comment_watch_state) do
     case Task.Supervisor.start_child(
            SymphonyElixir.TaskSupervisor,
-           fn -> run_issue_task(state.workflow_name, issue, recipient, attempt, worker_host, state.project_id, state.project) end
+           fn ->
+             run_issue_task(
+               state.workflow_name,
+               issue,
+               recipient,
+               attempt,
+               worker_host,
+               state.project_id,
+               state.project,
+               comment_watch_state
+             )
+           end
          ) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
@@ -788,6 +824,7 @@ defmodule SymphonyElixir.Orchestrator do
             codex_last_reported_input_tokens: 0,
             codex_last_reported_output_tokens: 0,
             codex_last_reported_total_tokens: 0,
+            comment_watch_state: comment_watch_state,
             turn_count: 0,
             retry_attempt: normalize_retry_attempt(attempt),
             started_at: DateTime.utc_now()
@@ -812,12 +849,19 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp run_issue_task(workflow_name, issue, recipient, attempt, worker_host, project_id, project)
+  defp run_issue_task(workflow_name, issue, recipient, attempt, worker_host, project_id, project, comment_watch_state)
        when is_binary(workflow_name) do
     Settings.put_current_project(project)
 
     Workflow.with_workflow(workflow_name, fn ->
-      AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host, project_id: project_id)
+      AgentRunner.run(
+        issue,
+        recipient,
+        attempt: attempt,
+        worker_host: worker_host,
+        project_id: project_id,
+        comment_watch_state: comment_watch_state
+      )
     end)
   end
 
@@ -890,6 +934,7 @@ defmodule SymphonyElixir.Orchestrator do
     error = pick_retry_error(previous_retry, metadata)
     worker_host = pick_retry_worker_host(previous_retry, metadata)
     workspace_path = pick_retry_workspace_path(previous_retry, metadata)
+    comment_watch_state = pick_retry_comment_watch_state(previous_retry, metadata)
 
     if is_reference(old_timer) do
       Process.cancel_timer(old_timer)
@@ -912,7 +957,8 @@ defmodule SymphonyElixir.Orchestrator do
             identifier: identifier,
             error: error,
             worker_host: worker_host,
-            workspace_path: workspace_path
+            workspace_path: workspace_path,
+            comment_watch_state: comment_watch_state
           })
     }
   end
@@ -924,7 +970,8 @@ defmodule SymphonyElixir.Orchestrator do
           identifier: Map.get(retry_entry, :identifier),
           error: Map.get(retry_entry, :error),
           worker_host: Map.get(retry_entry, :worker_host),
-          workspace_path: Map.get(retry_entry, :workspace_path)
+          workspace_path: Map.get(retry_entry, :workspace_path),
+          comment_watch_state: Map.get(retry_entry, :comment_watch_state)
         }
 
         {:ok, attempt, metadata, %{state | retry_attempts: Map.delete(state.retry_attempts, issue_id)}}
@@ -1020,9 +1067,9 @@ defmodule SymphonyElixir.Orchestrator do
         {:noreply, release_issue_claim(state, issue.id)}
 
       retry_candidate_issue?(issue, terminal_state_set()) and
-          dispatch_slots_available?(issue, state) and
+        dispatch_slots_available?(issue, state) and
           worker_slots_available?(state, metadata[:worker_host]) ->
-        {:noreply, dispatch_issue(state, issue, attempt, metadata[:worker_host])}
+        {:noreply, dispatch_issue(state, issue, attempt, metadata[:worker_host], metadata[:comment_watch_state])}
 
       true ->
         Logger.debug("No available slots for retrying #{issue_context(issue)}; retrying again")
@@ -1036,7 +1083,7 @@ defmodule SymphonyElixir.Orchestrator do
              identifier: issue.identifier,
              error: "no available orchestrator slots"
            })
-       )}
+         )}
     end
   end
 
@@ -1081,6 +1128,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp pick_retry_workspace_path(previous_retry, metadata) do
     metadata[:workspace_path] || Map.get(previous_retry, :workspace_path)
+  end
+
+  defp pick_retry_comment_watch_state(previous_retry, metadata) do
+    metadata[:comment_watch_state] || Map.get(previous_retry, :comment_watch_state)
   end
 
   defp maybe_put_runtime_value(running_entry, _key, nil), do: running_entry

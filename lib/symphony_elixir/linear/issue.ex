@@ -3,6 +3,8 @@ defmodule SymphonyElixir.Linear.Issue do
   Normalized Linear issue representation used by the orchestrator.
   """
 
+  alias SymphonyElixir.Linear.Comment
+
   defstruct [
     :id,
     :identifier,
@@ -21,7 +23,7 @@ defmodule SymphonyElixir.Linear.Issue do
     updated_at: nil
   ]
 
-  @type comment :: %{body: String.t(), author: String.t() | nil, created_at: String.t() | nil}
+  @type comment :: Comment.t()
 
   @type t :: %__MODULE__{
           id: String.t() | nil,

@@ -13,6 +13,7 @@ defmodule SymphonyElixir.OrchestratorStarter do
 
   @reconcile_interval_ms 30_000
 
+  @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(_opts) do
     GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
   end

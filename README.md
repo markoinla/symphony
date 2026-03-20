@@ -18,10 +18,16 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 3. Launches Codex in [App Server mode](https://developers.openai.com/codex/app-server/) inside the
    workspace
 4. Sends a workflow prompt to Codex
-5. Keeps Codex working on the issue until the work is done
+5. Refreshes new external Linear comments between turns for active sessions
+6. Keeps Codex working on the issue until the work is done
 
-During app-server sessions, Symphony also serves a client-side `linear_graphql` tool so that repo
-skills can make raw Linear GraphQL calls.
+During app-server sessions, Symphony serves client-side Linear tools:
+- `linear_graphql` for raw GraphQL access
+- `linear_create_comment` for supported issue replies
+- `linear_update_comment` for supported workpad/comment edits
+
+Continuation turns prepend a compact `New Linear comments since last turn` section when Symphony
+detects fresh external comments while the issue remains active.
 
 If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
 Symphony stops the active agent for that issue and cleans up matching workspaces.

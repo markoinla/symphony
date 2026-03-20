@@ -5,7 +5,7 @@ defmodule SymphonyElixir.Tracker.Memory do
 
   @behaviour SymphonyElixir.Tracker
 
-  alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Linear.{Comment, Issue}
 
   @spec fetch_candidate_issues() :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -35,9 +35,27 @@ defmodule SymphonyElixir.Tracker.Memory do
      end)}
   end
 
-  @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
+  @spec fetch_issue_comments(String.t()) :: {:ok, [Comment.t()]} | {:error, term()}
+  def fetch_issue_comments(issue_id) do
+    comments =
+      issue_entries()
+      |> Enum.find_value([], fn
+        %Issue{id: ^issue_id, comments: comments} -> comments
+        _issue -> nil
+      end)
+
+    {:ok, comments}
+  end
+
+  @spec create_comment(String.t(), String.t()) :: {:ok, String.t() | nil} | {:error, term()}
   def create_comment(issue_id, body) do
     send_event({:memory_tracker_comment, issue_id, body})
+    {:ok, nil}
+  end
+
+  @spec update_comment(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_comment(comment_id, body) do
+    send_event({:memory_tracker_comment_update, comment_id, body})
     :ok
   end
 

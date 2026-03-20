@@ -371,6 +371,37 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     refute issue.assigned_to_worker
   end
 
+  test "linear client normalizes comment ids and authors" do
+    raw_issue = %{
+      "id" => "issue-comments",
+      "identifier" => "MT-COMMENTS",
+      "title" => "Comment rich issue",
+      "state" => %{"name" => "In Progress"},
+      "comments" => %{
+        "nodes" => [
+          %{
+            "id" => "comment-1",
+            "body" => "First comment",
+            "user" => %{"id" => "user-1", "name" => "Alice"},
+            "createdAt" => "2026-03-20T17:00:00Z"
+          }
+        ]
+      }
+    }
+
+    issue = Client.normalize_issue_for_test(raw_issue)
+
+    assert issue.comments == [
+             %SymphonyElixir.Linear.Comment{
+               id: "comment-1",
+               body: "First comment",
+               author: "Alice",
+               author_id: "user-1",
+               created_at: "2026-03-20T17:00:00Z"
+             }
+           ]
+  end
+
   test "linear client pagination merge helper preserves issue ordering" do
     issue_page_1 = [
       %Issue{id: "issue-1", identifier: "MT-1"},

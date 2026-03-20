@@ -3,8 +3,16 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
   alias SymphonyElixir.Codex.DynamicTool
 
-  test "tool_specs advertises the linear_graphql input contract" do
-    assert [
+  test "tool_specs advertises the Linear tool contracts" do
+    specs = DynamicTool.tool_specs()
+
+    assert Enum.map(specs, & &1["name"]) == [
+             "linear_graphql",
+             "linear_create_comment",
+             "linear_update_comment"
+           ]
+
+    assert Enum.any?(specs, fn
              %{
                "description" => description,
                "inputSchema" => %{
@@ -16,10 +24,12 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
                  "type" => "object"
                },
                "name" => "linear_graphql"
-             }
-           ] = DynamicTool.tool_specs()
+             } ->
+               description =~ "Linear"
 
-    assert description =~ "Linear"
+             _spec ->
+               false
+           end)
   end
 
   test "unsupported tools return a failure payload with the supported tool list" do
@@ -30,7 +40,7 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
     assert Jason.decode!(response["output"]) == %{
              "error" => %{
                "message" => ~s(Unsupported dynamic tool: "not_a_real_tool".),
-               "supportedTools" => ["linear_graphql"]
+               "supportedTools" => ["linear_graphql", "linear_create_comment", "linear_update_comment"]
              }
            }
 
@@ -306,5 +316,58 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
     assert response["success"] == true
     assert response["output"] == ":ok"
+  end
+
+  test "linear_create_comment uses the tracker helper and tags agent replies" do
+    test_pid = self()
+
+    response =
+      DynamicTool.execute(
+        "linear_create_comment",
+        %{"issue_id" => "issue-1", "body" => "Reply body"},
+        tracker_create_comment: fn issue_id, body ->
+          send(test_pid, {:tracker_create_comment_called, issue_id, body})
+          {:ok, "comment-123"}
+        end
+      )
+
+    assert_received {:tracker_create_comment_called, "issue-1", tagged_body}
+    assert tagged_body =~ "Reply body"
+    assert tagged_body =~ "<!-- symphony:agent-reply -->"
+    assert Jason.decode!(response["output"]) == %{"commentId" => "comment-123", "issueId" => "issue-1", "success" => true}
+  end
+
+  test "linear_update_comment uses the tracker helper" do
+    test_pid = self()
+
+    response =
+      DynamicTool.execute(
+        "linear_update_comment",
+        %{"comment_id" => "comment-9", "body" => "Updated body"},
+        tracker_update_comment: fn comment_id, body ->
+          send(test_pid, {:tracker_update_comment_called, comment_id, body})
+          :ok
+        end
+      )
+
+    assert_received {:tracker_update_comment_called, "comment-9", "Updated body"}
+    assert Jason.decode!(response["output"]) == %{"commentId" => "comment-9", "success" => true}
+  end
+
+  test "comment tools validate required arguments" do
+    create_response = DynamicTool.execute("linear_create_comment", %{"body" => "missing issue"})
+    update_response = DynamicTool.execute("linear_update_comment", [:bad])
+
+    assert Jason.decode!(create_response["output"]) == %{
+             "error" => %{
+               "message" => "`linear_create_comment` requires a non-empty `issue_id` string."
+             }
+           }
+
+    assert Jason.decode!(update_response["output"]) == %{
+             "error" => %{
+               "message" => "`linear_update_comment` expects an object with `comment_id` and `body`."
+             }
+           }
   end
 end

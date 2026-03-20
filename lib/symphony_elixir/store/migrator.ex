@@ -123,23 +123,7 @@ defmodule SymphonyElixir.Store.Migrator do
 
     if File.exists?(settings_path) and project_count() == 0 do
       Logger.info("Importing settings from #{settings_path}")
-
-      case File.read(settings_path) do
-        {:ok, content} ->
-          case Jason.decode(content) do
-            {:ok, map} when is_map(map) ->
-              import_settings_map(map)
-              migrated_path = settings_path <> ".migrated"
-              File.rename(settings_path, migrated_path)
-              Logger.info("Settings imported; original file renamed to #{migrated_path}")
-
-            _ ->
-              Logger.warning("Failed to decode settings JSON from #{settings_path}")
-          end
-
-        {:error, reason} ->
-          Logger.warning("Failed to read settings file #{settings_path}: #{inspect(reason)}")
-      end
+      import_settings_file(settings_path)
     end
   end
 
@@ -149,22 +133,10 @@ defmodule SymphonyElixir.Store.Migrator do
     github_repo = Map.get(map, "github.repo")
 
     if project_slug || github_repo do
-      project_name =
-        cond do
-          is_binary(github_repo) and github_repo != "" ->
-            github_repo |> String.split("/") |> List.last()
-
-          is_binary(project_slug) and project_slug != "" ->
-            project_slug
-
-          true ->
-            "Default"
-        end
-
       now = DateTime.utc_now()
 
       Store.create_project(%{
-        name: project_name,
+        name: project_name(project_slug, github_repo),
         linear_project_slug: project_slug,
         linear_organization_slug: org_slug,
         github_repo: github_repo,
@@ -176,14 +148,54 @@ defmodule SymphonyElixir.Store.Migrator do
     global_keys = ["tracker.api_key", "agent.max_concurrent_agents", "polling.interval_ms", "codex.command"]
 
     global_settings =
-      map
-      |> Map.take(global_keys)
-      |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
-      |> Map.new(fn {k, v} -> {k, to_string(v)} end)
+      global_settings_from_map(map, global_keys)
 
     if map_size(global_settings) > 0 do
       Store.set_settings(global_settings)
     end
+  end
+
+  defp import_settings_file(settings_path) do
+    case File.read(settings_path) do
+      {:ok, content} ->
+        import_settings_content(content, settings_path)
+
+      {:error, reason} ->
+        Logger.warning("Failed to read settings file #{settings_path}: #{inspect(reason)}")
+    end
+  end
+
+  defp import_settings_content(content, settings_path) when is_binary(content) do
+    case Jason.decode(content) do
+      {:ok, map} when is_map(map) ->
+        import_settings_map(map)
+        migrated_path = settings_path <> ".migrated"
+        File.rename(settings_path, migrated_path)
+        Logger.info("Settings imported; original file renamed to #{migrated_path}")
+
+      _ ->
+        Logger.warning("Failed to decode settings JSON from #{settings_path}")
+    end
+  end
+
+  defp project_name(project_slug, github_repo) do
+    cond do
+      is_binary(github_repo) and github_repo != "" ->
+        github_repo |> String.split("/") |> List.last()
+
+      is_binary(project_slug) and project_slug != "" ->
+        project_slug
+
+      true ->
+        "Default"
+    end
+  end
+
+  defp global_settings_from_map(map, global_keys) when is_map(map) and is_list(global_keys) do
+    map
+    |> Map.take(global_keys)
+    |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
+    |> Map.new(fn {k, v} -> {k, to_string(v)} end)
   end
 
   defp project_count do

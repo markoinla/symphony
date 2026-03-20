@@ -427,18 +427,18 @@ defmodule SymphonyElixir.AppServerTest do
                    |> Jason.decode!()
 
                  payload["id"] == 2 and
-                   case get_in(payload, ["params", "dynamicTools"]) do
-                     [
-                       %{
-                         "description" => description,
-                         "inputSchema" => %{"required" => ["query"]},
-                         "name" => "linear_graphql"
-                       }
-                     ] ->
-                       description =~ "Linear"
-
-                     _ ->
-                       false
+                   with tools when is_list(tools) <- get_in(payload, ["params", "dynamicTools"]),
+                        ["linear_create_comment", "linear_graphql", "linear_update_comment"] <-
+                          tools |> Enum.map(& &1["name"]) |> Enum.sort(),
+                        %{
+                          "description" => description,
+                          "inputSchema" => %{"required" => ["query"]},
+                          "name" => "linear_graphql"
+                        } <-
+                          Enum.find(tools, &(&1["name"] == "linear_graphql")) do
+                     description =~ "Linear"
+                   else
+                     _ -> false
                    end
                else
                  false

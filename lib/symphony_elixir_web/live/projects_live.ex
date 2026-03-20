@@ -180,26 +180,7 @@ defmodule SymphonyElixirWeb.ProjectsLive do
 
   @impl true
   def handle_event("edit_project", %{"id" => id_str}, socket) do
-    id = String.to_integer(id_str)
-
-    case Store.get_project(id) do
-      nil ->
-        {:noreply, put_flash(socket, :error, "Project not found.")}
-
-      project ->
-        fields = %{
-          "id" => project.id,
-          "name" => project.name || "",
-          "linear_project_slug" => project.linear_project_slug || "",
-          "linear_organization_slug" => project.linear_organization_slug || "",
-          "linear_filter_by" => project.linear_filter_by || "project",
-          "linear_label_name" => project.linear_label_name || "",
-          "github_repo" => project.github_repo || "",
-          "workspace_root" => project.workspace_root || ""
-        }
-
-        {:noreply, assign(socket, editing: project.id, form_fields: fields, form_errors: %{})}
-    end
+    {:noreply, edit_project_socket(socket, String.to_integer(id_str))}
   end
 
   @impl true
@@ -222,46 +203,15 @@ defmodule SymphonyElixirWeb.ProjectsLive do
     errors = validate_form(fields)
 
     if map_size(errors) > 0 do
-      {:noreply,
-       socket
-       |> assign(form_fields: fields, form_errors: errors)
-       |> put_flash(:error, "Please fix the errors below.")}
+      {:noreply, save_project_error(socket, fields, errors)}
     else
-      attrs = form_to_attrs(fields)
-
-      result =
-        case socket.assigns.editing do
-          :new -> Store.create_project(attrs)
-          id when is_integer(id) -> Store.update_project(id, attrs)
-        end
-
-      case result do
-        {:ok, _project} ->
-          {:noreply,
-           socket
-           |> assign(projects: Store.list_projects(), editing: nil, form_fields: empty_form(), form_errors: %{})
-           |> put_flash(:info, "Project saved.")}
-
-        {:error, _reason} ->
-          {:noreply, put_flash(socket, :error, "Failed to save project.")}
-      end
+      {:noreply, persist_project(socket, fields)}
     end
   end
 
   @impl true
   def handle_event("delete_project", %{"id" => id_str}, socket) do
-    id = String.to_integer(id_str)
-
-    case Store.delete_project(id) do
-      {:ok, _} ->
-        {:noreply,
-         socket
-         |> assign(projects: Store.list_projects())
-         |> put_flash(:info, "Project deleted.")}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "Failed to delete project.")}
-    end
+    {:noreply, delete_project_socket(socket, String.to_integer(id_str))}
   end
 
   defp empty_form do
@@ -318,6 +268,72 @@ defmodule SymphonyElixirWeb.ProjectsLive do
     else
       errors
     end
+  end
+
+  defp save_project_error(socket, fields, errors) do
+    socket
+    |> assign(form_fields: fields, form_errors: errors)
+    |> put_flash(:error, "Please fix the errors below.")
+  end
+
+  defp edit_project_socket(socket, id) when is_integer(id) do
+    case Store.get_project(id) do
+      nil ->
+        put_flash(socket, :error, "Project not found.")
+
+      project ->
+        assign(socket, editing: project.id, form_fields: project_form_fields(project), form_errors: %{})
+    end
+  end
+
+  defp delete_project_socket(socket, id) when is_integer(id) do
+    case Store.delete_project(id) do
+      {:ok, _} ->
+        socket
+        |> assign(projects: Store.list_projects())
+        |> put_flash(:info, "Project deleted.")
+
+      {:error, _} ->
+        put_flash(socket, :error, "Failed to delete project.")
+    end
+  end
+
+  defp persist_project(socket, fields) do
+    fields
+    |> form_to_attrs()
+    |> save_project(socket.assigns.editing)
+    |> handle_project_save_result(socket)
+  end
+
+  defp save_project(attrs, :new), do: Store.create_project(attrs)
+  defp save_project(attrs, id) when is_integer(id), do: Store.update_project(id, attrs)
+
+  defp handle_project_save_result({:ok, _project}, socket) do
+    socket
+    |> assign(
+      projects: Store.list_projects(),
+      editing: nil,
+      form_fields: empty_form(),
+      form_errors: %{}
+    )
+    |> put_flash(:info, "Project saved.")
+  end
+
+  defp handle_project_save_result({:error, _reason}, socket) do
+    put_flash(socket, :error, "Failed to save project.")
+  end
+
+  defp project_form_fields(project) do
+    %{
+      "id" => project.id,
+      "name" => project.name || "",
+      "linear_project_slug" => project.linear_project_slug || "",
+      "linear_organization_slug" => project.linear_organization_slug || "",
+      "linear_filter_by" => project.linear_filter_by || "project",
+      "linear_label_name" => project.linear_label_name || "",
+      "github_repo" => project.github_repo || "",
+      "workspace_root" => project.workspace_root || ""
+    }
   end
 
   defp form_to_attrs(fields) do

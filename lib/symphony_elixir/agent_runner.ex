@@ -5,7 +5,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, SessionLog, Tracker, Workspace}
+  alias SymphonyElixir.{CommentWatch, Config, Linear.Issue, PromptBuilder, SessionLog, Tracker, Workspace}
 
   @type worker_host :: String.t() | nil
 
@@ -105,13 +105,21 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
 
+  defp send_comment_watch_update(recipient, %Issue{id: issue_id}, comment_watch_state)
+       when is_binary(issue_id) and is_pid(recipient) do
+    send(recipient, {:comment_watch_state, issue_id, comment_watch_state})
+    :ok
+  end
+
+  defp send_comment_watch_update(_recipient, _issue, _comment_watch_state), do: :ok
+
   defp notify_workspace_ready(%Issue{id: issue_id} = issue, workspace, worker_host)
        when is_binary(issue_id) do
     host = if is_binary(worker_host), do: worker_host, else: node_hostname()
     body = "Workspace ready: `#{host}:#{workspace}`"
 
     case Tracker.create_comment(issue_id, body) do
-      :ok ->
+      {:ok, _comment_id} ->
         Logger.info("Posted workspace-ready comment for #{issue_context(issue)}")
 
       {:error, reason} ->
@@ -130,10 +138,12 @@ defmodule SymphonyElixir.AgentRunner do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
     project_id = Keyword.get(opts, :project_id)
+    comment_watch_state = opts |> Keyword.get(:comment_watch_state) |> CommentWatch.seed(issue.comments)
 
     with {:ok, session} <- AppServer.start_session(workspace, worker_host: worker_host) do
       session_id = session[:session_id] || "session_#{System.unique_integer([:positive])}"
       start_session_log(issue, session_id, project_id)
+      send_comment_watch_update(codex_update_recipient, issue, comment_watch_state)
 
       try do
         do_run_codex_turns(
@@ -145,7 +155,9 @@ defmodule SymphonyElixir.AgentRunner do
           issue_state_fetcher,
           1,
           max_turns,
-          session_id
+          session_id,
+          comment_watch_state,
+          []
         )
       after
         stop_session_log(issue, session_id)
@@ -186,9 +198,11 @@ defmodule SymphonyElixir.AgentRunner do
          issue_state_fetcher,
          turn_number,
          max_turns,
-         session_id
+         session_id,
+         comment_watch_state,
+         new_comments
        ) do
-    prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
+    prompt = build_turn_prompt(issue, opts, turn_number, max_turns, new_comments)
 
     with {:ok, turn_session} <-
            AppServer.run_turn(
@@ -199,9 +213,10 @@ defmodule SymphonyElixir.AgentRunner do
            ) do
       Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
 
-      case continue_with_issue?(issue, issue_state_fetcher) do
-        {:continue, refreshed_issue} when turn_number < max_turns ->
+      case continue_with_issue?(issue, issue_state_fetcher, comment_watch_state) do
+        {:continue, refreshed_issue, next_comment_watch_state, unseen_comments} when turn_number < max_turns ->
           Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
+          send_comment_watch_update(codex_update_recipient, refreshed_issue, next_comment_watch_state)
 
           do_run_codex_turns(
             app_session,
@@ -212,15 +227,19 @@ defmodule SymphonyElixir.AgentRunner do
             issue_state_fetcher,
             turn_number + 1,
             max_turns,
-            session_id
+            session_id,
+            next_comment_watch_state,
+            unseen_comments
           )
 
-        {:continue, refreshed_issue} ->
+        {:continue, refreshed_issue, next_comment_watch_state, _unseen_comments} ->
           Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
+          send_comment_watch_update(codex_update_recipient, refreshed_issue, next_comment_watch_state)
 
           :ok
 
-        {:done, _refreshed_issue} ->
+        {:done, refreshed_issue, next_comment_watch_state} ->
+          send_comment_watch_update(codex_update_recipient, refreshed_issue, next_comment_watch_state)
           :ok
 
         {:error, reason} ->
@@ -229,11 +248,23 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp build_turn_prompt(issue, opts, 1, _max_turns), do: PromptBuilder.build_prompt(issue, opts)
+  @doc false
+  @spec build_turn_prompt_for_test(Issue.t(), keyword(), pos_integer(), pos_integer(), list()) :: String.t()
+  def build_turn_prompt_for_test(issue, opts, turn_number, max_turns, new_comments) do
+    build_turn_prompt(issue, opts, turn_number, max_turns, new_comments)
+  end
 
-  defp build_turn_prompt(_issue, _opts, turn_number, max_turns) do
+  defp build_turn_prompt(issue, opts, 1, _max_turns, _new_comments), do: PromptBuilder.build_prompt(issue, opts)
+
+  defp build_turn_prompt(_issue, _opts, turn_number, max_turns, new_comments) do
+    comment_section =
+      case CommentWatch.continuation_section(new_comments) do
+        nil -> ""
+        section -> section <> "\n"
+      end
+
     """
-    Continuation guidance:
+    #{comment_section}Continuation guidance:
 
     - The previous Codex turn completed normally, but the Linear issue is still in an active state.
     - This is continuation turn ##{turn_number} of #{max_turns} for the current agent run.
@@ -241,26 +272,40 @@ defmodule SymphonyElixir.AgentRunner do
     - The original task instructions and prior turn context are already present in this thread, so do not restate them before acting.
     - Focus on the remaining ticket work and do not end the turn while the issue stays active unless you are truly blocked.
     """
+    |> String.trim_leading()
   end
 
-  defp continue_with_issue?(%Issue{id: issue_id} = issue, issue_state_fetcher) when is_binary(issue_id) do
+  @doc false
+  @spec continue_with_issue_for_test(Issue.t(), (list(String.t()) -> term()), CommentWatch.state() | nil) ::
+          {:continue, Issue.t(), CommentWatch.state(), list()} | {:done, Issue.t(), CommentWatch.state()} | {:error, term()}
+  def continue_with_issue_for_test(%Issue{} = issue, issue_state_fetcher, comment_watch_state)
+      when is_function(issue_state_fetcher, 1) do
+    continue_with_issue?(issue, issue_state_fetcher, comment_watch_state)
+  end
+
+  defp continue_with_issue?(%Issue{id: issue_id} = issue, issue_state_fetcher, comment_watch_state)
+       when is_binary(issue_id) do
     case issue_state_fetcher.([issue_id]) do
       {:ok, [%Issue{} = refreshed_issue | _]} ->
+        unseen_comments = CommentWatch.unseen_external_comments(comment_watch_state, refreshed_issue.comments)
+        next_comment_watch_state = CommentWatch.remember(comment_watch_state, refreshed_issue.comments)
+
         if active_issue_state?(refreshed_issue.state) and issue_still_matches_label_filter?(refreshed_issue) do
-          {:continue, refreshed_issue}
+          {:continue, refreshed_issue, next_comment_watch_state, unseen_comments}
         else
-          {:done, refreshed_issue}
+          {:done, refreshed_issue, next_comment_watch_state}
         end
 
       {:ok, []} ->
-        {:done, issue}
+        {:done, issue, CommentWatch.normalize_state_for_test(comment_watch_state)}
 
       {:error, reason} ->
         {:error, {:issue_state_refresh_failed, reason}}
     end
   end
 
-  defp continue_with_issue?(issue, _issue_state_fetcher), do: {:done, issue}
+  defp continue_with_issue?(issue, _issue_state_fetcher, comment_watch_state),
+    do: {:done, issue, CommentWatch.normalize_state_for_test(comment_watch_state)}
 
   defp issue_still_matches_label_filter?(%Issue{labels: labels}) do
     tracker = Config.settings!().tracker

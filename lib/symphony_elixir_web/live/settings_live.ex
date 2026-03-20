@@ -139,20 +139,12 @@ defmodule SymphonyElixirWeb.SettingsLive do
        |> put_flash(:error, "Please fix the errors below.")}
     else
       to_save = maybe_coerce_integers(fields, ["agent.max_concurrent_agents", "polling.interval_ms"])
+      :ok = Settings.save_all(to_save)
 
-      case Settings.save_all(to_save) do
-        :ok ->
-          {:noreply,
-           socket
-           |> assign(fields: fields, errors: %{})
-           |> put_flash(:info, "Settings saved.")}
-
-        {:error, reason} ->
-          {:noreply,
-           socket
-           |> assign(fields: fields, errors: errors)
-           |> put_flash(:error, "Failed to save: #{inspect(reason)}")}
-      end
+      {:noreply,
+       socket
+       |> assign(fields: fields, errors: %{})
+       |> put_flash(:info, "Settings saved.")}
     end
   end
 

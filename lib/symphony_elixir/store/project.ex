@@ -6,6 +6,19 @@ defmodule SymphonyElixir.Store.Project do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @type t :: %__MODULE__{
+          id: integer() | nil,
+          name: String.t() | nil,
+          linear_project_slug: String.t() | nil,
+          linear_organization_slug: String.t() | nil,
+          linear_filter_by: String.t() | nil,
+          linear_label_name: String.t() | nil,
+          github_repo: String.t() | nil,
+          workspace_root: String.t() | nil,
+          created_at: DateTime.t() | nil,
+          updated_at: DateTime.t() | nil
+        }
+
   schema "projects" do
     field(:name, :string)
     field(:linear_project_slug, :string)

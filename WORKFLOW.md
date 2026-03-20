@@ -69,6 +69,9 @@ Comments (oldest first):
 ---
 {% endif %}
 
+Continuation turns may also receive a `New Linear comments since last turn` section when Symphony
+detects fresh external comments while the session is active.
+
 ## Project context
 
 Before starting any implementation work, discover and read the project's context files:

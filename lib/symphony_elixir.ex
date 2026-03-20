@@ -59,5 +59,4 @@ defmodule SymphonyElixir.Application do
       _ -> :ok
     end
   end
-
 end

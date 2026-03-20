@@ -11,6 +11,17 @@ defmodule SymphonyElixir.Linear.Adapter do
   mutation SymphonyCreateComment($issueId: String!, $body: String!) {
     commentCreate(input: {issueId: $issueId, body: $body}) {
       success
+      comment {
+        id
+      }
+    }
+  }
+  """
+
+  @update_comment_mutation """
+  mutation SymphonyUpdateComment($commentId: String!, $body: String!) {
+    commentUpdate(id: $commentId, input: {body: $body}) {
+      success
     }
   }
   """
@@ -46,15 +57,33 @@ defmodule SymphonyElixir.Linear.Adapter do
   @spec fetch_issue_states_by_ids([String.t()]) :: {:ok, [term()]} | {:error, term()}
   def fetch_issue_states_by_ids(issue_ids), do: client_module().fetch_issue_states_by_ids(issue_ids)
 
-  @spec create_comment(String.t(), String.t()) :: :ok | {:error, term()}
+  @spec fetch_issue_comments(String.t()) :: {:ok, [term()]} | {:error, term()}
+  def fetch_issue_comments(issue_id) when is_binary(issue_id) do
+    client_module().fetch_issue_comments(issue_id)
+  end
+
+  @spec create_comment(String.t(), String.t()) :: {:ok, String.t() | nil} | {:error, term()}
   def create_comment(issue_id, body) when is_binary(issue_id) and is_binary(body) do
     with {:ok, response} <- client_module().graphql(@create_comment_mutation, %{issueId: issue_id, body: body}),
          true <- get_in(response, ["data", "commentCreate", "success"]) == true do
-      :ok
+      {:ok, get_in(response, ["data", "commentCreate", "comment", "id"])}
     else
       false -> {:error, :comment_create_failed}
       {:error, reason} -> {:error, reason}
       _ -> {:error, :comment_create_failed}
+    end
+  end
+
+  @spec update_comment(String.t(), String.t()) :: :ok | {:error, term()}
+  def update_comment(comment_id, body) when is_binary(comment_id) and is_binary(body) do
+    with {:ok, response} <-
+           client_module().graphql(@update_comment_mutation, %{commentId: comment_id, body: body}),
+         true <- get_in(response, ["data", "commentUpdate", "success"]) == true do
+      :ok
+    else
+      false -> {:error, :comment_update_failed}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :comment_update_failed}
     end
   end
 

@@ -185,24 +185,29 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp group_agents_by_project(payload, project_map) do
-    all_agents =
-      Enum.map(payload.running, &Map.put(&1, :kind, :running)) ++
-        Enum.map(payload.retrying, &Map.put(&1, :kind, :retrying))
+    case all_agents(payload) do
+      [] ->
+        []
 
-    if all_agents == [] do
-      []
-    else
-      all_agents
-      |> Enum.group_by(fn agent -> extract_project_id(agent[:workflow_name]) end)
-      |> Enum.map(fn {project_id, agents} ->
-        project = Map.get(project_map, project_id)
-        name = if project, do: project.name, else: "Agents"
-        org_slug = if project, do: project.linear_organization_slug
-        agents = Enum.map(agents, &Map.put(&1, :linear_org_slug, org_slug))
-        {name, agents}
-      end)
-      |> Enum.sort_by(fn {name, _} -> name end)
+      agents ->
+        agents
+        |> Enum.group_by(fn agent -> extract_project_id(agent[:workflow_name]) end)
+        |> Enum.map(&project_agent_group(&1, project_map))
+        |> Enum.sort_by(fn {name, _} -> name end)
     end
+  end
+
+  defp all_agents(payload) do
+    Enum.map(payload.running, &Map.put(&1, :kind, :running)) ++
+      Enum.map(payload.retrying, &Map.put(&1, :kind, :retrying))
+  end
+
+  defp project_agent_group({project_id, agents}, project_map) do
+    project = Map.get(project_map, project_id)
+    name = if project, do: project.name, else: "Agents"
+    org_slug = if project, do: project.linear_organization_slug
+    agents = Enum.map(agents, &Map.put(&1, :linear_org_slug, org_slug))
+    {name, agents}
   end
 
   defp extract_project_id(nil), do: nil
@@ -210,13 +215,17 @@ defmodule SymphonyElixirWeb.DashboardLive do
   defp extract_project_id(workflow_name) when is_binary(workflow_name) do
     case String.split(workflow_name, ":", parts: 2) do
       [_wf, id_str] ->
-        case Integer.parse(id_str) do
-          {id, ""} -> id
-          _ -> nil
-        end
+        parse_project_id(id_str)
 
       _ ->
         nil
+    end
+  end
+
+  defp parse_project_id(id_str) when is_binary(id_str) do
+    case Integer.parse(id_str) do
+      {id, ""} -> id
+      _ -> nil
     end
   end
 
