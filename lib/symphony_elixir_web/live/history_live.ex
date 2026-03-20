@@ -5,12 +5,36 @@ defmodule SymphonyElixirWeb.HistoryLive do
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
 
+  alias SymphonyElixir.Store
   alias SymphonyElixirWeb.Presenter
 
   @impl true
   def mount(_params, _session, socket) do
-    payload = Presenter.history_payload(limit: 50)
-    {:ok, assign(socket, :payload, payload)}
+    projects = Store.list_projects()
+
+    {:ok,
+     socket
+     |> assign(:projects, projects)
+     |> assign(:selected_project_id, nil)
+     |> assign(:payload, Presenter.history_payload(limit: 50))}
+  end
+
+  @impl true
+  def handle_event("filter_project", %{"project_id" => ""}, socket) do
+    {:noreply,
+     socket
+     |> assign(:selected_project_id, nil)
+     |> assign(:payload, Presenter.history_payload(limit: 50))}
+  end
+
+  @impl true
+  def handle_event("filter_project", %{"project_id" => id_str}, socket) do
+    project_id = String.to_integer(id_str)
+
+    {:noreply,
+     socket
+     |> assign(:selected_project_id, project_id)
+     |> assign(:payload, Presenter.history_payload(limit: 50, project_id: project_id))}
   end
 
   @impl true
@@ -26,6 +50,14 @@ defmodule SymphonyElixirWeb.HistoryLive do
 
         <div class="chat-topbar-info">
           <span class="chat-topbar-title">Session History</span>
+          <%= if @projects != [] do %>
+            <form phx-change="filter_project" class="project-filter" style="margin-left: auto;">
+              <select name="project_id" class="field-input" style="width: auto; min-width: 10rem; padding: 0.35rem 0.5rem; font-size: var(--text-sm);">
+                <option value="">All projects</option>
+                <option :for={p <- @projects} value={p.id} selected={@selected_project_id == p.id}><%= p.name %></option>
+              </select>
+            </form>
+          <% end %>
         </div>
       </header>
 

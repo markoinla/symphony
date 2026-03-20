@@ -107,10 +107,11 @@ defmodule SymphonyElixir.AgentRunner do
   defp run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host) do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
+    project_id = Keyword.get(opts, :project_id)
 
     with {:ok, session} <- AppServer.start_session(workspace, worker_host: worker_host) do
       session_id = session[:session_id] || "session_#{System.unique_integer([:positive])}"
-      start_session_log(issue, session_id)
+      start_session_log(issue, session_id, project_id)
 
       try do
         do_run_codex_turns(
@@ -131,8 +132,8 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp start_session_log(%Issue{id: issue_id} = issue, session_id) when is_binary(issue_id) and is_binary(session_id) do
-    case SessionLog.start_link(issue_id: issue_id, session_id: session_id, issue_identifier: issue.identifier, issue_title: issue.title) do
+  defp start_session_log(%Issue{id: issue_id} = issue, session_id, project_id) when is_binary(issue_id) and is_binary(session_id) do
+    case SessionLog.start_link(issue_id: issue_id, session_id: session_id, issue_identifier: issue.identifier, issue_title: issue.title, project_id: project_id) do
       {:ok, _pid} ->
         :ok
 
@@ -145,7 +146,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp start_session_log(_issue, _session_id), do: :ok
+  defp start_session_log(_issue, _session_id, _project_id), do: :ok
 
   defp stop_session_log(%Issue{id: issue_id}, session_id) when is_binary(issue_id) and is_binary(session_id) do
     SessionLog.stop(issue_id, session_id)

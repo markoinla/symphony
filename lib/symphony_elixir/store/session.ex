@@ -21,12 +21,14 @@ defmodule SymphonyElixir.Store.Session do
     field(:worker_host, :string)
     field(:workspace_path, :string)
     field(:error, :string)
+    field(:project_id, :integer)
 
+    belongs_to(:project, SymphonyElixir.Store.Project, define_field: false)
     has_many(:messages, SymphonyElixir.Store.Message)
   end
 
   @required_fields ~w(issue_id session_id status started_at)a
-  @optional_fields ~w(issue_identifier issue_title ended_at turn_count input_tokens output_tokens total_tokens worker_host workspace_path error)a
+  @optional_fields ~w(issue_identifier issue_title ended_at turn_count input_tokens output_tokens total_tokens worker_host workspace_path error project_id)a
 
   @spec changeset(%__MODULE__{} | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
   def changeset(session, attrs) do

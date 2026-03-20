@@ -200,21 +200,19 @@ defmodule SymphonyElixir.CoreTest do
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [])
     workflow_name = Workflow.default_workflow_name()
     orchestrator_server = Orchestrator.workflow_server(workflow_name)
-    orchestrator_child_id = {SymphonyElixir.Orchestrator, workflow_name}
     orchestrator_pid = GenServer.whereis(orchestrator_server)
 
     on_exit(fn ->
       if is_nil(GenServer.whereis(orchestrator_server)) do
-        case Supervisor.restart_child(SymphonyElixir.Supervisor, orchestrator_child_id) do
-          {:ok, _pid} -> :ok
-          {:error, {:already_started, _pid}} -> :ok
-          {:error, :not_found} -> :ok
-        end
+        DynamicSupervisor.start_child(
+          SymphonyElixir.OrchestratorSupervisor,
+          {SymphonyElixir.Orchestrator, workflow_name: workflow_name}
+        )
       end
     end)
 
     if is_pid(orchestrator_pid) do
-      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, orchestrator_child_id)
+      DynamicSupervisor.terminate_child(SymphonyElixir.OrchestratorSupervisor, orchestrator_pid)
     end
 
     assert {:ok, pid} = SymphonyElixir.start_link()
@@ -551,7 +549,7 @@ defmodule SymphonyElixir.CoreTest do
     state = :sys.get_state(pid)
 
     refute Map.has_key?(state.running, issue_id)
-    assert MapSet.member?(state.completed, issue_id)
+    assert %{count: 1} = state.completed[issue_id]
     assert %{attempt: 1, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
     assert is_integer(due_at_ms)
     assert_due_in_range(due_at_ms, 500, 1_100)

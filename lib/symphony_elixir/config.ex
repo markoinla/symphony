@@ -35,7 +35,19 @@ defmodule SymphonyElixir.Config do
   def settings(workflow_name) when is_binary(workflow_name) do
     case Workflow.current(workflow_name) do
       {:ok, %{config: config}} when is_map(config) ->
-        merged = deep_merge(config, SymphonyElixir.Settings.config_overlay())
+        merged = deep_merge(SymphonyElixir.Settings.config_overlay(), config)
+        Schema.parse(merged)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @spec settings(String.t(), SymphonyElixir.Store.Project.t()) :: {:ok, Schema.t()} | {:error, term()}
+  def settings(workflow_name, %SymphonyElixir.Store.Project{} = project) when is_binary(workflow_name) do
+    case Workflow.current(workflow_name) do
+      {:ok, %{config: config}} when is_map(config) ->
+        merged = deep_merge(SymphonyElixir.Settings.config_overlay(project), config)
         Schema.parse(merged)
 
       {:error, reason} ->

@@ -32,8 +32,9 @@ defmodule SymphonyElixir.SessionLog do
     session_id = Keyword.fetch!(opts, :session_id)
     issue_identifier = Keyword.get(opts, :issue_identifier)
     issue_title = Keyword.get(opts, :issue_title)
+    project_id = Keyword.get(opts, :project_id)
     name = via(issue_id, session_id)
-    init_arg = {issue_id, session_id, issue_identifier, issue_title}
+    init_arg = {issue_id, session_id, issue_identifier, issue_title, project_id}
     GenServer.start_link(__MODULE__, init_arg, name: name)
   end
 
@@ -91,7 +92,7 @@ defmodule SymphonyElixir.SessionLog do
   # ── GenServer callbacks ─────────────────────────────────────────────
 
   @impl true
-  def init({issue_id, session_id, issue_identifier, issue_title}) do
+  def init({issue_id, session_id, issue_identifier, issue_title, project_id}) do
     db_session_id =
       case Store.create_session(%{
              issue_id: issue_id,
@@ -99,7 +100,8 @@ defmodule SymphonyElixir.SessionLog do
              issue_identifier: issue_identifier,
              issue_title: issue_title,
              status: "running",
-             started_at: DateTime.utc_now()
+             started_at: DateTime.utc_now(),
+             project_id: project_id
            }) do
         {:ok, session} ->
           session.id

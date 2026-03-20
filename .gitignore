@@ -44,6 +44,8 @@ erl_crash.dump
 .secrets
 .credentials
 .symphony_settings.json
+.symphony_settings.json.migrated
+symphony.db
 status.txt
 .codex/original-user-prompt.txt
 

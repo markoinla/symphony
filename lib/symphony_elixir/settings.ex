@@ -1,78 +1,95 @@
 defmodule SymphonyElixir.Settings do
   @moduledoc """
-  Reads/writes `.symphony_settings.json` — per-project local settings
-  that overlay onto the WORKFLOW.md config at runtime.
+  Reads/writes global settings from SQLite.
+
+  For project-specific configuration, use `config_overlay/1` with a
+  `%Store.Project{}` struct to merge project fields into the overlay.
   """
 
-  alias SymphonyElixir.Workflow
-
-  @settings_file_name ".symphony_settings.json"
-
-  @spec file_path() :: Path.t()
-  def file_path do
-    Workflow.workflow_file_path()
-    |> Path.dirname()
-    |> Path.join(@settings_file_name)
-  end
+  alias SymphonyElixir.Store
 
   @spec all() :: map()
   def all do
-    case File.read(file_path()) do
-      {:ok, content} ->
-        case Jason.decode(content) do
-          {:ok, map} when is_map(map) -> map
-          _ -> %{}
-        end
-
-      {:error, _} ->
-        %{}
-    end
+    Store.all_settings()
+    |> Map.new(fn s -> {s.key, s.value} end)
   end
 
   @spec get(String.t()) :: term()
   def get(key) when is_binary(key) do
-    Map.get(all(), key)
+    Store.get_setting(key)
   end
 
-  @spec save_all(map()) :: :ok | {:error, term()}
+  @spec save_all(map()) :: :ok
   def save_all(params) when is_map(params) do
     clean =
       params
       |> Enum.reject(fn {_k, v} -> is_nil(v) or v == "" end)
-      |> Map.new()
+      |> Map.new(fn {k, v} -> {to_string(k), to_string(v)} end)
 
-    path = file_path()
-    tmp_path = path <> ".tmp"
+    Store.set_settings(clean)
+  end
 
-    case Jason.encode(clean, pretty: true) do
-      {:ok, json} ->
-        with :ok <- File.write(tmp_path, json),
-             :ok <- File.rename(tmp_path, path) do
-          :ok
-        else
-          {:error, reason} ->
-            File.rm(tmp_path)
-            {:error, reason}
-        end
+  @project_key :symphony_current_project
 
-      {:error, reason} ->
-        {:error, reason}
-    end
+  @spec put_current_project(Store.Project.t() | nil) :: :ok
+  def put_current_project(%Store.Project{} = project) do
+    Process.put(@project_key, project)
+    :ok
+  end
+
+  def put_current_project(nil) do
+    Process.delete(@project_key)
+    :ok
+  end
+
+  @spec current_project() :: Store.Project.t() | nil
+  def current_project do
+    Process.get(@project_key)
   end
 
   @spec config_overlay() :: map()
   def config_overlay do
-    settings = all()
+    case current_project() do
+      %Store.Project{} = project ->
+        config_overlay(project)
 
+      nil ->
+        case Store.list_projects() do
+          [project | _] -> config_overlay(project)
+          [] -> config_overlay_from_settings(all())
+        end
+    end
+  end
+
+  defp config_overlay_from_settings(settings) do
     overlay = expand_dot_keys(settings)
 
-    # Auto-generate hook and workspace root from github.repo if not explicitly stored
     overlay
     |> maybe_auto_hook(settings)
     |> maybe_auto_workspace_root(settings)
     |> drop_nil_leaves()
     |> Kernel.||(%{})
   end
+
+  @spec config_overlay(Store.Project.t()) :: map()
+  def config_overlay(%Store.Project{} = project) do
+    settings = all()
+
+    project_settings =
+      settings
+      |> maybe_put_project_field("tracker.project_slug", project.linear_project_slug)
+      |> maybe_put_project_field("tracker.organization_slug", project.linear_organization_slug)
+      |> maybe_put_project_field("tracker.filter_by", project.linear_filter_by)
+      |> maybe_put_project_field("tracker.label_name", project.linear_label_name)
+      |> maybe_put_project_field("github.repo", project.github_repo)
+      |> maybe_put_project_field("workspace.root", project.workspace_root)
+
+    config_overlay_from_settings(project_settings)
+  end
+
+  defp maybe_put_project_field(settings, _key, nil), do: settings
+  defp maybe_put_project_field(settings, _key, ""), do: settings
+  defp maybe_put_project_field(settings, key, value), do: Map.put(settings, key, value)
 
   @spec parse_project_slug(String.t()) :: String.t()
   def parse_project_slug(input) when is_binary(input) do
@@ -185,11 +202,7 @@ defmodule SymphonyElixir.Settings do
   defp drop_nil_leaves(""), do: nil
   defp drop_nil_leaves(value), do: value
 
-  # Extract slug from URL path segments like ["team", "project", "slug-xxx"]
-  # or ["team", "project", "settings", "slug-xxx"]
   defp extract_project_slug(segments) when length(segments) >= 3 do
-    # The project slug is typically the last meaningful segment
-    # Pattern: /workspace/project/project-slug or /workspace/project/settings/project-slug
     segments
     |> List.last()
     |> case do

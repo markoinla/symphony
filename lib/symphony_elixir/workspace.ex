@@ -317,12 +317,13 @@ defmodule SymphonyElixir.Workspace do
 
   defp run_hook(command, workspace, issue_context, hook_name, nil) do
     timeout_ms = Config.settings!().hooks.timeout_ms
+    env = hook_env()
 
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local")
 
     task =
       Task.async(fn ->
-        System.cmd("sh", ["-lc", command], cd: workspace, stderr_to_stdout: true)
+        System.cmd("sh", ["-lc", command], cd: workspace, stderr_to_stdout: true, env: env)
       end)
 
     case Task.yield(task, timeout_ms) do
@@ -340,10 +341,11 @@ defmodule SymphonyElixir.Workspace do
 
   defp run_hook(command, workspace, issue_context, hook_name, worker_host) when is_binary(worker_host) do
     timeout_ms = Config.settings!().hooks.timeout_ms
+    env_prefix = hook_env_export()
 
     Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=#{worker_host}")
 
-    case run_remote_command(worker_host, "cd #{shell_escape(workspace)} && #{command}", timeout_ms) do
+    case run_remote_command(worker_host, "cd #{shell_escape(workspace)} && #{env_prefix}#{command}", timeout_ms) do
       {:ok, cmd_result} ->
         handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
 
@@ -352,6 +354,26 @@ defmodule SymphonyElixir.Workspace do
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  defp hook_env do
+    case SymphonyElixir.Settings.current_project() do
+      %{github_repo: repo} when is_binary(repo) and repo != "" ->
+        [{"GITHUB_REPO", repo}]
+
+      _ ->
+        []
+    end
+  end
+
+  defp hook_env_export do
+    case SymphonyElixir.Settings.current_project() do
+      %{github_repo: repo} when is_binary(repo) and repo != "" ->
+        "export GITHUB_REPO=#{shell_escape(repo)} && "
+
+      _ ->
+        ""
     end
   end
 

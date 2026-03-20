@@ -1,6 +1,6 @@
 defmodule SymphonyElixirWeb.SettingsLive do
   @moduledoc """
-  Settings page — edit per-project configuration stored in `.symphony_settings.json`.
+  Settings page — edit global configuration stored in SQLite.
   """
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
@@ -10,9 +10,6 @@ defmodule SymphonyElixirWeb.SettingsLive do
 
   @field_keys [
     "tracker.api_key",
-    "tracker.project_slug",
-    "tracker.organization_slug",
-    "github.repo",
     "agent.max_concurrent_agents",
     "polling.interval_ms",
     "codex.command"
@@ -38,7 +35,7 @@ defmodule SymphonyElixirWeb.SettingsLive do
       <header class="chat-topbar">
         <div class="chat-topbar-info">
           <span class="chat-topbar-title">Settings</span>
-          <span class="chat-topbar-meta">Per-project configuration &middot; stored in .symphony_settings.json</span>
+          <span class="chat-topbar-meta">Global configuration</span>
         </div>
       </header>
 
@@ -47,9 +44,9 @@ defmodule SymphonyElixirWeb.SettingsLive do
 
           <div class="section-card">
             <div class="section-header">
-              <h2 class="section-title">Tracker</h2>
+              <h2 class="section-title">Authentication</h2>
             </div>
-            <p class="section-copy">Linear issue tracking configuration.</p>
+            <p class="section-copy">Credentials for external services.</p>
             <div class="settings-fields" style="margin-top: 0.75rem;">
               <div class="field-group">
                 <label class="field-label" for="tracker_api_key">Linear API Key</label>
@@ -66,54 +63,6 @@ defmodule SymphonyElixirWeb.SettingsLive do
                 <%= if err = @errors["tracker.api_key"] do %>
                   <span class="field-error-text"><%= err %></span>
                 <% end %>
-              </div>
-              <div class="field-group">
-                <label class="field-label" for="tracker_project_slug">Linear Project</label>
-                <input
-                  id="tracker_project_slug"
-                  name="tracker.project_slug"
-                  type="text"
-                  value={@fields["tracker.project_slug"]}
-                  class="field-input"
-                  placeholder="project-slug or full Linear project URL"
-                />
-                <span class="field-hint">Paste a Linear project URL or enter the slug directly.</span>
-                <%= if err = @errors["tracker.project_slug"] do %>
-                  <span class="field-error-text"><%= err %></span>
-                <% end %>
-              </div>
-              <div class="field-group">
-                <label class="field-label" for="tracker_organization_slug">Linear Organization</label>
-                <input
-                  id="tracker_organization_slug"
-                  name="tracker.organization_slug"
-                  type="text"
-                  value={@fields["tracker.organization_slug"]}
-                  class="field-input"
-                  placeholder="your-org"
-                />
-                <span class="field-hint">Your Linear workspace slug (auto-filled from project URL).</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="section-card">
-            <div class="section-header">
-              <h2 class="section-title">Repository</h2>
-            </div>
-            <p class="section-copy">Source repository for workspace cloning.</p>
-            <div class="settings-fields" style="margin-top: 0.75rem;">
-              <div class="field-group">
-                <label class="field-label" for="github_repo">GitHub Repo</label>
-                <input
-                  id="github_repo"
-                  name="github.repo"
-                  type="text"
-                  value={@fields["github.repo"]}
-                  class="field-input"
-                  placeholder="owner/repo"
-                />
-                <span class="field-hint">Auto-generates workspace root (~&#x2F;code&#x2F;&lt;repo&gt;-workspaces) and clone hook.</span>
               </div>
             </div>
           </div>
@@ -189,7 +138,7 @@ defmodule SymphonyElixirWeb.SettingsLive do
        |> assign(fields: fields, errors: errors)
        |> put_flash(:error, "Please fix the errors below.")}
     else
-      to_save = prepare_for_save(fields)
+      to_save = maybe_coerce_integers(fields, ["agent.max_concurrent_agents", "polling.interval_ms"])
 
       case Settings.save_all(to_save) do
         :ok ->
@@ -240,34 +189,6 @@ defmodule SymphonyElixirWeb.SettingsLive do
 
   defp integer_value(_), do: -1
 
-  defp prepare_for_save(fields) do
-    fields
-    |> maybe_parse_slug()
-    |> maybe_coerce_integers(["agent.max_concurrent_agents", "polling.interval_ms"])
-  end
-
-  defp maybe_parse_slug(fields) do
-    case fields["tracker.project_slug"] do
-      slug when is_binary(slug) and slug != "" ->
-        fields
-        |> Map.put("tracker.project_slug", Settings.parse_project_slug(slug))
-        |> maybe_extract_org_slug(slug)
-
-      _ ->
-        fields
-    end
-  end
-
-  defp maybe_extract_org_slug(fields, input) do
-    case Settings.parse_organization_slug(input) do
-      org when is_binary(org) and org != "" ->
-        Map.put(fields, "tracker.organization_slug", org)
-
-      _ ->
-        fields
-    end
-  end
-
   defp maybe_coerce_integers(fields, keys) do
     Enum.reduce(keys, fields, fn key, acc ->
       case acc[key] do
@@ -292,8 +213,6 @@ defmodule SymphonyElixirWeb.SettingsLive do
       {:ok, %{config: config}} when is_map(config) ->
         %{
           "tracker.api_key" => get_in(config, ["tracker", "api_key"]) || "",
-          "tracker.project_slug" => get_in(config, ["tracker", "project_slug"]) || "",
-          "tracker.organization_slug" => get_in(config, ["tracker", "organization_slug"]) || "",
           "agent.max_concurrent_agents" => get_in(config, ["agent", "max_concurrent_agents"]) || "",
           "polling.interval_ms" => get_in(config, ["polling", "interval_ms"]) || "",
           "codex.command" => get_in(config, ["codex", "command"]) || ""

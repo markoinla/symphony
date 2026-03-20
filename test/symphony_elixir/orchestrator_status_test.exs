@@ -1129,21 +1129,19 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     parent = self()
     workflow_name = Workflow.default_workflow_name()
     orchestrator_server = Orchestrator.workflow_server(workflow_name)
-    orchestrator_child_id = {SymphonyElixir.Orchestrator, workflow_name}
     orchestrator_pid = GenServer.whereis(orchestrator_server)
 
     on_exit(fn ->
       if is_nil(GenServer.whereis(orchestrator_server)) do
-        case Supervisor.restart_child(SymphonyElixir.Supervisor, orchestrator_child_id) do
-          {:ok, _pid} -> :ok
-          {:error, {:already_started, _pid}} -> :ok
-          {:error, :not_found} -> :ok
-        end
+        DynamicSupervisor.start_child(
+          SymphonyElixir.OrchestratorSupervisor,
+          {SymphonyElixir.Orchestrator, workflow_name: workflow_name}
+        )
       end
     end)
 
     if is_pid(orchestrator_pid) do
-      assert :ok = Supervisor.terminate_child(SymphonyElixir.Supervisor, orchestrator_child_id)
+      DynamicSupervisor.terminate_child(SymphonyElixir.OrchestratorSupervisor, orchestrator_pid)
     end
 
     {:ok, pid} =

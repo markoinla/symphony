@@ -9,7 +9,111 @@ defmodule SymphonyElixir.Store do
 
   import Ecto.Query
   alias SymphonyElixir.Repo
-  alias SymphonyElixir.Store.{Message, Session}
+  alias SymphonyElixir.Store.{Message, Project, Session, Setting}
+
+  # ── Project CRUD ──────────────────────────────────────────────────
+
+  @spec list_projects() :: [Ecto.Schema.t()]
+  def list_projects do
+    Project
+    |> order_by([p], asc: p.name)
+    |> Repo.all()
+  end
+
+  @spec get_project(integer()) :: Ecto.Schema.t() | nil
+  def get_project(id) do
+    Repo.get(Project, id)
+  end
+
+  @spec get_project_by_name(String.t()) :: Ecto.Schema.t() | nil
+  def get_project_by_name(name) do
+    Repo.get_by(Project, name: name)
+  end
+
+  @spec create_project(map()) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
+  def create_project(attrs) do
+    now =
+      (Map.get(attrs, :created_at) || Map.get(attrs, "created_at") || DateTime.utc_now())
+      |> DateTime.truncate(:second)
+
+    attrs =
+      attrs
+      |> Map.put(:created_at, now)
+      |> Map.put_new(:updated_at, now)
+
+    %Project{}
+    |> Project.changeset(attrs)
+    |> Ecto.Changeset.put_change(:created_at, now)
+    |> Ecto.Changeset.put_change(:updated_at, now)
+    |> Repo.insert()
+  end
+
+  @spec update_project(integer(), map()) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t() | :not_found}
+  def update_project(id, attrs) do
+    case Repo.get(Project, id) do
+      nil ->
+        {:error, :not_found}
+
+      project ->
+        project
+        |> Project.changeset(attrs)
+        |> Ecto.Changeset.put_change(:updated_at, DateTime.truncate(DateTime.utc_now(), :second))
+        |> Repo.update()
+    end
+  end
+
+  @spec delete_project(integer()) :: {:ok, Ecto.Schema.t()} | {:error, :not_found}
+  def delete_project(id) do
+    case Repo.get(Project, id) do
+      nil -> {:error, :not_found}
+      project -> Repo.delete(project)
+    end
+  end
+
+  # ── Global Settings ──────────────────────────────────────────────
+
+  @spec get_setting(String.t()) :: String.t() | nil
+  def get_setting(key) do
+    case Repo.get(Setting, key) do
+      nil -> nil
+      setting -> setting.value
+    end
+  end
+
+  @spec all_settings() :: [Ecto.Schema.t()]
+  def all_settings do
+    Repo.all(Setting)
+  end
+
+  @spec set_setting(String.t(), String.t()) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
+  def set_setting(key, value) do
+    %Setting{key: key}
+    |> Setting.changeset(%{key: key, value: to_string(value)})
+    |> Repo.insert(on_conflict: :replace_all, conflict_target: :key)
+  end
+
+  @spec set_settings(map()) :: :ok
+  def set_settings(settings_map) when is_map(settings_map) do
+    Enum.each(settings_map, fn {key, value} ->
+      set_setting(to_string(key), to_string(value))
+    end)
+
+    :ok
+  end
+
+  @spec delete_all_settings() :: :ok
+  def delete_all_settings do
+    Repo.delete_all(Setting)
+    :ok
+  end
+
+  @spec delete_all_projects() :: :ok
+  def delete_all_projects do
+    Repo.delete_all(Project)
+    :ok
+  end
+
+  # ── Session CRUD ─────────────────────────────────────────────────
 
   @spec create_session(map()) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
   def create_session(attrs) do
@@ -82,11 +186,13 @@ defmodule SymphonyElixir.Store do
     offset = Keyword.get(opts, :offset, 0)
     issue_identifier = Keyword.get(opts, :issue_identifier)
     status = Keyword.get(opts, :status)
+    project_id = Keyword.get(opts, :project_id)
 
     Session
     |> order_by([s], desc: s.started_at)
     |> maybe_filter_issue_identifier(issue_identifier)
     |> maybe_filter_status(status)
+    |> maybe_filter_project_id(project_id)
     |> limit(^limit)
     |> offset(^offset)
     |> Repo.all()
@@ -115,5 +221,11 @@ defmodule SymphonyElixir.Store do
 
   defp maybe_filter_status(query, status) do
     where(query, [s], s.status == ^status)
+  end
+
+  defp maybe_filter_project_id(query, nil), do: query
+
+  defp maybe_filter_project_id(query, project_id) do
+    where(query, [s], s.project_id == ^project_id)
   end
 end

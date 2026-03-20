@@ -33,13 +33,12 @@ defmodule SymphonyElixir.Application do
         SymphonyElixir.Repo,
         SymphonyElixir.Store.Migrator,
         {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
-        SymphonyElixir.WorkflowStore
-      ] ++
-        orchestrator_children() ++
-        [
-          SymphonyElixir.HttpServer,
-          SymphonyElixir.StatusDashboard
-        ]
+        SymphonyElixir.WorkflowStore,
+        {DynamicSupervisor, name: SymphonyElixir.OrchestratorSupervisor, strategy: :one_for_one},
+        {Task, &start_orchestrators/0},
+        SymphonyElixir.HttpServer,
+        SymphonyElixir.StatusDashboard
+      ]
 
     Supervisor.start_link(
       children,
@@ -61,10 +60,31 @@ defmodule SymphonyElixir.Application do
     end
   end
 
-  defp orchestrator_children do
-    SymphonyElixir.Workflow.workflow_names()
-    |> Enum.map(fn workflow_name ->
-      {SymphonyElixir.Orchestrator, workflow_name: workflow_name}
+  defp start_orchestrators do
+    projects = SymphonyElixir.Store.list_projects()
+
+    SymphonyElixir.Workflow.named_workflow_paths()
+    |> Enum.each(fn {workflow_name, path} ->
+      if workflow_uses_project_filter?(path) and projects != [] do
+        Enum.each(projects, fn project ->
+          DynamicSupervisor.start_child(
+            SymphonyElixir.OrchestratorSupervisor,
+            {SymphonyElixir.Orchestrator, workflow_name: workflow_name, project_id: project.id}
+          )
+        end)
+      else
+        DynamicSupervisor.start_child(
+          SymphonyElixir.OrchestratorSupervisor,
+          {SymphonyElixir.Orchestrator, workflow_name: workflow_name}
+        )
+      end
     end)
+  end
+
+  defp workflow_uses_project_filter?(path) do
+    case SymphonyElixir.Workflow.load(path) do
+      {:ok, %{config: %{"tracker" => %{"filter_by" => "label"}}}} -> false
+      _ -> true
+    end
   end
 end

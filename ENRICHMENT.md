@@ -20,6 +20,7 @@ polling:
 agent:
   max_concurrent_agents: 3
   max_turns: 10
+  max_continuations: 0
 codex:
   command: codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --config model_reasoning_summary=detailed app-server
   approval_policy: never
