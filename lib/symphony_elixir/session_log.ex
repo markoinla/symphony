@@ -123,9 +123,6 @@ defmodule SymphonyElixir.SessionLog do
     {:ok, state}
   end
 
-  # Types where consecutive deltas should be merged into a single message
-  @streamable_types [:response, :thinking, :reasoning_summary]
-
   @impl true
   def handle_cast({:append, codex_message}, state) do
     state = maybe_sync_codex_session_id(codex_message, state)
@@ -134,10 +131,13 @@ defmodule SymphonyElixir.SessionLog do
       nil ->
         {:noreply, state}
 
-      {type, content, metadata} when type in @streamable_types ->
-        handle_streamable_delta(type, content, metadata, codex_message, state)
+      :reset_stream ->
+        {:noreply, %{state | last_streamable: nil}}
 
-      {type, content, metadata} ->
+      {:stream, type, content, metadata, stream_key} ->
+        handle_streamable_delta(type, content, metadata, codex_message, stream_key, state)
+
+      {:message, type, content, metadata} ->
         message = %{
           id: state.next_id,
           timestamp: Map.get(codex_message, :timestamp, DateTime.utc_now()),
@@ -180,18 +180,25 @@ defmodule SymphonyElixir.SessionLog do
 
   # ── Streamable delta aggregation ────────────────────────────────────
 
-  # Aggregate consecutive deltas of the same streamable type into the current message
-  defp handle_streamable_delta(type, content, _metadata, _codex_message, %{last_streamable: %{type: type} = last} = state) do
+  # Aggregate consecutive deltas that belong to the same logical item.
+  defp handle_streamable_delta(
+         _type,
+         content,
+         _metadata,
+         _codex_message,
+         stream_key,
+         %{last_streamable: %{stream_key: stream_key, message: last}} = state
+       ) do
     updated = %{last | content: cap_content(last.content <> content)}
 
     ObservabilityPubSub.broadcast_session_message_update(state.issue_id, updated)
     update_persisted_message(state.db_session_id, updated)
 
-    {:noreply, %{state | last_streamable: updated}}
+    {:noreply, %{state | last_streamable: %{stream_key: stream_key, message: updated}}}
   end
 
   # First delta of this type — create a new message
-  defp handle_streamable_delta(type, content, metadata, codex_message, state) do
+  defp handle_streamable_delta(type, content, metadata, codex_message, stream_key, state) do
     message = %{
       id: state.next_id,
       timestamp: Map.get(codex_message, :timestamp, DateTime.utc_now()),
@@ -203,7 +210,7 @@ defmodule SymphonyElixir.SessionLog do
     ObservabilityPubSub.broadcast_session_message(state.issue_id, message)
     persist_message(state.db_session_id, message)
 
-    {:noreply, %{state | next_id: state.next_id + 1, last_streamable: message}}
+    {:noreply, %{state | next_id: state.next_id + 1, last_streamable: %{stream_key: stream_key, message: message}}}
   end
 
   # ── Message classification ──────────────────────────────────────────
@@ -218,34 +225,32 @@ defmodule SymphonyElixir.SessionLog do
     payload = Map.get(msg, :payload, %{})
     tool_name = extract_tool_name(payload)
     args = extract_tool_args(payload)
-    {:tool_call, tool_name || "unknown", %{args: args, status: "completed"}}
+    {:message, :tool_call, tool_name || "unknown", %{args: args, status: "completed"}}
   end
 
   defp classify_message(%{event: :tool_call_failed} = msg) do
     payload = Map.get(msg, :payload, %{})
     tool_name = extract_tool_name(payload)
     error = extract_error(payload)
-    {:tool_call, tool_name || "unknown", %{args: %{}, status: "failed", error: error}}
+    {:message, :tool_call, tool_name || "unknown", %{args: %{}, status: "failed", error: error}}
   end
 
   defp classify_message(%{event: :approval_auto_approved} = msg) do
     payload = Map.get(msg, :payload, %{})
-    decision = Map.get(msg, :decision, "auto_approved")
-    tool_name = extract_tool_name(payload)
-    {:tool_call, tool_name || "auto_approved", %{decision: decision, status: "auto_approved"}}
+    classify_auto_approved(payload, Map.get(msg, :decision, "auto_approved"))
   end
 
   defp classify_message(%{event: :turn_completed}) do
-    {:turn_boundary, "Turn completed", %{status: "completed"}}
+    {:message, :turn_boundary, "Turn completed", %{status: "completed"}}
   end
 
   defp classify_message(%{event: :turn_failed} = msg) do
     reason = extract_failure_reason(msg)
-    {:error, "Turn failed: #{reason}", %{status: "failed", reason: reason}}
+    {:message, :error, "Turn failed: #{reason}", %{status: "failed", reason: reason}}
   end
 
   defp classify_message(%{event: :turn_cancelled}) do
-    {:turn_boundary, "Turn cancelled", %{status: "cancelled"}}
+    {:message, :turn_boundary, "Turn cancelled", %{status: "cancelled"}}
   end
 
   defp classify_message(_msg), do: nil
@@ -257,59 +262,108 @@ defmodule SymphonyElixir.SessionLog do
        do: nil
 
   defp classify_notification(payload, method) do
-    classify_by_method(payload, method) || classify_by_content_blocks(payload)
+    classify_stream_boundary(payload, method) ||
+      classify_by_method(payload, method) ||
+      classify_by_content_blocks(payload)
   end
 
   # Codex wrapper events: agent message streaming
   defp classify_by_method(payload, "codex/event/agent_message_delta"),
-    do: wrap_response(extract_wrapper_delta(payload))
+    do: wrap_streamable(:response, extract_wrapper_delta(payload), payload)
 
   defp classify_by_method(payload, "codex/event/agent_message_content_delta"),
-    do: wrap_response(extract_wrapper_content(payload))
+    do: wrap_streamable(:response, extract_wrapper_content(payload), payload)
 
   defp classify_by_method(payload, "item/agentMessage/delta"),
-    do: wrap_response(payload_path(payload, ["params", "delta"]))
+    do: wrap_streamable(:response, payload_path(payload, ["params", "delta"]), payload)
 
   # Codex wrapper events: reasoning summary streaming
   defp classify_by_method(payload, "codex/event/agent_reasoning"),
-    do: wrap_reasoning_summary(extract_wrapper_reasoning(payload))
+    do: wrap_streamable(:reasoning_summary, extract_wrapper_reasoning(payload), payload)
 
   defp classify_by_method(payload, "item/reasoning/summaryTextDelta"),
-    do: wrap_reasoning_summary(payload_path(payload, ["params", "summaryText"]))
+    do: wrap_streamable(:reasoning_summary, payload_path(payload, ["params", "summaryText"]), payload)
 
   # Codex wrapper events: reasoning/thinking streaming
   defp classify_by_method(payload, "codex/event/agent_reasoning_delta"),
-    do: wrap_thinking(extract_wrapper_delta(payload))
+    do: wrap_streamable(:thinking, extract_wrapper_delta(payload), payload)
 
   defp classify_by_method(payload, "codex/event/reasoning_content_delta"),
-    do: wrap_thinking(extract_wrapper_delta(payload))
+    do: wrap_streamable(:thinking, extract_wrapper_delta(payload), payload)
 
   defp classify_by_method(payload, "item/reasoning/textDelta"),
-    do: wrap_thinking(payload_path(payload, ["params", "textDelta"]))
+    do: wrap_streamable(:thinking, payload_path(payload, ["params", "textDelta"]), payload)
+
+  defp classify_by_method(payload, "item/tool/call"),
+    do: wrap_dynamic_tool_call(payload)
+
+  defp classify_by_method(payload, "codex/event/exec_command_begin"),
+    do: wrap_exec_command(payload)
+
+  defp classify_by_method(payload, "item/commandExecution/requestApproval"),
+    do: wrap_command_execution_request(payload)
+
+  defp classify_by_method(payload, "item/fileChange/requestApproval"),
+    do: wrap_file_change_request(payload)
 
   defp classify_by_method(_payload, _method), do: nil
 
-  defp wrap_response(text) when is_binary(text) and text != "", do: {:response, text, %{}}
-  defp wrap_response(_), do: nil
+  defp wrap_streamable(type, text, payload) when is_binary(text) and text != "" do
+    {:stream, type, text, %{}, stream_key(type, payload)}
+  end
 
-  defp wrap_thinking(text) when is_binary(text) and text != "", do: {:thinking, text, %{}}
-  defp wrap_thinking(_), do: nil
+  defp wrap_streamable(_type, _text, _payload), do: nil
 
-  defp wrap_reasoning_summary(text) when is_binary(text) and text != "", do: {:reasoning_summary, text, %{}}
-  defp wrap_reasoning_summary(_), do: nil
+  defp wrap_exec_command(payload) do
+    args =
+      %{}
+      |> maybe_put_arg(:cmd, extract_exec_command(payload))
+      |> maybe_put_arg(:cwd, extract_exec_cwd(payload))
+
+    {:message, :tool_call, "exec_command", %{args: args, status: "running"}}
+  end
+
+  defp wrap_dynamic_tool_call(payload) do
+    {:message, :tool_call, extract_tool_name(payload) || "unknown", %{args: extract_tool_args(payload), status: "requested"}}
+  end
+
+  defp wrap_command_execution_request(payload) do
+    args =
+      %{}
+      |> maybe_put_arg(:cmd, extract_exec_command(payload))
+      |> maybe_put_arg(:cwd, extract_exec_cwd(payload))
+
+    {:message, :tool_call, "exec_command", %{args: args, status: "requested"}}
+  end
+
+  defp wrap_file_change_request(payload) do
+    args =
+      %{}
+      |> maybe_put_arg(:change_count, extract_file_change_count(payload))
+      |> maybe_put_arg(:cwd, extract_file_change_cwd(payload))
+
+    {:message, :tool_call, "apply_patch", %{args: args, status: "requested"}}
+  end
 
   # Fallback: content-block format (standard API responses)
   defp classify_by_content_blocks(payload) when is_map(payload) do
     params = Map.get(payload, "params", %{})
 
     cond do
-      has_text_content?(params) -> {:response, extract_text_content(params), %{}}
-      has_thinking_content?(params) -> {:thinking, extract_thinking_content(params), %{}}
+      has_text_content?(params) -> {:message, :response, extract_text_content(params), %{}}
+      has_thinking_content?(params) -> {:message, :thinking, extract_thinking_content(params), %{}}
       true -> nil
     end
   end
 
   defp classify_by_content_blocks(_payload), do: nil
+
+  defp classify_stream_boundary(payload, method)
+       when method in ["item/completed", "codex/event/item_completed"] do
+    if streamable_item_type?(extract_completed_item_type(payload)), do: :reset_stream, else: nil
+  end
+
+  defp classify_stream_boundary(_payload, _method), do: nil
 
   # ── Payload extraction helpers ──────────────────────────────────────
 
@@ -343,6 +397,57 @@ defmodule SymphonyElixir.SessionLog do
   defp extract_wrapper_reasoning(payload) do
     payload_path(payload, ["params", "msg", "payload", "summaryText"]) ||
       payload_path(payload, ["params", "msg", "summaryText"])
+  end
+
+  defp extract_exec_command(payload) do
+    payload_path(payload, ["params", "msg", "command"]) ||
+      payload_path(payload, ["params", "msg", "parsed_cmd"]) ||
+      payload_path(payload, ["params", "msg", "parsedCmd"]) ||
+      payload_path(payload, ["params", "command"]) ||
+      payload_path(payload, ["params", "parsedCmd"]) ||
+      payload_path(payload, ["params", "parsed_cmd"])
+  end
+
+  defp extract_exec_cwd(payload) do
+    payload_path(payload, ["params", "msg", "cwd"]) ||
+      payload_path(payload, ["params", "cwd"])
+  end
+
+  defp extract_file_change_count(payload) do
+    payload_path(payload, ["params", "fileChangeCount"]) ||
+      payload_path(payload, ["params", "changeCount"])
+  end
+
+  defp extract_file_change_cwd(payload) do
+    payload_path(payload, ["params", "cwd"])
+  end
+
+  defp extract_completed_item_type(payload) do
+    payload_path(payload, ["params", "item", "type"]) ||
+      payload_path(payload, ["params", "msg", "payload", "type"])
+  end
+
+  defp classify_auto_approved(payload, decision) do
+    case get_in_payload(payload, "method") do
+      "item/commandExecution/requestApproval" ->
+        args =
+          %{}
+          |> maybe_put_arg(:cmd, extract_exec_command(payload))
+          |> maybe_put_arg(:cwd, extract_exec_cwd(payload))
+
+        {:message, :tool_call, "exec_command", %{args: args, decision: decision, status: "auto_approved"}}
+
+      "item/fileChange/requestApproval" ->
+        args =
+          %{}
+          |> maybe_put_arg(:change_count, extract_file_change_count(payload))
+          |> maybe_put_arg(:cwd, extract_file_change_cwd(payload))
+
+        {:message, :tool_call, "apply_patch", %{args: args, decision: decision, status: "auto_approved"}}
+
+      _ ->
+        nil
+    end
   end
 
   defp has_text_content?(params) when is_map(params) do
@@ -450,6 +555,46 @@ defmodule SymphonyElixir.SessionLog do
 
   defp extract_error(_payload), do: "unknown error"
 
+  defp stream_key(type, payload) do
+    case extract_stream_id(payload) do
+      nil -> {:stream, type}
+      item_id -> {:stream, type, item_id}
+    end
+  end
+
+  defp extract_stream_id(payload) do
+    first_payload_path(payload, [
+      ["params", "itemId"],
+      ["params", "item_id"],
+      ["params", "id"],
+      ["params", "item", "id"],
+      ["params", "msg", "id"],
+      ["params", "msg", "itemId"],
+      ["params", "msg", "item_id"],
+      ["params", "msg", "payload", "id"],
+      ["params", "msg", "payload", "itemId"],
+      ["params", "msg", "payload", "item_id"]
+    ])
+  end
+
+  defp streamable_item_type?(type) when is_binary(type) do
+    normalized =
+      type
+      |> String.replace(~r/([a-z0-9])([A-Z])/, "\\1_\\2")
+      |> String.downcase()
+
+    normalized in ["agent_message", "reasoning", "reasoning_summary"]
+  end
+
+  defp streamable_item_type?(_type), do: false
+
+  defp maybe_put_arg(map, _key, nil), do: map
+  defp maybe_put_arg(map, key, value), do: Map.put(map, key, value)
+
+  defp first_payload_path(payload, keys_list) do
+    Enum.find_value(keys_list, &payload_path(payload, &1))
+  end
+
   defp extract_failure_reason(%{details: %{reason: reason}}) when is_binary(reason), do: reason
 
   defp extract_failure_reason(%{payload: %{"params" => %{"error" => error}}}) when is_binary(error),
@@ -482,10 +627,26 @@ defmodule SymphonyElixir.SessionLog do
 
   defp update_persisted_message(db_session_id, message) do
     Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-      Store.update_message_content(db_session_id, message.id, message.content)
+      retry_update_message_content(db_session_id, message.id, message.content, 10)
     end)
 
     :ok
+  end
+
+  defp retry_update_message_content(_db_session_id, _seq, _content, 0), do: :ok
+
+  defp retry_update_message_content(db_session_id, seq, content, attempts_left) do
+    case Store.update_message_content(db_session_id, seq, content) do
+      {:ok, _message} ->
+        :ok
+
+      {:error, :not_found} ->
+        Process.sleep(10)
+        retry_update_message_content(db_session_id, seq, content, attempts_left - 1)
+
+      {:error, _reason} ->
+        :ok
+    end
   end
 
   # When the real codex session_id arrives via :session_started, update the DB
