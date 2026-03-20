@@ -10,23 +10,21 @@ defmodule SymphonyElixirWeb.SessionLive do
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
 
   @impl true
-  def mount(%{"issue_identifier" => issue_identifier}, _session, socket) do
-    payload = load_issue_payload(issue_identifier)
-    {issue_id, session_id} = extract_session_keys(payload)
-    {messages, issue_title} = build_full_timeline(issue_identifier, issue_id, session_id)
-
+  def mount(params, _session, socket) do
     socket =
-      socket
-      |> assign(:issue_identifier, issue_identifier)
-      |> assign(:issue_id, issue_id)
-      |> assign(:session_id, session_id)
-      |> assign(:payload, payload)
-      |> assign(:messages, messages)
-      |> assign(:issue_title, issue_title)
-      |> assign(:now, DateTime.utc_now())
+      case load_page_context(params) do
+        {:issue_timeline, issue_identifier, back_href} ->
+          build_issue_timeline_socket(socket, issue_identifier, back_href)
+
+        {:historical_session, session, back_href} ->
+          build_historical_session_socket(socket, session, back_href)
+
+        :not_found ->
+          assign_not_found_socket(socket)
+      end
 
     if connected?(socket) do
-      if issue_id, do: maybe_subscribe_session(issue_id)
+      if socket.assigns.issue_id, do: maybe_subscribe_session(socket.assigns.issue_id)
       :ok = ObservabilityPubSub.subscribe()
       schedule_runtime_tick()
     end
@@ -72,27 +70,34 @@ defmodule SymphonyElixirWeb.SessionLive do
 
   @impl true
   def handle_info(:observability_updated, socket) do
-    payload = load_issue_payload(socket.assigns.issue_identifier)
-    {issue_id, session_id} = extract_session_keys(payload)
+    case socket.assigns.issue_identifier do
+      issue_identifier when is_binary(issue_identifier) and issue_identifier != "" ->
+        payload = load_issue_payload(issue_identifier)
+        {issue_id, session_id} = extract_session_keys(payload)
 
-    socket =
-      socket
-      |> assign(:payload, payload)
-      |> maybe_resubscribe(issue_id, session_id)
+        socket =
+          socket
+          |> assign(:payload, payload)
+          |> maybe_resubscribe(issue_id, session_id)
 
-    if session_id != socket.assigns.session_id do
-      {messages, issue_title} =
-        build_full_timeline(socket.assigns.issue_identifier, issue_id, session_id)
+        if session_id != socket.assigns.session_id do
+          {messages, issue_title, historical_status} =
+            build_full_timeline(issue_identifier, issue_id, session_id)
 
-      socket =
-        socket
-        |> assign(:messages, messages)
-        |> assign(:session_id, session_id)
-        |> assign(:issue_title, issue_title || socket.assigns.issue_title)
+          socket =
+            socket
+            |> assign(:messages, messages)
+            |> assign(:session_id, session_id)
+            |> assign(:issue_title, issue_title || socket.assigns.issue_title)
+            |> assign(:page_status, payload_status(payload, historical_status))
 
-      {:noreply, socket}
-    else
-      {:noreply, socket}
+          {:noreply, socket}
+        else
+          {:noreply, assign(socket, :page_status, payload_status(payload, socket.assigns.page_status))}
+        end
+
+      _ ->
+        {:noreply, socket}
     end
   end
 
@@ -107,14 +112,14 @@ defmodule SymphonyElixirWeb.SessionLive do
     ~H"""
     <section class="chat-layout">
       <header class="chat-topbar">
-        <a href="/" class="chat-topbar-back" title="Back to dashboard">
+        <a href={@back_href} class="chat-topbar-back" title={@back_title}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <path d="M10 12L6 8l4-4"/>
           </svg>
         </a>
 
         <div class="chat-topbar-info">
-          <span class="chat-topbar-title"><%= @issue_identifier %></span>
+          <span class="chat-topbar-title"><%= @display_identifier %></span>
           <%= if @issue_title do %>
             <span class="chat-topbar-meta"><%= @issue_title %></span>
           <% end %>
@@ -126,9 +131,9 @@ defmodule SymphonyElixirWeb.SessionLive do
         </div>
 
         <div class="chat-topbar-badges">
-          <%= if @payload do %>
-            <span class={state_badge_class(@payload[:status])}>
-              <%= @payload[:status] || "unknown" %>
+          <%= if @page_status do %>
+            <span class={state_badge_class(@page_status)}>
+              <%= @page_status %>
             </span>
           <% else %>
             <span class="state-badge">Idle</span>
@@ -141,6 +146,8 @@ defmodule SymphonyElixirWeb.SessionLive do
           <div class="chat-messages">
             <p class="empty-state" style="text-align: center; padding: 3rem 0;">
               <%= cond do %>
+                <% @not_found -> %>
+                  Session not found.
                 <% @session_id != nil -> %>
                   Session started, waiting for first message&hellip;
                 <% @payload && @payload[:status] == "retrying" -> %>
@@ -281,21 +288,7 @@ defmodule SymphonyElixirWeb.SessionLive do
     historical_entries =
       Enum.flat_map(past_sessions, fn session ->
         header = session_header_message(session)
-
-        messages =
-          Store.get_session_messages(session.id)
-          |> Enum.map(fn m ->
-            %{
-              id: m.seq,
-              timestamp: m.timestamp,
-              type: safe_atom_type(m.type),
-              content: m.content,
-              metadata: decode_metadata(m.metadata)
-            }
-          end)
-          |> Presenter.merge_consecutive_messages()
-
-        [header | messages]
+        [header | historical_session_messages(session.id)]
       end)
 
     live_entries =
@@ -314,8 +307,9 @@ defmodule SymphonyElixirWeb.SessionLive do
 
     messages = historical_entries ++ live_entries
     issue_title = extract_issue_title(past_sessions)
+    latest_historical_status = latest_historical_status(past_sessions)
 
-    {messages, issue_title}
+    {messages, issue_title, latest_historical_status}
   end
 
   defp session_header_message(session) do
@@ -346,6 +340,19 @@ defmodule SymphonyElixirWeb.SessionLive do
     |> Enum.reverse()
   end
 
+  defp historical_session_messages(db_session_id) when is_integer(db_session_id) do
+    Store.get_session_messages(db_session_id)
+    |> Enum.map(fn m ->
+      %{
+        id: m.seq,
+        timestamp: m.timestamp,
+        type: safe_atom_type(m.type),
+        content: m.content,
+        metadata: decode_metadata(m.metadata)
+      }
+    end)
+  end
+
   defp extract_issue_title([]), do: nil
 
   defp extract_issue_title(sessions) do
@@ -355,13 +362,101 @@ defmodule SymphonyElixirWeb.SessionLive do
     end
   end
 
+  defp latest_historical_status([]), do: nil
+
+  defp latest_historical_status(sessions) do
+    case List.last(sessions) do
+      %{status: status} when is_binary(status) and status != "" -> status
+      _ -> nil
+    end
+  end
+
+  defp load_page_context(%{"issue_identifier" => issue_identifier})
+       when is_binary(issue_identifier) and issue_identifier != "" do
+    {:issue_timeline, issue_identifier, "/"}
+  end
+
+  defp load_page_context(%{"id" => id_str}) when is_binary(id_str) do
+    with {id, ""} <- Integer.parse(id_str),
+         %{issue_identifier: issue_identifier} = session <- Store.get_session(id) do
+      if is_binary(issue_identifier) and issue_identifier != "" do
+        {:issue_timeline, issue_identifier, "/history"}
+      else
+        {:historical_session, session, "/history"}
+      end
+    else
+      _ -> :not_found
+    end
+  end
+
+  defp load_page_context(_params), do: :not_found
+
+  defp build_issue_timeline_socket(socket, issue_identifier, back_href) do
+    payload = load_issue_payload(issue_identifier)
+    {issue_id, session_id} = extract_session_keys(payload)
+    {messages, issue_title, historical_status} = build_full_timeline(issue_identifier, issue_id, session_id)
+
+    socket
+    |> assign(:issue_identifier, issue_identifier)
+    |> assign(:display_identifier, issue_identifier)
+    |> assign(:issue_id, issue_id)
+    |> assign(:session_id, session_id)
+    |> assign(:payload, payload)
+    |> assign(:messages, messages)
+    |> assign(:issue_title, issue_title)
+    |> assign(:page_status, payload_status(payload, historical_status))
+    |> assign(:back_href, back_href)
+    |> assign(:back_title, back_title(back_href))
+    |> assign(:not_found, false)
+    |> assign(:now, DateTime.utc_now())
+  end
+
+  defp build_historical_session_socket(socket, session, back_href) do
+    messages = [session_header_message(session) | historical_session_messages(session.id)]
+    display_identifier = session.issue_identifier || "Session ##{session.id}"
+
+    socket
+    |> assign(:issue_identifier, session.issue_identifier)
+    |> assign(:display_identifier, display_identifier)
+    |> assign(:issue_id, nil)
+    |> assign(:session_id, session.session_id)
+    |> assign(:payload, nil)
+    |> assign(:messages, messages)
+    |> assign(:issue_title, session.issue_title)
+    |> assign(:page_status, session.status)
+    |> assign(:back_href, back_href)
+    |> assign(:back_title, back_title(back_href))
+    |> assign(:not_found, false)
+    |> assign(:now, DateTime.utc_now())
+  end
+
+  defp assign_not_found_socket(socket) do
+    socket
+    |> assign(:issue_identifier, nil)
+    |> assign(:display_identifier, "Session")
+    |> assign(:issue_id, nil)
+    |> assign(:session_id, nil)
+    |> assign(:payload, nil)
+    |> assign(:messages, [])
+    |> assign(:issue_title, nil)
+    |> assign(:page_status, nil)
+    |> assign(:back_href, "/history")
+    |> assign(:back_title, back_title("/history"))
+    |> assign(:not_found, true)
+    |> assign(:now, DateTime.utc_now())
+  end
+
   # ── Helpers ─────────────────────────────────────────────────────
 
-  defp load_issue_payload(issue_identifier) do
+  defp load_issue_payload(issue_identifier) when is_binary(issue_identifier) do
     case Presenter.issue_payload(issue_identifier, orchestrator(), snapshot_timeout_ms()) do
       {:ok, payload} -> payload
       {:error, _} -> nil
     end
+  end
+
+  defp load_issue_payload(_issue_identifier) do
+    nil
   end
 
   defp extract_session_keys(nil), do: {nil, nil}
@@ -479,6 +574,15 @@ defmodule SymphonyElixirWeb.SessionLive do
   end
 
   defp maybe_subscribe_session(_issue_id), do: :ok
+
+  defp payload_status(payload, fallback_status) when is_map(payload) do
+    payload[:status] || fallback_status
+  end
+
+  defp payload_status(_payload, fallback_status), do: fallback_status
+
+  defp back_title("/history"), do: "Back to history"
+  defp back_title(_href), do: "Back to dashboard"
 
   defp safe_atom_type(type) when type in ~w(response tool_call thinking reasoning_summary turn_boundary error) do
     String.to_existing_atom(type)

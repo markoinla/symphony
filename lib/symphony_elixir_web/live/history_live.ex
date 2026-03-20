@@ -66,7 +66,7 @@ defmodule SymphonyElixirWeb.HistoryLive do
           <p class="empty-state" style="text-align: center; padding: 3rem 0;">No historical sessions recorded yet.</p>
         <% else %>
           <div class="history-list">
-            <a :for={session <- @payload.sessions} href={"/history/#{session.id}"} class="history-item">
+            <a :for={session <- @payload.sessions} href={history_session_href(session)} class="history-item">
               <div class="history-item-main">
                 <div style="display: flex; align-items: center; gap: 0.5rem;">
                   <span class="history-item-title"><%= session.issue_identifier || "n/a" %></span>
@@ -150,4 +150,11 @@ defmodule SymphonyElixirWeb.HistoryLive do
   end
 
   defp truncate(str, _max), do: str
+
+  defp history_session_href(%{id: id, issue_identifier: issue_identifier})
+       when is_integer(id) and is_binary(issue_identifier) and issue_identifier != "" do
+    "/session/#{URI.encode(issue_identifier)}"
+  end
+
+  defp history_session_href(%{id: id}) when is_integer(id), do: "/history/#{id}"
 end
