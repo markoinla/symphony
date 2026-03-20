@@ -5,7 +5,17 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
   alias SymphonyElixir.Codex.AppServer
-  alias SymphonyElixir.{CommentWatch, Config, Linear.Issue, PromptBuilder, SessionLog, Tracker, Workspace}
+
+  alias SymphonyElixir.{
+    CommentWatch,
+    Config,
+    DashboardLinks,
+    Linear.Issue,
+    PromptBuilder,
+    SessionLog,
+    Tracker,
+    Workspace
+  }
 
   @type worker_host :: String.t() | nil
 
@@ -126,9 +136,27 @@ defmodule SymphonyElixir.AgentRunner do
       {:error, reason} ->
         Logger.warning("Failed to post workspace-ready comment for #{issue_context(issue)}: #{inspect(reason)}")
     end
+
+    maybe_attach_session_resource(issue)
   end
 
   defp notify_workspace_ready(_issue, _workspace, _worker_host), do: :ok
+
+  defp maybe_attach_session_resource(%Issue{id: issue_id, identifier: issue_identifier} = issue)
+       when is_binary(issue_id) and is_binary(issue_identifier) do
+    url = DashboardLinks.session_issue_url(issue_identifier)
+    title = DashboardLinks.session_issue_title()
+
+    case Tracker.ensure_issue_resource_link(issue_id, url, title) do
+      :ok ->
+        Logger.info("Ensured session resource link for #{issue_context(issue)} url=#{url}")
+
+      {:error, reason} ->
+        Logger.warning("Failed to ensure session resource link for #{issue_context(issue)} url=#{url}: #{inspect(reason)}")
+    end
+  end
+
+  defp maybe_attach_session_resource(_issue), do: :ok
 
   defp maybe_tag_issue_pickup(%Issue{id: issue_id, labels: labels} = issue)
        when is_binary(issue_id) and is_list(labels) do
