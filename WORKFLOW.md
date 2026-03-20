@@ -18,7 +18,6 @@ hooks:
   timeout_ms: 300000
   after_create: |
     git clone --depth 1 "https://github.com/$GITHUB_REPO" .
-    pnpm install --frozen-lockfile
   before_remove: |
     echo "Cleaning up workspace"
 agent:
@@ -78,6 +77,18 @@ Before starting any implementation work, discover and read the project's context
 2. Check subdirectories for additional `CLAUDE.md` or `AGENTS.md` files relevant to the area you will be working in.
 3. These files contain architecture details, testing conventions, build commands, and important development notes — treat their contents as authoritative project context.
 4. If no context files are found, infer project structure from the repository layout, README, and package manifests.
+
+## Project setup
+
+After cloning, detect the project type and run the appropriate install/setup commands before doing any implementation work. Examples:
+
+- **Node.js** (`package.json`): `pnpm install --frozen-lockfile` (or `npm ci` / `yarn install --frozen-lockfile`)
+- **Elixir** (`mix.exs`): `mix deps.get`
+- **Python** (`pyproject.toml` / `requirements.txt`): `pip install -r requirements.txt` or equivalent
+- **Go** (`go.mod`): `go mod download`
+- **Rust** (`Cargo.toml`): `cargo fetch`
+
+Use the context files and package manifests to determine the correct setup. If multiple runtimes are needed (e.g., a monorepo), install all of them. Record the setup result in the workpad.
 
 Instructions:
 

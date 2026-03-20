@@ -48,6 +48,7 @@ defmodule SymphonyElixir.AgentRunner do
     case Workspace.create_for_issue(issue, worker_host) do
       {:ok, workspace} ->
         send_worker_runtime_info(codex_update_recipient, issue, worker_host, workspace)
+        notify_workspace_ready(issue, workspace, worker_host)
 
         try do
           with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
@@ -103,6 +104,27 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
+
+  defp notify_workspace_ready(%Issue{id: issue_id} = issue, workspace, worker_host)
+       when is_binary(issue_id) do
+    host = if is_binary(worker_host), do: worker_host, else: node_hostname()
+    body = "Workspace ready: `#{host}:#{workspace}`"
+
+    case Tracker.create_comment(issue_id, body) do
+      :ok ->
+        Logger.info("Posted workspace-ready comment for #{issue_context(issue)}")
+
+      {:error, reason} ->
+        Logger.warning("Failed to post workspace-ready comment for #{issue_context(issue)}: #{inspect(reason)}")
+    end
+  end
+
+  defp notify_workspace_ready(_issue, _workspace, _worker_host), do: :ok
+
+  defp node_hostname do
+    {:ok, hostname} = :inet.gethostname()
+    List.to_string(hostname)
+  end
 
   defp run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host) do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)

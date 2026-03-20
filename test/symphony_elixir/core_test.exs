@@ -106,7 +106,6 @@ defmodule SymphonyElixir.CoreTest do
     hooks = Map.get(config, "hooks", %{})
     assert is_map(hooks)
     assert Map.get(hooks, "after_create") =~ "git clone"
-    assert Map.get(hooks, "after_create") =~ "pnpm install"
     assert is_binary(Map.get(hooks, "before_remove"))
 
     assert String.trim(prompt) != ""
