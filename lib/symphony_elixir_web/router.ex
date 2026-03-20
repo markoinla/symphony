@@ -27,7 +27,7 @@ defmodule SymphonyElixirWeb.Router do
     live("/", DashboardLive, :index)
     live("/session/:issue_identifier", SessionLive, :show)
     live("/history", HistoryLive, :index)
-    live("/history/:id", HistorySessionLive, :show)
+    live("/history/:id", SessionLive, :show)
     live("/projects", ProjectsLive, :index)
     live("/settings", SettingsLive, :index)
   end

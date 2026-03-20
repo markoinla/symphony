@@ -11,7 +11,7 @@ defmodule SymphonyElixir.SessionLog do
 
   require Logger
 
-  alias SymphonyElixir.{DashboardLinks, Store, Tracker}
+  alias SymphonyElixir.Store
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @max_content_bytes 102_400
@@ -104,7 +104,6 @@ defmodule SymphonyElixir.SessionLog do
              project_id: project_id
            }) do
         {:ok, session} ->
-          maybe_attach_history_resource(issue_id, session.id)
           session.id
 
         {:error, reason} ->
@@ -250,22 +249,6 @@ defmodule SymphonyElixir.SessionLog do
   end
 
   defp classify_message(_msg), do: nil
-
-  defp maybe_attach_history_resource(issue_id, db_session_id)
-       when is_binary(issue_id) and is_integer(db_session_id) do
-    url = DashboardLinks.history_session_url(db_session_id)
-    title = DashboardLinks.history_session_title(db_session_id)
-
-    case Tracker.ensure_issue_resource_link(issue_id, url, title) do
-      :ok ->
-        Logger.info("Ensured history resource link for issue_id=#{issue_id} db_session_id=#{db_session_id} url=#{url}")
-
-      {:error, reason} ->
-        Logger.warning("Failed to ensure history resource link for issue_id=#{issue_id} db_session_id=#{db_session_id} url=#{url}: #{inspect(reason)}")
-    end
-  end
-
-  defp maybe_attach_history_resource(_issue_id, _db_session_id), do: :ok
 
   # ── Notification classification ─────────────────────────────────────
 

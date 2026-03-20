@@ -428,7 +428,6 @@ defmodule SymphonyElixirWeb.Presenter do
               metadata: decode_metadata(m.metadata)
             }
           end)
-          |> merge_consecutive_messages()
 
         {:ok,
          %{
@@ -463,28 +462,6 @@ defmodule SymphonyElixirWeb.Presenter do
     Map.new(map, fn {k, v} -> {String.to_existing_atom(k), v} end)
   rescue
     ArgumentError -> map
-  end
-
-  @doc """
-  Merge consecutive messages of the same streamable type (response, thinking)
-  into single messages. Handles historical data persisted before delta aggregation.
-  """
-  @spec merge_consecutive_messages([map()]) :: [map()]
-  def merge_consecutive_messages(messages) do
-    messages
-    |> Enum.reduce([], fn msg, acc ->
-      case {msg, acc} do
-        {%{type: type}, [%{type: type} = prev | rest]} when type in ["response", "thinking", "reasoning_summary"] ->
-          [%{prev | content: prev.content <> msg.content} | rest]
-
-        {%{type: type}, [%{type: type} = prev | rest]} when type in [:response, :thinking, :reasoning_summary] ->
-          [%{prev | content: prev.content <> msg.content} | rest]
-
-        _ ->
-          [msg | acc]
-      end
-    end)
-    |> Enum.reverse()
   end
 
   defp iso8601(%DateTime{} = datetime) do
