@@ -495,8 +495,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:error, :boom} =
              Adapter.ensure_issue_resource_link(
                "issue-1",
-               "http://home-lab:4000/history/1",
-               "Symphony History #1"
+               "http://home-lab:4000/session/MT-1",
+               "Symphony Session"
              )
 
     Process.put({FakeLinearClient, :graphql_results}, [{:ok, %{"data" => %{}}}])
@@ -504,8 +504,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:error, :attachment_lookup_failed} =
              Adapter.ensure_issue_resource_link(
                "issue-1",
-               "http://home-lab:4000/history/1",
-               "Symphony History #1"
+               "http://home-lab:4000/session/MT-1",
+               "Symphony Session"
              )
 
     Process.put(
@@ -524,8 +524,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:error, :attachment_create_failed} =
              Adapter.ensure_issue_resource_link(
                "issue-1",
-               "http://home-lab:4000/history/1",
-               "Symphony History #1"
+               "http://home-lab:4000/session/MT-1",
+               "Symphony Session"
              )
   end
 
