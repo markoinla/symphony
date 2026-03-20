@@ -235,14 +235,14 @@ query GetIssueContext($id: String!) {
 ### Create issue relation (link follow-up to current issue)
 
 ```graphql
-mutation CreateRelation($issueId: String!, $relatedIssueId: String!, $type: String!) {
+mutation CreateRelation($issueId: String!, $relatedIssueId: String!, $type: IssueRelationType!) {
   issueRelationCreate(input: {issueId: $issueId, relatedIssueId: $relatedIssueId, type: $type}) {
     success
   }
 }
 ```
 
-Type values: `"blocks"`, `"related"`, `"duplicate"`
+Type values: `"blocks"`, `"related"`, `"duplicate"`, `"similar"`
 
 ### Create attachment (link PR to issue)
 
@@ -281,6 +281,7 @@ query FindLabel($teamId: String!, $labelName: String!) {
 - `issue(id:)` takes the **UUID**, not the identifier like `"MT-32"`. The UUID is provided in the issue context above as `ID (UUID)`.
 - State updates are a **two-step** process: resolve state ID first, then update.
 - `commentUpdate` takes the **comment ID** as its first argument, not the issue ID.
+- `issueRelationCreate` expects `$type` to be the `IssueRelationType` enum, not a `String`.
 - All mutations return `{ success }` — check this field.
 - If you get `Unknown field` errors, you are using a field name that does not exist. Do not retry with variations — consult this reference.
 
@@ -351,8 +352,8 @@ For video, use the same flow with `contentType: "video/webm"` (or mp4). Playwrig
   file a separate Linear issue instead of expanding scope. The follow-up issue
   must include a clear title, description, and acceptance criteria, be placed in
   `Backlog`, be assigned to the same project as the current issue, link the
-  current issue as `related`, and use `blockedBy` when the follow-up depends on
-  the current issue.
+  current issue as `related`, and use `blocks` when the current issue must be
+  completed before the follow-up issue can be done.
 - Move status only when the matching quality bar is met.
 - Operate autonomously end-to-end unless blocked by missing requirements, secrets, or permissions.
 - Use the blocked-access escape hatch only for true external blockers (missing required tools/auth) after exhausting documented fallbacks.
@@ -545,8 +546,8 @@ Use this only when completion is blocked by missing required tools or missing au
 - If out-of-scope improvements are found, create a separate Backlog issue rather
   than expanding current scope, and include a clear
   title/description/acceptance criteria, same-project assignment, a `related`
-  link to the current issue, and `blockedBy` when the follow-up depends on the
-  current issue.
+  link to the current issue, and a `blocks` relation when the current issue must
+  be completed before the follow-up issue can be done.
 - Do not move to `Human Review` unless the `Completion bar before Human Review` is satisfied.
 - In `Human Review`, do not make changes; wait and poll.
 - If state is terminal (`Done`), do nothing and shut down.
