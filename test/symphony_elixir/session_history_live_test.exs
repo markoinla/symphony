@@ -86,11 +86,9 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
     assert Floki.attribute(back_link, "href") == ["/history"]
   end
 
-  test "dashboard links expose both unified session and legacy history URLs" do
+  test "dashboard links expose the unified session issue URL" do
     assert DashboardLinks.session_issue_url("SYM-24") == "http://home-lab:4000/session/SYM-24"
     assert DashboardLinks.session_issue_title() == "Symphony Session"
-    assert DashboardLinks.history_session_url(12) == "http://home-lab:4000/history/12"
-    assert DashboardLinks.history_session_title(12) == "Symphony History #12"
   end
 
   defp create_session!(attrs) do
@@ -98,10 +96,10 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
     attrs = Enum.into(attrs, %{})
 
     defaults = %{
-      issue_id: "issue-#{System.unique_integer([:positive])}",
+      issue_id: "issue-#{unique_suffix()}",
       issue_identifier: unique_issue_identifier(),
       issue_title: "Session history test",
-      session_id: "session-#{System.unique_integer([:positive])}",
+      session_id: "session-#{unique_suffix()}",
       status: "completed",
       started_at: started_at,
       ended_at: started_at,
@@ -131,6 +129,10 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
   end
 
   defp unique_issue_identifier do
-    "SYM-HISTORY-#{System.unique_integer([:positive])}"
+    "SYM-HISTORY-#{unique_suffix()}"
+  end
+
+  defp unique_suffix do
+    Base.url_encode64(:crypto.strong_rand_bytes(6), padding: false)
   end
 end
