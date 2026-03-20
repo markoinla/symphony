@@ -1,6 +1,7 @@
 ---
 tracker:
   kind: linear
+  # picked_up_label_name: symphony
   active_states:
     - Todo
     - In Progress

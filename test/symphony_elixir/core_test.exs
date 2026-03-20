@@ -16,6 +16,7 @@ defmodule SymphonyElixir.CoreTest do
     assert config.tracker.active_states == ["Todo", "In Progress"]
     assert config.tracker.terminal_states == ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
     assert config.tracker.assignee == nil
+    assert config.tracker.picked_up_label_name == nil
     assert config.agent.max_turns == 20
 
     write_workflow_file!(Workflow.workflow_file_path(), poll_interval_ms: "invalid")
@@ -36,6 +37,9 @@ defmodule SymphonyElixir.CoreTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), max_turns: 5)
     assert Config.settings!().agent.max_turns == 5
+
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_picked_up_label_name: "symphony")
+    assert Config.settings!().tracker.picked_up_label_name == "symphony"
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: "Todo,  Review,")
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
@@ -1160,6 +1164,148 @@ defmodule SymphonyElixir.CoreTest do
 
       assert session_id == "thread-live-turn-live"
     after
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner adds the configured pickup label when it claims an issue" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-pickup-label-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      template_repo = Path.join(test_root, "source")
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+
+      File.mkdir_p!(template_repo)
+      File.write!(Path.join(template_repo, "README.md"), "# test")
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+      while IFS= read -r _line; do
+        count=$((count + 1))
+        case "$count" in
+          1)
+            printf '%s\\n' '{\"id\":1,\"result\":{}}'
+            ;;
+          3)
+            printf '%s\\n' '{\"id\":2,\"result\":{\"thread\":{\"id\":\"thread-label\"}}}'
+            ;;
+          4)
+            printf '%s\\n' '{\"id\":3,\"result\":{\"turn\":{\"id\":\"turn-label\"}}}'
+            printf '%s\\n' '{\"method\":\"turn/completed\"}'
+            exit 0
+            ;;
+          *)
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        tracker_picked_up_label_name: "symphony",
+        workspace_root: workspace_root,
+        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
+        codex_command: "#{codex_binary} app-server"
+      )
+
+      issue = %Issue{
+        id: "issue-label",
+        identifier: "MT-321",
+        title: "Apply pickup label",
+        description: "Track claimed issues",
+        state: "In Progress",
+        url: "https://example.org/issues/MT-321",
+        labels: ["backend"]
+      }
+
+      assert :ok = AgentRunner.run(issue, nil, issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end)
+
+      assert_receive {:memory_tracker_label_add, "issue-label", "symphony"}
+      assert_receive {:memory_tracker_comment, "issue-label", workspace_comment}
+      assert workspace_comment =~ "Workspace ready: `"
+    after
+      Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner skips pickup label writes when the issue already has the configured label" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-existing-pickup-label-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      template_repo = Path.join(test_root, "source")
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+
+      File.mkdir_p!(template_repo)
+      File.write!(Path.join(template_repo, "README.md"), "# test")
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+      while IFS= read -r _line; do
+        count=$((count + 1))
+        case "$count" in
+          1)
+            printf '%s\\n' '{\"id\":1,\"result\":{}}'
+            ;;
+          3)
+            printf '%s\\n' '{\"id\":2,\"result\":{\"thread\":{\"id\":\"thread-label-skip\"}}}'
+            ;;
+          4)
+            printf '%s\\n' '{\"id\":3,\"result\":{\"turn\":{\"id\":\"turn-label-skip\"}}}'
+            printf '%s\\n' '{\"method\":\"turn/completed\"}'
+            exit 0
+            ;;
+          *)
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        tracker_picked_up_label_name: "Symphony",
+        workspace_root: workspace_root,
+        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
+        codex_command: "#{codex_binary} app-server"
+      )
+
+      issue = %Issue{
+        id: "issue-label-skip",
+        identifier: "MT-322",
+        title: "Skip duplicate pickup label",
+        description: "Already labeled",
+        state: "In Progress",
+        url: "https://example.org/issues/MT-322",
+        labels: ["backend", "symphony"]
+      }
+
+      assert :ok = AgentRunner.run(issue, nil, issue_state_fetcher: fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end)
+
+      refute_receive {:memory_tracker_label_add, "issue-label-skip", _label_name}, 100
+      assert_receive {:memory_tracker_comment, "issue-label-skip", workspace_comment}
+      assert workspace_comment =~ "Workspace ready: `"
+    after
+      Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
       File.rm_rf(test_root)
     end
   end

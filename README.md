@@ -102,6 +102,7 @@ tracker:
   kind: linear
   filter_by: project
   project_slug: "..."
+  picked_up_label_name: "symphony"
 workspace:
   root: ~/code/workspaces
 hooks:
@@ -142,6 +143,8 @@ Notes:
 - `tracker.api_key` reads from `LINEAR_API_KEY` when unset or when value is `$LINEAR_API_KEY`.
 - `tracker.filter_by` defaults to `project`. Set `tracker.filter_by: label` together with
   `tracker.label_name` to poll issues by label instead of project slug.
+- `tracker.picked_up_label_name` optionally adds that Linear label when Symphony successfully
+  picks up an issue and prepares its workspace.
 - For path values, `~` is expanded to the home directory.
 - For env-backed path values, use `$VAR`. `workspace.root` resolves `$VAR` before path handling,
   while `codex.command` stays a shell command string and any `$VAR` expansion there happens in the
