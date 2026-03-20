@@ -391,7 +391,7 @@ defmodule SymphonyElixirWeb.SessionLive do
   end
 
   defp orchestrator do
-    Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator
+    Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator.default_source()
   end
 
   defp snapshot_timeout_ms do
