@@ -1236,6 +1236,11 @@ defmodule SymphonyElixir.CoreTest do
 
       assert_receive {:memory_tracker_label_add, "issue-label", "symphony"}
       assert_receive {:memory_tracker_comment, "issue-label", workspace_comment}
+      assert_receive {:memory_tracker_issue_resource, "issue-label", "http://home-lab:4000/session/MT-321", "Symphony Session"}
+
+      assert_receive {:memory_tracker_issue_resource, "issue-label", history_url, history_title}
+      assert history_url =~ "http://home-lab:4000/history/"
+      assert history_title =~ "Symphony History #"
       assert workspace_comment =~ "Workspace ready: `"
     after
       Application.delete_env(:symphony_elixir, :memory_tracker_recipient)

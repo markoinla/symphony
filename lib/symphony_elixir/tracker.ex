@@ -14,6 +14,7 @@ defmodule SymphonyElixir.Tracker do
   @callback update_comment(String.t(), String.t()) :: :ok | {:error, term()}
   @callback update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   @callback add_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
+  @callback ensure_issue_resource_link(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -75,6 +76,11 @@ defmodule SymphonyElixir.Tracker do
   @spec add_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
   def add_issue_label(issue_id, label_name) do
     adapter().add_issue_label(issue_id, label_name)
+  end
+
+  @spec ensure_issue_resource_link(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def ensure_issue_resource_link(issue_id, url, title) do
+    adapter().ensure_issue_resource_link(issue_id, url, title)
   end
 
   @spec adapter() :: module()

@@ -70,6 +70,26 @@ defmodule SymphonyElixir.Linear.Adapter do
   }
   """
 
+  @issue_attachments_query """
+  query SymphonyIssueAttachments($issueId: String!) {
+    issue(id: $issueId) {
+      attachments(first: 50) {
+        nodes {
+          url
+        }
+      }
+    }
+  }
+  """
+
+  @create_attachment_mutation """
+  mutation SymphonyCreateAttachment($issueId: String!, $url: String!, $title: String!) {
+    attachmentCreate(input: {issueId: $issueId, url: $url, title: $title}) {
+      success
+    }
+  }
+  """
+
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues, do: client_module().fetch_candidate_issues()
 
@@ -139,8 +159,47 @@ defmodule SymphonyElixir.Linear.Adapter do
     end
   end
 
+  @spec ensure_issue_resource_link(String.t(), String.t(), String.t()) :: :ok | {:error, term()}
+  def ensure_issue_resource_link(issue_id, url, title)
+      when is_binary(issue_id) and is_binary(url) and is_binary(title) do
+    with {:ok, attachment_urls} <- fetch_attachment_urls(issue_id) do
+      if url in attachment_urls do
+        :ok
+      else
+        create_attachment(issue_id, url, title)
+      end
+    end
+  end
+
   defp client_module do
     Application.get_env(:symphony_elixir, :linear_client_module, Client)
+  end
+
+  defp fetch_attachment_urls(issue_id) do
+    with {:ok, response} <-
+           client_module().graphql(@issue_attachments_query, %{issueId: issue_id}),
+         nodes when is_list(nodes) <-
+           get_in(response, ["data", "issue", "attachments", "nodes"]) do
+      {:ok,
+       nodes
+       |> Enum.map(&Map.get(&1, "url"))
+       |> Enum.filter(&is_binary/1)}
+    else
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :attachment_lookup_failed}
+    end
+  end
+
+  defp create_attachment(issue_id, url, title) do
+    with {:ok, response} <-
+           client_module().graphql(@create_attachment_mutation, %{issueId: issue_id, url: url, title: title}),
+         true <- get_in(response, ["data", "attachmentCreate", "success"]) == true do
+      :ok
+    else
+      false -> {:error, :attachment_create_failed}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :attachment_create_failed}
+    end
   end
 
   defp resolve_state_id(issue_id, state_name) do

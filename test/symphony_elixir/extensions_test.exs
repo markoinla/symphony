@@ -217,10 +217,19 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert :ok = SymphonyElixir.Tracker.update_comment("comment-1", "updated")
     assert :ok = SymphonyElixir.Tracker.update_issue_state("issue-1", "Done")
     assert :ok = SymphonyElixir.Tracker.add_issue_label("issue-1", "symphony")
+
+    assert :ok =
+             SymphonyElixir.Tracker.ensure_issue_resource_link(
+               "issue-1",
+               "http://home-lab:4000/session/MT-1",
+               "Symphony Session"
+             )
+
     assert_receive {:memory_tracker_comment, "issue-1", "comment"}
     assert_receive {:memory_tracker_comment_update, "comment-1", "updated"}
     assert_receive {:memory_tracker_state_update, "issue-1", "Done"}
     assert_receive {:memory_tracker_label_add, "issue-1", "symphony"}
+    assert_receive {:memory_tracker_issue_resource, "issue-1", "http://home-lab:4000/session/MT-1", "Symphony Session"}
 
     Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
     assert {:ok, nil} = Memory.create_comment("issue-1", "quiet")
@@ -419,6 +428,105 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     assert {:error, :issue_update_failed} = Adapter.add_issue_label("issue-1", "odd")
+
+    drain_graphql_calls()
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{"attachments" => %{"nodes" => []}}
+           }
+         }},
+        {:ok, %{"data" => %{"attachmentCreate" => %{"success" => true}}}}
+      ]
+    )
+
+    assert :ok =
+             Adapter.ensure_issue_resource_link(
+               "issue-1",
+               "http://home-lab:4000/session/MT-1",
+               "Symphony Session"
+             )
+
+    assert_receive {:graphql_called, attachments_query, %{issueId: "issue-1"}}
+    assert attachments_query =~ "attachments"
+
+    assert_receive {:graphql_called, create_attachment_query,
+                    %{
+                      issueId: "issue-1",
+                      title: "Symphony Session",
+                      url: "http://home-lab:4000/session/MT-1"
+                    }}
+
+    assert create_attachment_query =~ "attachmentCreate"
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{
+               "attachments" => %{
+                 "nodes" => [%{"url" => "http://home-lab:4000/session/MT-1"}]
+               }
+             }
+           }
+         }}
+      ]
+    )
+
+    assert :ok =
+             Adapter.ensure_issue_resource_link(
+               "issue-1",
+               "http://home-lab:4000/session/MT-1",
+               "Symphony Session"
+             )
+
+    assert_receive {:graphql_called, duplicate_lookup_query, %{issueId: "issue-1"}}
+    assert duplicate_lookup_query =~ "attachments"
+    refute_receive {:graphql_called, ^create_attachment_query, _variables}, 50
+
+    Process.put({FakeLinearClient, :graphql_results}, [{:error, :boom}])
+
+    assert {:error, :boom} =
+             Adapter.ensure_issue_resource_link(
+               "issue-1",
+               "http://home-lab:4000/history/1",
+               "Symphony History #1"
+             )
+
+    Process.put({FakeLinearClient, :graphql_results}, [{:ok, %{"data" => %{}}}])
+
+    assert {:error, :attachment_lookup_failed} =
+             Adapter.ensure_issue_resource_link(
+               "issue-1",
+               "http://home-lab:4000/history/1",
+               "Symphony History #1"
+             )
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{"attachments" => %{"nodes" => []}}
+           }
+         }},
+        {:ok, %{"data" => %{"attachmentCreate" => %{"success" => false}}}}
+      ]
+    )
+
+    assert {:error, :attachment_create_failed} =
+             Adapter.ensure_issue_resource_link(
+               "issue-1",
+               "http://home-lab:4000/history/1",
+               "Symphony History #1"
+             )
   end
 
   test "presenter aggregates multi-workflow state payloads" do
@@ -679,6 +787,14 @@ defmodule SymphonyElixir.ExtensionsTest do
       response(get(build_conn(), "/vendor/phoenix_live_view/phoenix_live_view.js"), 200)
 
     assert live_view_js =~ "var LiveView = (() => {"
+  end
+
+  defp drain_graphql_calls do
+    receive do
+      {:graphql_called, _query, _variables} -> drain_graphql_calls()
+    after
+      0 -> :ok
+    end
   end
 
   test "dashboard liveview renders and refreshes over pubsub" do
