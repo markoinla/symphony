@@ -15,6 +15,7 @@ defmodule SymphonyElixir.Store.Project do
           linear_label_name: String.t() | nil,
           github_repo: String.t() | nil,
           workspace_root: String.t() | nil,
+          env_vars: String.t() | nil,
           created_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }
@@ -27,6 +28,7 @@ defmodule SymphonyElixir.Store.Project do
     field(:linear_label_name, :string)
     field(:github_repo, :string)
     field(:workspace_root, :string)
+    field(:env_vars, :string)
     field(:created_at, :utc_datetime)
     field(:updated_at, :utc_datetime)
 
@@ -34,7 +36,7 @@ defmodule SymphonyElixir.Store.Project do
   end
 
   @required_fields ~w(name)a
-  @optional_fields ~w(linear_project_slug linear_organization_slug linear_filter_by linear_label_name github_repo workspace_root)a
+  @optional_fields ~w(linear_project_slug linear_organization_slug linear_filter_by linear_label_name github_repo workspace_root env_vars)a
 
   @spec changeset(%__MODULE__{} | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
   def changeset(project, attrs) do

@@ -202,6 +202,41 @@ defmodule SymphonyElixir.Settings do
   defp drop_nil_leaves(""), do: nil
   defp drop_nil_leaves(value), do: value
 
+  @spec parse_env_vars(String.t() | nil) :: [{String.t(), String.t()}]
+  def parse_env_vars(nil), do: []
+  def parse_env_vars(""), do: []
+
+  def parse_env_vars(text) when is_binary(text) do
+    text
+    |> String.split("\n")
+    |> Enum.map(&String.trim/1)
+    |> Enum.reject(&(&1 == "" or String.starts_with?(&1, "#")))
+    |> Enum.flat_map(fn line ->
+      case String.split(line, "=", parts: 2) do
+        [key, value] ->
+          key = String.trim(key)
+          value = value |> String.trim() |> strip_quotes()
+          if key != "", do: [{key, value}], else: []
+
+        _ ->
+          []
+      end
+    end)
+  end
+
+  defp strip_quotes(value) do
+    cond do
+      String.starts_with?(value, "\"") and String.ends_with?(value, "\"") ->
+        String.slice(value, 1..-2//1)
+
+      String.starts_with?(value, "'") and String.ends_with?(value, "'") ->
+        String.slice(value, 1..-2//1)
+
+      true ->
+        value
+    end
+  end
+
   defp extract_project_slug(segments) when length(segments) >= 3 do
     segments
     |> List.last()

@@ -192,6 +192,8 @@ defmodule SymphonyElixir.Codex.AppServer do
     if is_nil(executable) do
       {:error, :bash_not_found}
     else
+      env = project_env_vars()
+
       port =
         Port.open(
           {:spawn_executable, String.to_charlist(executable)},
@@ -201,6 +203,7 @@ defmodule SymphonyElixir.Codex.AppServer do
             :stderr_to_stdout,
             args: [~c"-c", String.to_charlist(Config.settings!().codex.command)],
             cd: String.to_charlist(workspace),
+            env: Enum.map(env, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end),
             line: @port_line_bytes
           ]
         )
@@ -215,10 +218,14 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp remote_launch_command(workspace) when is_binary(workspace) do
-    [
+    env_exports =
+      project_env_vars()
+      |> Enum.map(fn {k, v} -> "export #{k}=#{shell_escape(v)}" end)
+
+    (env_exports ++ [
       "cd #{shell_escape(workspace)}",
       "exec #{Config.settings!().codex.command}"
-    ]
+    ])
     |> Enum.join(" && ")
   end
 
@@ -1093,4 +1100,11 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp needs_input_field?(_payload), do: false
+
+  defp project_env_vars do
+    case SymphonyElixir.Settings.current_project() do
+      %{env_vars: env_text} -> SymphonyElixir.Settings.parse_env_vars(env_text)
+      _ -> []
+    end
+  end
 end

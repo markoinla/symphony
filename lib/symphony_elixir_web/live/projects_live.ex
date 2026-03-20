@@ -126,6 +126,18 @@ defmodule SymphonyElixirWeb.ProjectsLive do
                     />
                     <span class="field-hint">Leave blank to auto-derive from GitHub repo.</span>
                   </div>
+                  <div class="field-group">
+                    <label class="field-label" for="project_env_vars">Environment Variables</label>
+                    <textarea
+                      id="project_env_vars"
+                      name="env_vars"
+                      class="field-input"
+                      rows="6"
+                      placeholder={"# .env format\nDATABASE_URL=postgres://localhost/mydb\nAPI_KEY=secret123"}
+                      style="font-family: monospace; font-size: 0.85rem;"
+                    ><%= @form_fields["env_vars"] %></textarea>
+                    <span class="field-hint">Passed to agent workspaces and hooks. One VAR=value per line.</span>
+                  </div>
                 </div>
 
                 <div class="settings-actions" style="margin-top: 1rem;">
@@ -158,6 +170,10 @@ defmodule SymphonyElixirWeb.ProjectsLive do
                   <% end %>
                   <%= if project.linear_filter_by == "label" and project.linear_label_name do %>
                     <span> · Label: <%= project.linear_label_name %></span>
+                  <% end %>
+                  <% env_count = length(Settings.parse_env_vars(project.env_vars)) %>
+                  <%= if env_count > 0 do %>
+                    <span> · <%= env_count %> env var<%= if env_count != 1, do: "s" %></span>
                   <% end %>
                 </p>
               </div>
@@ -222,7 +238,8 @@ defmodule SymphonyElixirWeb.ProjectsLive do
       "linear_filter_by" => "project",
       "linear_label_name" => "",
       "github_repo" => "",
-      "workspace_root" => ""
+      "workspace_root" => "",
+      "env_vars" => ""
     }
   end
 
@@ -234,7 +251,8 @@ defmodule SymphonyElixirWeb.ProjectsLive do
       "linear_filter_by" => Map.get(params, "linear_filter_by", "project"),
       "linear_label_name" => String.trim(Map.get(params, "linear_label_name", "")),
       "github_repo" => String.trim(Map.get(params, "github_repo", "")),
-      "workspace_root" => String.trim(Map.get(params, "workspace_root", ""))
+      "workspace_root" => String.trim(Map.get(params, "workspace_root", "")),
+      "env_vars" => Map.get(params, "env_vars", "")
     }
   end
 
@@ -332,7 +350,8 @@ defmodule SymphonyElixirWeb.ProjectsLive do
       "linear_filter_by" => project.linear_filter_by || "project",
       "linear_label_name" => project.linear_label_name || "",
       "github_repo" => project.github_repo || "",
-      "workspace_root" => project.workspace_root || ""
+      "workspace_root" => project.workspace_root || "",
+      "env_vars" => project.env_vars || ""
     }
   end
 
@@ -344,7 +363,8 @@ defmodule SymphonyElixirWeb.ProjectsLive do
       linear_filter_by: fields["linear_filter_by"],
       linear_label_name: non_empty(fields["linear_label_name"]),
       github_repo: non_empty(fields["github_repo"]),
-      workspace_root: non_empty(fields["workspace_root"])
+      workspace_root: non_empty(fields["workspace_root"]),
+      env_vars: non_empty(fields["env_vars"])
     }
   end
 

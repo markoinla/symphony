@@ -103,6 +103,8 @@ defmodule SymphonyElixir.Store.Migrator do
     CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id)
     """)
 
+    maybe_add_column("projects", "env_vars", "TEXT")
+
     maybe_import_settings_file()
 
     Logger.info("SQLite auto-migrations complete")

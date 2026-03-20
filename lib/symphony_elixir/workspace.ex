@@ -358,22 +358,32 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp hook_env do
-    case SymphonyElixir.Settings.current_project() do
-      %{github_repo: repo} when is_binary(repo) and repo != "" ->
-        [{"GITHUB_REPO", repo}]
+    project = SymphonyElixir.Settings.current_project()
 
-      _ ->
-        []
-    end
+    base =
+      case project do
+        %{github_repo: repo} when is_binary(repo) and repo != "" ->
+          [{"GITHUB_REPO", repo}]
+
+        _ ->
+          []
+      end
+
+    project_env_vars =
+      case project do
+        %{env_vars: env_text} -> SymphonyElixir.Settings.parse_env_vars(env_text)
+        _ -> []
+      end
+
+    base ++ project_env_vars
   end
 
   defp hook_env_export do
-    case SymphonyElixir.Settings.current_project() do
-      %{github_repo: repo} when is_binary(repo) and repo != "" ->
-        "export GITHUB_REPO=#{shell_escape(repo)} && "
-
-      _ ->
-        ""
+    hook_env()
+    |> Enum.map(fn {key, value} -> "export #{key}=#{shell_escape(value)}" end)
+    |> case do
+      [] -> ""
+      exports -> Enum.join(exports, " && ") <> " && "
     end
   end
 
