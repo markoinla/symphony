@@ -310,15 +310,23 @@ defmodule SymphonyElixir.StatusDashboard do
       {:ok, %{running: running, retrying: retrying, codex_totals: codex_totals} = snapshot} ->
         total_tokens = Map.get(codex_totals, :total_tokens, 0)
 
+        snapshot_map =
+          %{
+            running: running,
+            retrying: retrying,
+            codex_totals: codex_totals,
+            rate_limits: Map.get(snapshot, :rate_limits),
+            polling: Map.get(snapshot, :polling)
+          }
+          |> then(fn map ->
+            case Map.get(snapshot, :workflows) do
+              workflows when is_list(workflows) -> Map.put(map, :workflows, workflows)
+              _ -> map
+            end
+          end)
+
         {
-          {:ok,
-           %{
-             running: running,
-             retrying: retrying,
-             codex_totals: codex_totals,
-             rate_limits: Map.get(snapshot, :rate_limits),
-             polling: Map.get(snapshot, :polling)
-           }},
+          {:ok, snapshot_map},
           update_token_samples(token_samples, now_ms, total_tokens)
         }
 
