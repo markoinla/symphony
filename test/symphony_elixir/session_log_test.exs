@@ -99,7 +99,7 @@ defmodule SymphonyElixir.SessionLogTest do
     ])
   end
 
-  test "captures requested tool events in the transcript" do
+  test "only captures completed tool events, not running/requested ones" do
     issue_id = unique_id("issue")
     session_id = unique_id("session")
 
@@ -108,6 +108,7 @@ defmodule SymphonyElixir.SessionLogTest do
 
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
+    # Running/requested events should be ignored
     SessionLog.append(issue_id, session_id, %{
       event: :notification,
       timestamp: now,
@@ -120,14 +121,6 @@ defmodule SymphonyElixir.SessionLogTest do
       }
     })
 
-    assert_receive {:session_message,
-                    %{
-                      id: 1,
-                      type: :tool_call,
-                      content: "linear_graphql",
-                      metadata: %{status: "requested", args: %{"query" => "query Viewer { viewer { id } }"}}
-                    }}
-
     SessionLog.append(issue_id, session_id, %{
       event: :notification,
       timestamp: now,
@@ -137,65 +130,6 @@ defmodule SymphonyElixir.SessionLogTest do
       }
     })
 
-    assert_receive {:session_message,
-                    %{
-                      id: 2,
-                      type: :tool_call,
-                      content: "exec_command",
-                      metadata: %{status: "running", args: %{cmd: "git status --short", cwd: "/tmp/workspace"}}
-                    }}
-
-    SessionLog.append(issue_id, session_id, %{
-      event: :notification,
-      timestamp: now,
-      payload: %{
-        "method" => "item/commandExecution/requestApproval",
-        "params" => %{"parsedCmd" => "mix test", "cwd" => "/tmp/workspace"}
-      }
-    })
-
-    assert_receive {:session_message,
-                    %{
-                      id: 3,
-                      type: :tool_call,
-                      content: "exec_command",
-                      metadata: %{status: "requested", args: %{cmd: "mix test", cwd: "/tmp/workspace"}}
-                    }}
-
-    SessionLog.append(issue_id, session_id, %{
-      event: :notification,
-      timestamp: now,
-      payload: %{
-        "method" => "item/fileChange/requestApproval",
-        "params" => %{"fileChangeCount" => 2, "cwd" => "/tmp/workspace"}
-      }
-    })
-
-    assert_receive {:session_message,
-                    %{
-                      id: 4,
-                      type: :tool_call,
-                      content: "apply_patch",
-                      metadata: %{status: "requested", args: %{change_count: 2, cwd: "/tmp/workspace"}}
-                    }}
-
-    assert_messages(issue_id, session_id, [
-      %{id: 1, type: :tool_call, content: "linear_graphql"},
-      %{id: 2, type: :tool_call, content: "exec_command"},
-      %{id: 3, type: :tool_call, content: "exec_command"},
-      %{id: 4, type: :tool_call, content: "apply_patch"}
-    ])
-  end
-
-  test "captures auto-approved command and file-change requests distinctly" do
-    issue_id = unique_id("issue")
-    session_id = unique_id("session")
-
-    assert :ok = ObservabilityPubSub.subscribe_session(issue_id)
-    start_session_log!(issue_id, session_id)
-
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
-
     SessionLog.append(issue_id, session_id, %{
       event: :approval_auto_approved,
       timestamp: now,
@@ -203,6 +137,21 @@ defmodule SymphonyElixir.SessionLogTest do
       payload: %{
         "method" => "item/commandExecution/requestApproval",
         "params" => %{"parsedCmd" => "mix test", "cwd" => "/tmp/workspace"}
+      }
+    })
+
+    refute_receive {:session_message, _}
+
+    # Completed events should be captured
+    SessionLog.append(issue_id, session_id, %{
+      event: :tool_call_completed,
+      timestamp: now,
+      payload: %{
+        "params" => %{
+          "name" => "linear_graphql",
+          "arguments" => %{"query" => "query Viewer { viewer { id } }"}
+        },
+        "result" => %{"success" => true}
       }
     })
 
@@ -210,21 +159,16 @@ defmodule SymphonyElixir.SessionLogTest do
                     %{
                       id: 1,
                       type: :tool_call,
-                      content: "exec_command",
-                      metadata: %{
-                        status: "auto_approved",
-                        decision: "acceptForSession",
-                        args: %{cmd: "mix test", cwd: "/tmp/workspace"}
-                      }
+                      content: "linear_graphql",
+                      metadata: %{status: "completed", args: %{"query" => "query Viewer { viewer { id } }"}}
                     }}
 
     SessionLog.append(issue_id, session_id, %{
-      event: :approval_auto_approved,
+      event: :notification,
       timestamp: now,
-      decision: "acceptForSession",
       payload: %{
-        "method" => "item/fileChange/requestApproval",
-        "params" => %{"fileChangeCount" => 2, "cwd" => "/tmp/workspace"}
+        "method" => "codex/event/exec_command_end",
+        "params" => %{"msg" => %{"command" => "mix test", "exit_code" => 0}}
       }
     })
 
@@ -232,17 +176,13 @@ defmodule SymphonyElixir.SessionLogTest do
                     %{
                       id: 2,
                       type: :tool_call,
-                      content: "apply_patch",
-                      metadata: %{
-                        status: "auto_approved",
-                        decision: "acceptForSession",
-                        args: %{change_count: 2, cwd: "/tmp/workspace"}
-                      }
+                      content: "exec_command",
+                      metadata: %{status: "completed", args: %{cmd: "mix test", exit_code: 0}}
                     }}
 
     assert_messages(issue_id, session_id, [
-      %{id: 1, type: :tool_call, content: "exec_command"},
-      %{id: 2, type: :tool_call, content: "apply_patch"}
+      %{id: 1, type: :tool_call, content: "linear_graphql"},
+      %{id: 2, type: :tool_call, content: "exec_command"}
     ])
   end
 

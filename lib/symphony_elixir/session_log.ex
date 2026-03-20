@@ -235,11 +235,6 @@ defmodule SymphonyElixir.SessionLog do
     {:message, :tool_call, tool_name || "unknown", %{args: %{}, status: "failed", error: error}}
   end
 
-  defp classify_message(%{event: :approval_auto_approved} = msg) do
-    payload = Map.get(msg, :payload, %{})
-    classify_auto_approved(payload, Map.get(msg, :decision, "auto_approved"))
-  end
-
   defp classify_message(%{event: :turn_completed}) do
     {:message, :turn_boundary, "Turn completed", %{status: "completed"}}
   end
@@ -294,17 +289,18 @@ defmodule SymphonyElixir.SessionLog do
   defp classify_by_method(payload, "item/reasoning/textDelta"),
     do: wrap_streamable(:thinking, payload_path(payload, ["params", "textDelta"]), payload)
 
-  defp classify_by_method(payload, "item/tool/call"),
-    do: wrap_dynamic_tool_call(payload)
+  # Exec command completion (wrapper format)
+  defp classify_by_method(payload, "codex/event/exec_command_end"),
+    do: wrap_exec_command_end(payload)
 
-  defp classify_by_method(payload, "codex/event/exec_command_begin"),
-    do: wrap_exec_command(payload)
+  # MCP tool call completion (wrapper format)
+  defp classify_by_method(payload, "codex/event/mcp_tool_call_end"),
+    do: wrap_mcp_tool_call(payload, "completed")
 
-  defp classify_by_method(payload, "item/commandExecution/requestApproval"),
-    do: wrap_command_execution_request(payload)
-
-  defp classify_by_method(payload, "item/fileChange/requestApproval"),
-    do: wrap_file_change_request(payload)
+  # Non-streamable item/completed falls through from classify_stream_boundary
+  defp classify_by_method(payload, method)
+       when method in ["item/completed", "codex/event/item_completed"],
+       do: classify_item_tool_call(payload, "completed")
 
   defp classify_by_method(_payload, _method), do: nil
 
@@ -314,35 +310,41 @@ defmodule SymphonyElixir.SessionLog do
 
   defp wrap_streamable(_type, _text, _payload), do: nil
 
-  defp wrap_exec_command(payload) do
+  defp wrap_exec_command_end(payload) do
+    exit_code = extract_exec_exit_code(payload)
+    status = if exit_code == 0, do: "completed", else: "failed"
+
     args =
       %{}
       |> maybe_put_arg(:cmd, extract_exec_command(payload))
-      |> maybe_put_arg(:cwd, extract_exec_cwd(payload))
+      |> maybe_put_arg(:exit_code, exit_code)
 
-    {:message, :tool_call, "exec_command", %{args: args, status: "running"}}
+    {:message, :tool_call, "exec_command", %{args: args, status: status}}
   end
 
-  defp wrap_dynamic_tool_call(payload) do
-    {:message, :tool_call, extract_tool_name(payload) || "unknown", %{args: extract_tool_args(payload), status: "requested"}}
+  defp wrap_mcp_tool_call(payload, status) do
+    tool_name = extract_wrapper_tool_name(payload) || "mcp_tool"
+    {:message, :tool_call, tool_name, %{args: %{}, status: status}}
   end
 
-  defp wrap_command_execution_request(payload) do
-    args =
-      %{}
-      |> maybe_put_arg(:cmd, extract_exec_command(payload))
-      |> maybe_put_arg(:cwd, extract_exec_cwd(payload))
+  defp classify_item_tool_call(payload, status) do
+    item_type = extract_item_type(payload)
 
-    {:message, :tool_call, "exec_command", %{args: args, status: "requested"}}
-  end
+    case item_type do
+      type when type in ["commandExecution", "command_execution"] ->
+        args =
+          %{}
+          |> maybe_put_arg(:cmd, extract_item_command(payload))
+          |> maybe_put_arg(:cwd, extract_item_cwd(payload))
 
-  defp wrap_file_change_request(payload) do
-    args =
-      %{}
-      |> maybe_put_arg(:change_count, extract_file_change_count(payload))
-      |> maybe_put_arg(:cwd, extract_file_change_cwd(payload))
+        {:message, :tool_call, "exec_command", %{args: args, status: status}}
 
-    {:message, :tool_call, "apply_patch", %{args: args, status: "requested"}}
+      type when type in ["fileChange", "file_change"] ->
+        {:message, :tool_call, "apply_patch", %{args: %{}, status: status}}
+
+      _ ->
+        nil
+    end
   end
 
   # Fallback: content-block format (standard API responses)
@@ -413,41 +415,43 @@ defmodule SymphonyElixir.SessionLog do
       payload_path(payload, ["params", "cwd"])
   end
 
-  defp extract_file_change_count(payload) do
-    payload_path(payload, ["params", "fileChangeCount"]) ||
-      payload_path(payload, ["params", "changeCount"])
+  defp extract_exec_exit_code(payload) do
+    payload_path(payload, ["params", "msg", "exit_code"]) ||
+      payload_path(payload, ["params", "msg", "exitCode"]) ||
+      payload_path(payload, ["params", "exit_code"]) ||
+      payload_path(payload, ["params", "exitCode"])
   end
 
-  defp extract_file_change_cwd(payload) do
-    payload_path(payload, ["params", "cwd"])
+  defp extract_wrapper_tool_name(payload) do
+    payload_path(payload, ["params", "msg", "tool"]) ||
+      payload_path(payload, ["params", "msg", "name"]) ||
+      payload_path(payload, ["params", "msg", "payload", "tool"]) ||
+      payload_path(payload, ["params", "msg", "payload", "name"]) ||
+      payload_path(payload, ["params", "tool"]) ||
+      payload_path(payload, ["params", "name"])
+  end
+
+  defp extract_item_type(payload) do
+    payload_path(payload, ["params", "item", "type"]) ||
+      payload_path(payload, ["params", "msg", "payload", "type"]) ||
+      payload_path(payload, ["params", "msg", "type"])
+  end
+
+  defp extract_item_command(payload) do
+    payload_path(payload, ["params", "item", "command"]) ||
+      payload_path(payload, ["params", "item", "parsed_cmd"]) ||
+      payload_path(payload, ["params", "item", "parsedCmd"]) ||
+      extract_exec_command(payload)
+  end
+
+  defp extract_item_cwd(payload) do
+    payload_path(payload, ["params", "item", "cwd"]) ||
+      extract_exec_cwd(payload)
   end
 
   defp extract_completed_item_type(payload) do
     payload_path(payload, ["params", "item", "type"]) ||
       payload_path(payload, ["params", "msg", "payload", "type"])
-  end
-
-  defp classify_auto_approved(payload, decision) do
-    case get_in_payload(payload, "method") do
-      "item/commandExecution/requestApproval" ->
-        args =
-          %{}
-          |> maybe_put_arg(:cmd, extract_exec_command(payload))
-          |> maybe_put_arg(:cwd, extract_exec_cwd(payload))
-
-        {:message, :tool_call, "exec_command", %{args: args, decision: decision, status: "auto_approved"}}
-
-      "item/fileChange/requestApproval" ->
-        args =
-          %{}
-          |> maybe_put_arg(:change_count, extract_file_change_count(payload))
-          |> maybe_put_arg(:cwd, extract_file_change_cwd(payload))
-
-        {:message, :tool_call, "apply_patch", %{args: args, decision: decision, status: "auto_approved"}}
-
-      _ ->
-        nil
-    end
   end
 
   defp has_text_content?(params) when is_map(params) do
