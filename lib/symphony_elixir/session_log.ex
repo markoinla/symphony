@@ -518,13 +518,27 @@ defmodule SymphonyElixir.SessionLog do
 
   defp parse_metadata(json) when is_binary(json) do
     case Jason.decode(json) do
-      {:ok, map} when is_map(map) -> map
+      {:ok, map} when is_map(map) -> atomize_known_keys(map)
       _ -> %{}
     end
   end
 
   defp parse_metadata(map) when is_map(map), do: map
   defp parse_metadata(_), do: %{}
+
+  @known_metadata_keys %{
+    "status" => :status,
+    "args" => :args,
+    "error" => :error,
+    "reason" => :reason,
+    "decision" => :decision
+  }
+
+  defp atomize_known_keys(map) when is_map(map) do
+    Map.new(map, fn {k, v} ->
+      {Map.get(@known_metadata_keys, k, k), v}
+    end)
+  end
 
   defp via(issue_id, session_id) do
     {:via, Registry, {SymphonyElixir.SessionLogRegistry, {issue_id, session_id}}}
