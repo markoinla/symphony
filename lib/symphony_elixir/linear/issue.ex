@@ -21,7 +21,13 @@ defmodule SymphonyElixir.Linear.Issue do
     updated_at: nil
   ]
 
-  @type comment :: %{body: String.t(), author: String.t() | nil, created_at: String.t() | nil}
+  @type comment :: %{
+          id: String.t() | nil,
+          body: String.t() | nil,
+          author: String.t() | nil,
+          author_id: String.t() | nil,
+          created_at: String.t() | nil
+        }
 
   @type t :: %__MODULE__{
           id: String.t() | nil,

@@ -70,6 +70,12 @@ Comments (oldest first):
 ---
 {% endif %}
 
+Continuation turns may include a `New Linear comments since last turn` section when Symphony sees
+new non-workpad issue comments between turns. Active issue threads also expose
+`linear_watch_comments` and `linear_create_issue_comment` as the preferred high-level comment tools;
+`linear_graphql` remains available for raw GraphQL when needed. Symphony still does not push new
+Linear comments into a turn after that turn has already started.
+
 ## Project context
 
 Before starting any implementation work, discover and read the project's context files:

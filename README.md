@@ -20,8 +20,15 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 4. Sends a workflow prompt to Codex
 5. Keeps Codex working on the issue until the work is done
 
-During app-server sessions, Symphony also serves a client-side `linear_graphql` tool so that repo
-skills can make raw Linear GraphQL calls.
+During app-server sessions, Symphony also serves client-side Linear tools:
+
+- `linear_watch_comments` to fetch the latest actionable comments for the active issue
+- `linear_create_issue_comment` to post a reply back to the active issue
+- `linear_graphql` for raw Linear GraphQL calls when a skill needs lower-level access
+
+Continuation turns can also inject a `New Linear comments since last turn` section when Linear
+comments arrive between turns. True mid-turn comment push is still deferred; use
+`linear_watch_comments` if the model needs an in-turn refresh.
 
 If a claimed issue moves to a terminal state (`Done`, `Closed`, `Cancelled`, or `Duplicate`),
 Symphony stops the active agent for that issue and cleans up matching workspaces.

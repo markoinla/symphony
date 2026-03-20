@@ -1238,11 +1238,29 @@ defmodule SymphonyElixir.CoreTest do
         Process.put(:agent_turn_fetch_count, attempt)
         send(parent, {:issue_state_fetch, attempt})
 
-        state =
+        {state, comments} =
           if attempt == 1 do
-            "In Progress"
+            {"In Progress",
+             [
+               %{
+                 id: "comment-2",
+                 author: "Reviewer",
+                 author_id: "user-2",
+                 body: "Please include the new Linear note.",
+                 created_at: "2026-03-20T10:05:00Z"
+               }
+             ]}
           else
-            "Done"
+            {"Done",
+             [
+               %{
+                 id: "comment-2",
+                 author: "Reviewer",
+                 author_id: "user-2",
+                 body: "Please include the new Linear note.",
+                 created_at: "2026-03-20T10:05:00Z"
+               }
+             ]}
           end
 
         {:ok,
@@ -1252,7 +1270,8 @@ defmodule SymphonyElixir.CoreTest do
              identifier: "MT-247",
              title: "Continue until done",
              description: "Still active after first turn",
-             state: state
+             state: state,
+             comments: comments
            }
          ]}
       end
@@ -1264,7 +1283,16 @@ defmodule SymphonyElixir.CoreTest do
         description: "Still active after first turn",
         state: "In Progress",
         url: "https://example.org/issues/MT-247",
-        labels: []
+        labels: [],
+        comments: [
+          %{
+            id: "comment-1",
+            author: "Reporter",
+            author_id: "user-1",
+            body: "Initial context",
+            created_at: "2026-03-20T10:00:00Z"
+          }
+        ]
       }
 
       assert :ok = AgentRunner.run(issue, nil, issue_state_fetcher: state_fetcher)
@@ -1292,6 +1320,9 @@ defmodule SymphonyElixir.CoreTest do
       refute Enum.at(turn_texts, 1) =~ "You are an agent for this repository."
       assert Enum.at(turn_texts, 1) =~ "Continuation guidance:"
       assert Enum.at(turn_texts, 1) =~ "continuation turn #2 of 3"
+      assert Enum.at(turn_texts, 1) =~ "New Linear comments since last turn:"
+      assert Enum.at(turn_texts, 1) =~ "Please include the new Linear note."
+      assert Enum.at(turn_texts, 1) =~ "linear_create_issue_comment"
     after
       System.delete_env("SYMP_TEST_CODEx_TRACE")
       File.rm_rf(test_root)

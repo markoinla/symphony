@@ -754,8 +754,10 @@ defmodule SymphonyElixir.Linear.Client do
   defp extract_comments(%{"comments" => %{"nodes" => comments}}) when is_list(comments) do
     Enum.map(comments, fn comment ->
       %{
+        id: comment["id"],
         body: comment["body"],
         author: get_in(comment, ["user", "name"]),
+        author_id: get_in(comment, ["user", "id"]),
         created_at: comment["createdAt"]
       }
     end)

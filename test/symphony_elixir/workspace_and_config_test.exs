@@ -321,6 +321,16 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         "id" => "user-1"
       },
       "labels" => %{"nodes" => [%{"name" => "Backend"}]},
+      "comments" => %{
+        "nodes" => [
+          %{
+            "id" => "comment-1",
+            "body" => "Looks good",
+            "createdAt" => "2026-01-01T00:00:00Z",
+            "user" => %{"id" => "user-1", "name" => "Alice"}
+          }
+        ]
+      },
       "inverseRelations" => %{
         "nodes" => [
           %{
@@ -353,6 +363,16 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert issue.state == "Todo"
     assert issue.assignee_id == "user-1"
     assert issue.assigned_to_worker
+
+    assert issue.comments == [
+             %{
+               id: "comment-1",
+               body: "Looks good",
+               author: "Alice",
+               author_id: "user-1",
+               created_at: "2026-01-01T00:00:00Z"
+             }
+           ]
   end
 
   test "linear client marks explicitly unassigned issues as not routed to worker" do

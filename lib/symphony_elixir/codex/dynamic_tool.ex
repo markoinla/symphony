@@ -3,9 +3,44 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   Executes client-side tool calls requested by Codex app-server turns.
   """
 
-  alias SymphonyElixir.Linear.Client
+  alias SymphonyElixir.Linear.{Client, CommentWatcher, Issue}
+  alias SymphonyElixir.Tracker
 
+  @linear_create_issue_comment_tool "linear_create_issue_comment"
+  @linear_watch_comments_tool "linear_watch_comments"
   @linear_graphql_tool "linear_graphql"
+  @linear_create_issue_comment_mutation """
+  mutation SymphonyCreateComment($issueId: String!, $body: String!) {
+    commentCreate(input: {issueId: $issueId, body: $body}) {
+      success
+      comment {
+        id
+      }
+    }
+  }
+  """
+  @linear_create_issue_comment_description """
+  Create a new Linear comment on the active issue for this Codex thread.
+  """
+  @linear_create_issue_comment_input_schema %{
+    "type" => "object",
+    "additionalProperties" => false,
+    "required" => ["body"],
+    "properties" => %{
+      "body" => %{
+        "type" => "string",
+        "description" => "Markdown body for the new issue comment."
+      }
+    }
+  }
+  @linear_watch_comments_description """
+  Fetch the latest non-workpad comments for the active Linear issue in this Codex thread.
+  """
+  @linear_watch_comments_input_schema %{
+    "type" => "object",
+    "additionalProperties" => false,
+    "properties" => %{}
+  }
   @linear_graphql_description """
   Execute a raw GraphQL query or mutation against Linear using Symphony's configured auth.
   """
@@ -29,6 +64,12 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   @spec execute(String.t() | nil, term(), keyword()) :: map()
   def execute(tool, arguments, opts \\ []) do
     case tool do
+      @linear_create_issue_comment_tool ->
+        execute_linear_create_issue_comment(arguments, opts)
+
+      @linear_watch_comments_tool ->
+        execute_linear_watch_comments(opts)
+
       @linear_graphql_tool ->
         execute_linear_graphql(arguments, opts)
 
@@ -46,11 +87,54 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   def tool_specs do
     [
       %{
+        "name" => @linear_create_issue_comment_tool,
+        "description" => @linear_create_issue_comment_description,
+        "inputSchema" => @linear_create_issue_comment_input_schema
+      },
+      %{
+        "name" => @linear_watch_comments_tool,
+        "description" => @linear_watch_comments_description,
+        "inputSchema" => @linear_watch_comments_input_schema
+      },
+      %{
         "name" => @linear_graphql_tool,
         "description" => @linear_graphql_description,
         "inputSchema" => @linear_graphql_input_schema
       }
     ]
+  end
+
+  defp execute_linear_create_issue_comment(arguments, opts) do
+    linear_client = Keyword.get(opts, :linear_client, &Client.graphql/3)
+
+    with {:ok, issue_id} <- issue_id_from_opts(opts),
+         {:ok, body} <- normalize_create_issue_comment_arguments(arguments),
+         {:ok, response} <-
+           linear_client.(
+             @linear_create_issue_comment_mutation,
+             %{issueId: issue_id, body: body},
+             []
+           ),
+         true <- get_in(response, ["data", "commentCreate", "success"]) == true,
+         comment_id when is_binary(comment_id) <-
+           get_in(response, ["data", "commentCreate", "comment", "id"]) do
+      dynamic_tool_response(
+        true,
+        encode_payload(%{
+          "issueId" => issue_id,
+          "commentId" => comment_id
+        })
+      )
+    else
+      false ->
+        failure_response(tool_error_payload(:comment_create_failed))
+
+      {:error, reason} ->
+        failure_response(tool_error_payload(reason))
+
+      _ ->
+        failure_response(tool_error_payload(:comment_create_failed))
+    end
   end
 
   defp execute_linear_graphql(arguments, opts) do
@@ -60,6 +144,35 @@ defmodule SymphonyElixir.Codex.DynamicTool do
          {:ok, response} <- linear_client.(query, variables, []) do
       graphql_response(response)
     else
+      {:error, reason} ->
+        failure_response(tool_error_payload(reason))
+    end
+  end
+
+  defp execute_linear_watch_comments(opts) do
+    issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
+    ignored_comment_ids = Keyword.get(opts, :ignored_comment_ids, MapSet.new())
+
+    with {:ok, issue_id} <- issue_id_from_opts(opts),
+         {:ok, [%Issue{} = issue | _]} <- issue_state_fetcher.([issue_id]) do
+      comments =
+        issue.comments
+        |> CommentWatcher.actionable_comments(ignored_comment_ids)
+        |> Enum.map(&format_comment/1)
+
+      dynamic_tool_response(
+        true,
+        encode_payload(%{
+          "issueId" => issue_id,
+          "comments" => comments,
+          "totalComments" => length(issue.comments),
+          "actionableCommentCount" => length(comments)
+        })
+      )
+    else
+      {:ok, []} ->
+        failure_response(tool_error_payload(:issue_not_found))
+
       {:error, reason} ->
         failure_response(tool_error_payload(reason))
     end
@@ -89,6 +202,28 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   end
 
   defp normalize_linear_graphql_arguments(_arguments), do: {:error, :invalid_arguments}
+
+  defp normalize_create_issue_comment_arguments(arguments) when is_map(arguments) do
+    case Map.get(arguments, "body") || Map.get(arguments, :body) do
+      body when is_binary(body) ->
+        case String.trim(body) do
+          "" -> {:error, :missing_comment_body}
+          trimmed -> {:ok, trimmed}
+        end
+
+      _ ->
+        {:error, :missing_comment_body}
+    end
+  end
+
+  defp normalize_create_issue_comment_arguments(_arguments), do: {:error, :invalid_comment_arguments}
+
+  defp issue_id_from_opts(opts) do
+    case Keyword.get(opts, :issue_id) do
+      issue_id when is_binary(issue_id) and issue_id != "" -> {:ok, issue_id}
+      _ -> {:error, :missing_issue_context}
+    end
+  end
 
   defp normalize_query(arguments) do
     case Map.get(arguments, "query") || Map.get(arguments, :query) do
@@ -144,10 +279,60 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
   defp encode_payload(payload), do: inspect(payload)
 
+  defp format_comment(comment) when is_map(comment) do
+    %{
+      "id" => Map.get(comment, :id),
+      "author" => Map.get(comment, :author),
+      "authorId" => Map.get(comment, :author_id),
+      "createdAt" => Map.get(comment, :created_at),
+      "body" => Map.get(comment, :body)
+    }
+  end
+
   defp tool_error_payload(:missing_query) do
     %{
       "error" => %{
         "message" => "`linear_graphql` requires a non-empty `query` string."
+      }
+    }
+  end
+
+  defp tool_error_payload(:missing_comment_body) do
+    %{
+      "error" => %{
+        "message" => "`linear_create_issue_comment` requires a non-empty `body` string."
+      }
+    }
+  end
+
+  defp tool_error_payload(:invalid_comment_arguments) do
+    %{
+      "error" => %{
+        "message" => "`linear_create_issue_comment` expects an object with a non-empty `body` string."
+      }
+    }
+  end
+
+  defp tool_error_payload(:missing_issue_context) do
+    %{
+      "error" => %{
+        "message" => "This tool is only available inside an active issue thread."
+      }
+    }
+  end
+
+  defp tool_error_payload(:issue_not_found) do
+    %{
+      "error" => %{
+        "message" => "The active Linear issue could not be refreshed."
+      }
+    }
+  end
+
+  defp tool_error_payload(:comment_create_failed) do
+    %{
+      "error" => %{
+        "message" => "Linear comment creation failed."
       }
     }
   end

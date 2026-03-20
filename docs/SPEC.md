@@ -617,8 +617,9 @@ Important nuance:
 - If the issue is still in an active state, the worker should start another turn on the same live
   coding-agent thread in the same workspace, up to `agent.max_turns`.
 - The first turn should use the full rendered task prompt.
-- Continuation turns should send only continuation guidance to the existing thread, not resend the
-  original task prompt that is already present in thread history.
+- Continuation turns should send only continuation guidance plus any incremental tracker context
+  (for example newly-arrived issue comments) to the existing thread, not resend the original task
+  prompt that is already present in thread history.
 - Once the worker exits normally, the orchestrator still schedules a short continuation retry
   (about 1 second) so it can re-check whether the issue remains active and needs another worker
   session.
@@ -1062,10 +1063,40 @@ Unsupported dynamic tool calls:
 Optional client-side tool extension:
 
 - An implementation may expose a limited set of client-side tools to the app-server session.
-- Current optional standardized tool: `linear_graphql`.
+- Current optional standardized tools: `linear_graphql`, `linear_watch_comments`,
+  `linear_create_issue_comment`.
 - If implemented, supported tools should be advertised to the app-server session during startup
   using the protocol mechanism supported by the targeted Codex app-server version.
 - Unsupported tool names should still return a failure result and continue the session.
+
+`linear_watch_comments` extension contract:
+
+- Purpose: fetch the latest actionable comments for the active issue in the current thread.
+- Availability: only meaningful when the current thread is associated with a specific tracker issue.
+- Input shape: empty JSON object.
+- Result semantics:
+  - Success payload should include the active `issueId` and a normalized list of current comments.
+  - Implementations may exclude workpad comments and comments authored by the current agent session
+    from the returned list.
+
+`linear_create_issue_comment` extension contract:
+
+- Purpose: create a new comment on the active issue in the current thread without forcing the model
+  to compose raw GraphQL.
+- Availability: only meaningful when the current thread is associated with a specific tracker issue.
+- Preferred input shape:
+
+  ```json
+  {
+    "body": "markdown comment body"
+  }
+  ```
+
+- `body` must be a non-empty string.
+- Result semantics:
+  - Success payload should include the active `issueId` and the created `commentId`.
+  - Implementations may use the returned `commentId` to suppress self-authored comment loops during
+    later continuation turns.
 
 `linear_graphql` extension contract:
 
