@@ -310,23 +310,15 @@ defmodule SymphonyElixir.StatusDashboard do
       {:ok, %{running: running, retrying: retrying, codex_totals: codex_totals} = snapshot} ->
         total_tokens = Map.get(codex_totals, :total_tokens, 0)
 
-        snapshot_map =
-          %{
-            running: running,
-            retrying: retrying,
-            codex_totals: codex_totals,
-            rate_limits: Map.get(snapshot, :rate_limits),
-            polling: Map.get(snapshot, :polling)
-          }
-          |> then(fn map ->
-            case Map.get(snapshot, :workflows) do
-              workflows when is_list(workflows) -> Map.put(map, :workflows, workflows)
-              _ -> map
-            end
-          end)
-
         {
-          {:ok, snapshot_map},
+          {:ok,
+           %{
+             running: running,
+             retrying: retrying,
+             codex_totals: codex_totals,
+             rate_limits: Map.get(snapshot, :rate_limits),
+             polling: Map.get(snapshot, :polling)
+           }},
           update_token_samples(token_samples, now_ms, total_tokens)
         }
 
@@ -553,8 +545,7 @@ defmodule SymphonyElixir.StatusDashboard do
   defp format_workflow_rows(workflows) do
     Enum.flat_map(workflows, fn workflow ->
       workflow_name = Map.get(workflow, :workflow_name, "unknown")
-      config_name = workflow_name |> String.split(":") |> List.first()
-      config = Config.settings!(config_name)
+      config = Config.settings!(workflow_name)
       tracker = config.tracker
       agent_count = workflow.counts.running
       retry_count = workflow.counts.retrying
@@ -632,20 +623,12 @@ defmodule SymphonyElixir.StatusDashboard do
   end
 
   defp render_to_terminal(content) do
-    output = IO.iodata_to_binary([
+    IO.write([
       IO.ANSI.home(),
       IO.ANSI.clear(),
       normalize_status_lines(content),
       "\n"
     ])
-
-    case Application.get_env(:symphony_elixir, :io_device) do
-      fd when fd != nil ->
-        :file.write(fd, output)
-
-      _ ->
-        IO.write(output)
-    end
   end
 
   defp update_token_samples(samples, now_ms, total_tokens) do
