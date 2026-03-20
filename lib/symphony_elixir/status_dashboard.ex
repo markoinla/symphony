@@ -553,7 +553,8 @@ defmodule SymphonyElixir.StatusDashboard do
   defp format_workflow_rows(workflows) do
     Enum.flat_map(workflows, fn workflow ->
       workflow_name = Map.get(workflow, :workflow_name, "unknown")
-      config = Config.settings!(workflow_name)
+      config_name = workflow_name |> String.split(":") |> List.first()
+      config = Config.settings!(config_name)
       tracker = config.tracker
       agent_count = workflow.counts.running
       retry_count = workflow.counts.retrying
@@ -631,12 +632,20 @@ defmodule SymphonyElixir.StatusDashboard do
   end
 
   defp render_to_terminal(content) do
-    IO.write([
+    output = IO.iodata_to_binary([
       IO.ANSI.home(),
       IO.ANSI.clear(),
       normalize_status_lines(content),
       "\n"
     ])
+
+    case Application.get_env(:symphony_elixir, :io_device) do
+      fd when fd != nil ->
+        :file.write(fd, output)
+
+      _ ->
+        IO.write(output)
+    end
   end
 
   defp update_token_samples(samples, now_ms, total_tokens) do

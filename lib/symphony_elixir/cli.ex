@@ -20,6 +20,7 @@ defmodule SymphonyElixir.CLI do
 
   @spec main([String.t()]) :: no_return()
   def main(args) do
+    ensure_standard_io()
     case evaluate(args) do
       :ok ->
         wait_for_shutdown()
@@ -238,6 +239,21 @@ defmodule SymphonyElixir.CLI do
   defp set_server_port_override(port) when is_integer(port) and port >= 0 do
     Application.put_env(:symphony_elixir, :server_port_override, port)
     :ok
+  end
+
+  # OTP 28 escripts may not register a :standard_io process, which
+  # Elixir's IO module writes to by default. Open a raw fd for stdout
+  # and store it for the status dashboard to use.
+  defp ensure_standard_io do
+    if Process.whereis(:standard_io) == nil do
+      case :file.open(~c"/dev/tty", [:write]) do
+        {:ok, fd} ->
+          Application.put_env(:symphony_elixir, :io_device, fd)
+
+        _ ->
+          :ok
+      end
+    end
   end
 
   # In escript context, NIF priv dirs are not embedded in the archive.
