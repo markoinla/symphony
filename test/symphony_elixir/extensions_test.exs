@@ -216,14 +216,17 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:ok, nil} = SymphonyElixir.Tracker.create_comment("issue-1", "comment")
     assert :ok = SymphonyElixir.Tracker.update_comment("comment-1", "updated")
     assert :ok = SymphonyElixir.Tracker.update_issue_state("issue-1", "Done")
+    assert :ok = SymphonyElixir.Tracker.add_issue_label("issue-1", "symphony")
     assert_receive {:memory_tracker_comment, "issue-1", "comment"}
     assert_receive {:memory_tracker_comment_update, "comment-1", "updated"}
     assert_receive {:memory_tracker_state_update, "issue-1", "Done"}
+    assert_receive {:memory_tracker_label_add, "issue-1", "symphony"}
 
     Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
     assert {:ok, nil} = Memory.create_comment("issue-1", "quiet")
     assert :ok = Memory.update_comment("comment-quiet", "quiet")
     assert :ok = Memory.update_issue_state("issue-1", "Quiet")
+    assert :ok = Memory.add_issue_label("issue-1", "quiet")
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear")
     assert SymphonyElixir.Tracker.adapter() == Adapter
@@ -360,6 +363,62 @@ defmodule SymphonyElixir.ExtensionsTest do
     )
 
     assert {:error, :issue_update_failed} = Adapter.update_issue_state("issue-1", "Odd")
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{"team" => %{"labels" => %{"nodes" => [%{"id" => "label-1"}]}}}
+           }
+         }},
+        {:ok, %{"data" => %{"issueUpdate" => %{"success" => true}}}}
+      ]
+    )
+
+    assert :ok = Adapter.add_issue_label("issue-1", "symphony")
+    assert_receive {:graphql_called, label_lookup_query, %{issueId: "issue-1", labelName: "symphony"}}
+    assert label_lookup_query =~ "labels"
+
+    assert_receive {:graphql_called, add_label_query, %{issueId: "issue-1", labelIds: ["label-1"]}}
+    assert add_label_query =~ "addedLabelIds"
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{"team" => %{"labels" => %{"nodes" => [%{"id" => "label-1"}]}}}
+           }
+         }},
+        {:ok, %{"data" => %{"issueUpdate" => %{"success" => false}}}}
+      ]
+    )
+
+    assert {:error, :issue_update_failed} = Adapter.add_issue_label("issue-1", "broken")
+
+    Process.put({FakeLinearClient, :graphql_results}, [{:error, :boom}])
+    assert {:error, :boom} = Adapter.add_issue_label("issue-1", "boom")
+
+    Process.put({FakeLinearClient, :graphql_results}, [{:ok, %{"data" => %{}}}])
+    assert {:error, :label_not_found} = Adapter.add_issue_label("issue-1", "missing")
+
+    Process.put(
+      {FakeLinearClient, :graphql_results},
+      [
+        {:ok,
+         %{
+           "data" => %{
+             "issue" => %{"team" => %{"labels" => %{"nodes" => [%{"id" => "label-1"}]}}}
+           }
+         }},
+        :unexpected
+      ]
+    )
+
+    assert {:error, :issue_update_failed} = Adapter.add_issue_label("issue-1", "odd")
   end
 
   test "presenter aggregates multi-workflow state payloads" do

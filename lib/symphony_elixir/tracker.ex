@@ -13,6 +13,7 @@ defmodule SymphonyElixir.Tracker do
   @callback create_comment(String.t(), String.t()) :: {:ok, String.t() | nil} | {:error, term()}
   @callback update_comment(String.t(), String.t()) :: :ok | {:error, term()}
   @callback update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
+  @callback add_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
 
   @spec fetch_candidate_issues() :: {:ok, [term()]} | {:error, term()}
   def fetch_candidate_issues do
@@ -69,6 +70,11 @@ defmodule SymphonyElixir.Tracker do
   @spec update_issue_state(String.t(), String.t()) :: :ok | {:error, term()}
   def update_issue_state(issue_id, state_name) do
     adapter().update_issue_state(issue_id, state_name)
+  end
+
+  @spec add_issue_label(String.t(), String.t()) :: :ok | {:error, term()}
+  def add_issue_label(issue_id, label_name) do
+    adapter().add_issue_label(issue_id, label_name)
   end
 
   @spec adapter() :: module()

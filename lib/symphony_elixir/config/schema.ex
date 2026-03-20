@@ -51,6 +51,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:filter_by, :string, default: "project")
       field(:project_slug, :string)
       field(:label_name, :string)
+      field(:picked_up_label_name, :string)
       field(:organization_slug, :string)
       field(:assignee, :string)
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
@@ -69,6 +70,7 @@ defmodule SymphonyElixir.Config.Schema do
           :filter_by,
           :project_slug,
           :label_name,
+          :picked_up_label_name,
           :organization_slug,
           :assignee,
           :active_states,

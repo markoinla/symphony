@@ -115,6 +115,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp notify_workspace_ready(%Issue{id: issue_id} = issue, workspace, worker_host)
        when is_binary(issue_id) do
+    maybe_tag_issue_pickup(issue)
     host = if is_binary(worker_host), do: worker_host, else: node_hostname()
     body = "Workspace ready: `#{host}:#{workspace}`"
 
@@ -128,6 +129,57 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp notify_workspace_ready(_issue, _workspace, _worker_host), do: :ok
+
+  defp maybe_tag_issue_pickup(%Issue{id: issue_id, labels: labels} = issue)
+       when is_binary(issue_id) and is_list(labels) do
+    case configured_pickup_label_name() do
+      nil ->
+        :ok
+
+      label_name ->
+        maybe_add_pickup_label(issue, labels, label_name)
+    end
+  end
+
+  defp maybe_tag_issue_pickup(_issue), do: :ok
+
+  defp maybe_add_pickup_label(issue, labels, label_name) do
+    if issue_has_label?(labels, label_name) do
+      :ok
+    else
+      add_pickup_label(issue, label_name)
+    end
+  end
+
+  defp add_pickup_label(%Issue{id: issue_id} = issue, label_name) when is_binary(issue_id) do
+    case Tracker.add_issue_label(issue_id, label_name) do
+      :ok ->
+        Logger.info("Added pickup label to #{issue_context(issue)} label=#{inspect(label_name)}")
+
+      {:error, reason} ->
+        Logger.warning("Failed to add pickup label to #{issue_context(issue)} label=#{inspect(label_name)}: #{inspect(reason)}")
+    end
+  end
+
+  defp configured_pickup_label_name do
+    case Config.settings!().tracker.picked_up_label_name do
+      value when is_binary(value) ->
+        value
+        |> String.trim()
+        |> case do
+          "" -> nil
+          trimmed -> trimmed
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp issue_has_label?(labels, label_name) when is_list(labels) and is_binary(label_name) do
+    wanted_label = normalize_issue_state(label_name)
+    Enum.any?(labels, &(normalize_issue_state(&1) == wanted_label))
+  end
 
   defp node_hostname do
     {:ok, hostname} = :inet.gethostname()
