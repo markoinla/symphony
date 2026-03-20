@@ -630,6 +630,159 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert skipped_issue.blocked_by == [%{id: "blocker-3", identifier: "MT-1006", state: "In Progress"}]
   end
 
+  # --- Workflow-specific dispatch eligibility ---
+
+  test "main workflow: Backlog issue is not dispatch-eligible" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "backlog-1",
+      identifier: "BW-254",
+      title: "Import Invoice",
+      state: "Backlog",
+      labels: ["Feature", "enrich"]
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "main workflow: Todo issue is dispatch-eligible" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress", "Merging", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "todo-1",
+      identifier: "SYM-10",
+      title: "Fix auth bug",
+      state: "Todo"
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "enrichment workflow: Backlog issue with enrich label is dispatch-eligible" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_filter_by: "label",
+      tracker_label_name: "enrich",
+      tracker_project_slug: nil,
+      tracker_active_states: ["Backlog", "Todo", "In Progress", "Human Review", "Rework"],
+      tracker_terminal_states: ["Done", "Closed", "Cancelled", "Canceled", "Duplicate"],
+      max_continuations: 0
+    )
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "enrich-1",
+      identifier: "BW-100",
+      title: "Enrich candidate",
+      state: "Backlog",
+      labels: ["Feature", "enrich"]
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "workflow file filter_by is not overridden by DB project overlay" do
+    # Simulate the scenario where a label-based workflow (ENRICHMENT.md) coexists
+    # with a project-based DB project. The workflow file's filter_by: "label" must
+    # survive the deep_merge with the settings overlay that includes filter_by: "project".
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_filter_by: "label",
+      tracker_label_name: "enrich",
+      tracker_project_slug: nil,
+      tracker_active_states: ["Backlog", "Todo", "In Progress"],
+      tracker_terminal_states: ["Done", "Closed"]
+    )
+
+    config = Config.settings!()
+    assert config.tracker.filter_by == "label"
+    assert config.tracker.label_name == "enrich"
+  end
+
+  test "workflow file settings take precedence over overlay for non-nil values" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      poll_interval_ms: 5000,
+      max_concurrent_agents: 3
+    )
+
+    config = Config.settings!()
+    assert config.polling.interval_ms == 5000
+    assert config.agent.max_concurrent_agents == 3
+  end
+
+  test "completed issue is not dispatch-eligible in same state" do
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      completed: %{"done-1" => %{state: "Backlog", count: 1}},
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "done-1",
+      identifier: "BW-101",
+      title: "Already enriched",
+      state: "Backlog"
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "completed issue becomes dispatch-eligible after state change" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Todo", "In Progress", "Rework"],
+      tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
+    )
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      running: %{},
+      claimed: MapSet.new(),
+      completed: %{"rework-1" => %{state: "In Progress", count: 1}},
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "rework-1",
+      identifier: "SYM-20",
+      title: "Needs rework",
+      state: "Rework"
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
   test "workspace remove returns error information for missing directory" do
     random_path =
       Path.join(
@@ -986,8 +1139,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.workspace.root == "env:#{workspace_env_var}"
   end
 
-  test "settings returns an empty overlay map when no local settings file exists" do
-    File.rm(SymphonyElixir.Settings.file_path())
+  test "settings returns an empty overlay map when no settings exist in DB" do
+    SymphonyElixir.Store.delete_all_settings()
 
     assert SymphonyElixir.Settings.config_overlay() == %{}
   end

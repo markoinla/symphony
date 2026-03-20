@@ -442,26 +442,67 @@ defmodule SymphonyElixir.StatusDashboard do
   end
 
   defp format_project_link_lines do
-    tracker = Config.settings!().tracker
+    projects = SymphonyElixir.Store.list_projects()
 
-    project_part =
-      case tracker.project_slug do
-        project_slug when is_binary(project_slug) and project_slug != "" ->
-          colorize(linear_project_url(tracker.organization_slug, project_slug), @ansi_cyan)
+    project_lines =
+      case projects do
+        [] ->
+          # Fall back to workflow config for backwards compatibility
+          tracker = Config.settings!().tracker
 
-        _ ->
-          colorize("n/a", @ansi_gray)
+          project_part =
+            case tracker.project_slug do
+              slug when is_binary(slug) and slug != "" ->
+                colorize(linear_project_url(tracker.organization_slug, slug), @ansi_cyan)
+
+              _ ->
+                colorize("n/a", @ansi_gray)
+            end
+
+          [colorize("│ Project: ", @ansi_bold) <> project_part]
+
+        [single] ->
+          [colorize("│ Project: ", @ansi_bold) <> format_project_display(single)]
+
+        multiple ->
+          [colorize("│ Projects: ", @ansi_bold) <> colorize("#{length(multiple)}", @ansi_green)] ++
+            Enum.map(multiple, fn project ->
+              colorize("│   ", @ansi_gray) <> format_project_display(project)
+            end)
       end
-
-    project_line = colorize("│ Project: ", @ansi_bold) <> project_part
 
     case dashboard_url() do
       url when is_binary(url) ->
-        [project_line, colorize("│ Dashboard: ", @ansi_bold) <> colorize(url, @ansi_cyan)]
+        project_lines ++ [colorize("│ Dashboard: ", @ansi_bold) <> colorize(url, @ansi_cyan)]
 
       _ ->
-        [project_line]
+        project_lines
     end
+  end
+
+  defp format_project_display(%{name: name} = project) do
+    parts = [colorize(name, @ansi_bold)]
+
+    parts =
+      case project.github_repo do
+        repo when is_binary(repo) and repo != "" ->
+          parts ++ [colorize(" (#{repo})", @ansi_gray)]
+
+        _ ->
+          parts
+      end
+
+    parts =
+      case {project.linear_project_slug, project.linear_organization_slug} do
+        {slug, _} when is_binary(slug) and slug != "" ->
+          url = linear_project_url(project.linear_organization_slug, slug)
+          parts ++ [colorize(" → ", @ansi_gray), colorize(url, @ansi_cyan)]
+
+        _ ->
+          parts
+      end
+
+    Enum.join(parts)
   end
 
   defp format_project_refresh_line(%{checking?: true}) do

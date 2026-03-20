@@ -48,6 +48,7 @@ defmodule SymphonyElixir.AgentRunner do
     case Workspace.create_for_issue(issue, worker_host) do
       {:ok, workspace} ->
         send_worker_runtime_info(codex_update_recipient, issue, worker_host, workspace)
+        notify_workspace_ready(issue, workspace, worker_host)
 
         try do
           with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
@@ -104,13 +105,35 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
 
+  defp notify_workspace_ready(%Issue{id: issue_id} = issue, workspace, worker_host)
+       when is_binary(issue_id) do
+    host = if is_binary(worker_host), do: worker_host, else: node_hostname()
+    body = "Workspace ready: `#{host}:#{workspace}`"
+
+    case Tracker.create_comment(issue_id, body) do
+      :ok ->
+        Logger.info("Posted workspace-ready comment for #{issue_context(issue)}")
+
+      {:error, reason} ->
+        Logger.warning("Failed to post workspace-ready comment for #{issue_context(issue)}: #{inspect(reason)}")
+    end
+  end
+
+  defp notify_workspace_ready(_issue, _workspace, _worker_host), do: :ok
+
+  defp node_hostname do
+    {:ok, hostname} = :inet.gethostname()
+    List.to_string(hostname)
+  end
+
   defp run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host) do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
+    project_id = Keyword.get(opts, :project_id)
 
     with {:ok, session} <- AppServer.start_session(workspace, worker_host: worker_host) do
       session_id = session[:session_id] || "session_#{System.unique_integer([:positive])}"
-      start_session_log(issue, session_id)
+      start_session_log(issue, session_id, project_id)
 
       try do
         do_run_codex_turns(
@@ -131,8 +154,8 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp start_session_log(%Issue{id: issue_id} = issue, session_id) when is_binary(issue_id) and is_binary(session_id) do
-    case SessionLog.start_link(issue_id: issue_id, session_id: session_id, issue_identifier: issue.identifier, issue_title: issue.title) do
+  defp start_session_log(%Issue{id: issue_id} = issue, session_id, project_id) when is_binary(issue_id) and is_binary(session_id) do
+    case SessionLog.start_link(issue_id: issue_id, session_id: session_id, issue_identifier: issue.identifier, issue_title: issue.title, project_id: project_id) do
       {:ok, _pid} ->
         :ok
 
@@ -145,7 +168,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp start_session_log(_issue, _session_id), do: :ok
+  defp start_session_log(_issue, _session_id, _project_id), do: :ok
 
   defp stop_session_log(%Issue{id: issue_id}, session_id) when is_binary(issue_id) and is_binary(session_id) do
     SessionLog.stop(issue_id, session_id)

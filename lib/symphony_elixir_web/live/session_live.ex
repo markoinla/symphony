@@ -391,7 +391,7 @@ defmodule SymphonyElixirWeb.SessionLive do
   end
 
   defp orchestrator do
-    Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator
+    Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator.default_source()
   end
 
   defp snapshot_timeout_ms do
@@ -486,20 +486,26 @@ defmodule SymphonyElixirWeb.SessionLive do
 
   defp safe_atom_type(_type), do: :response
 
+  @known_metadata_keys %{
+    "status" => :status,
+    "args" => :args,
+    "error" => :error,
+    "reason" => :reason,
+    "decision" => :decision
+  }
+
   defp decode_metadata(nil), do: %{}
 
   defp decode_metadata(json) when is_binary(json) do
     case Jason.decode(json) do
       {:ok, map} when is_map(map) ->
         Map.new(map, fn {k, v} ->
-          {String.to_existing_atom(k), v}
+          {Map.get(@known_metadata_keys, k, k), v}
         end)
 
       _ ->
         %{}
     end
-  rescue
-    ArgumentError -> %{}
   end
 
   defp decode_metadata(_), do: %{}

@@ -24,6 +24,6 @@ defmodule SymphonyElixir.Store.Message do
     message
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
-    |> validate_inclusion(:type, ~w(response tool_call thinking turn_boundary error))
+    |> validate_inclusion(:type, ~w(response tool_call thinking reasoning_summary turn_boundary error))
   end
 end

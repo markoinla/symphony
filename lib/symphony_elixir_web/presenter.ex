@@ -386,7 +386,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
   @spec history_payload(keyword()) :: map()
   def history_payload(opts \\ []) do
-    sessions = Store.list_sessions(opts)
+    sessions = Store.list_sessions(Keyword.take(opts, [:limit, :offset, :issue_identifier, :status, :project_id]))
 
     %{
       sessions:

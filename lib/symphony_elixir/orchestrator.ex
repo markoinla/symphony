@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
-  alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Store, Tracker, Workflow, Workspace}
+  alias SymphonyElixir.{AgentRunner, Config, Settings, StatusDashboard, Store, Store.Project, Tracker, Workflow, Workspace}
   alias SymphonyElixir.Linear.Issue
   @registry SymphonyElixir.OrchestratorRegistry
 
@@ -35,8 +35,10 @@ defmodule SymphonyElixir.Orchestrator do
       :poll_check_in_progress,
       :tick_timer_ref,
       :tick_token,
+      :project_id,
+      :project,
       running: %{},
-      completed: MapSet.new(),
+      completed: %{},
       claimed: MapSet.new(),
       retry_attempts: %{},
       codex_totals: nil,
@@ -47,9 +49,10 @@ defmodule SymphonyElixir.Orchestrator do
   @spec child_spec(keyword()) :: Supervisor.child_spec()
   def child_spec(opts) do
     workflow_name = Keyword.get(opts, :workflow_name, Workflow.default_workflow_name())
+    project_id = Keyword.get(opts, :project_id)
 
     %{
-      id: {__MODULE__, workflow_name},
+      id: {__MODULE__, workflow_name, project_id},
       start: {__MODULE__, :start_link, [opts]}
     }
   end
@@ -57,26 +60,27 @@ defmodule SymphonyElixir.Orchestrator do
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
     workflow_name = Keyword.get(opts, :workflow_name, Workflow.default_workflow_name())
-    name = Keyword.get(opts, :name, workflow_server(workflow_name))
+    project_id = Keyword.get(opts, :project_id)
+    name = Keyword.get(opts, :name, workflow_server(workflow_name, project_id))
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
-  @spec workflow_server(String.t()) :: {:via, Registry, {module(), String.t()}}
-  def workflow_server(workflow_name) when is_binary(workflow_name) do
-    {:via, Registry, {@registry, workflow_name}}
+  @spec workflow_server(String.t(), integer() | nil) :: {:via, Registry, {module(), String.t()}}
+  def workflow_server(workflow_name, project_id \\ nil) when is_binary(workflow_name) do
+    key = if project_id, do: "#{workflow_name}:#{project_id}", else: workflow_name
+    {:via, Registry, {@registry, key}}
   end
 
   @spec workflow_servers() :: [{String.t(), GenServer.name()}]
   def workflow_servers do
-    Enum.map(Workflow.workflow_names(), fn workflow_name ->
-      {workflow_name, workflow_server(workflow_name)}
-    end)
+    Registry.select(@registry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+    |> Enum.map(fn key -> {key, {:via, Registry, {@registry, key}}} end)
   end
 
   @spec default_source() :: GenServer.name() | [{String.t(), GenServer.name()}]
   def default_source do
     case workflow_servers() do
-      [{_workflow_name, server}] -> server
+      [{_key, server}] -> server
       servers -> servers
     end
   end
@@ -85,6 +89,10 @@ defmodule SymphonyElixir.Orchestrator do
   def init(opts) do
     workflow_name = Keyword.get(opts, :workflow_name, Workflow.default_workflow_name())
     :ok = Workflow.put_current_workflow_name(workflow_name)
+
+    project = resolve_project(Keyword.get(opts, :project_id))
+    :ok = Settings.put_current_project(project)
+
     now_ms = System.monotonic_time(:millisecond)
     config = Config.settings!(workflow_name)
 
@@ -96,6 +104,8 @@ defmodule SymphonyElixir.Orchestrator do
       poll_check_in_progress: false,
       tick_timer_ref: nil,
       tick_token: nil,
+      project_id: if(project, do: project.id),
+      project: project,
       codex_totals: @empty_codex_totals,
       codex_rate_limits: nil
     }
@@ -599,7 +609,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp should_dispatch_issue?(
          %Issue{} = issue,
-         %State{running: running, claimed: claimed} = state,
+         %State{running: running, claimed: claimed, completed: completed} = state,
          active_states,
          terminal_states
        ) do
@@ -607,12 +617,23 @@ defmodule SymphonyElixir.Orchestrator do
       !todo_issue_blocked_by_non_terminal?(issue, terminal_states) and
       !MapSet.member?(claimed, issue.id) and
       !Map.has_key?(running, issue.id) and
+      !issue_completed_in_current_state?(issue, completed) and
       available_slots(state) > 0 and
       state_slots_available?(issue, running) and
       worker_slots_available?(state)
   end
 
   defp should_dispatch_issue?(_issue, _state, _active_states, _terminal_states), do: false
+
+  defp issue_completed_in_current_state?(%Issue{id: id, state: current_state}, completed) do
+    case Map.get(completed, id) do
+      %{state: completed_state} ->
+        normalize_issue_state(current_state || "") == normalize_issue_state(completed_state || "")
+
+      _ ->
+        false
+    end
+  end
 
   defp state_slots_available?(%Issue{state: issue_state}, running) when is_map(running) do
     limit = Config.max_concurrent_agents_for_state(issue_state)
@@ -741,7 +762,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host) do
     case Task.Supervisor.start_child(
            SymphonyElixir.TaskSupervisor,
-           fn -> run_issue_task(state.workflow_name, issue, recipient, attempt, worker_host) end
+           fn -> run_issue_task(state.workflow_name, issue, recipient, attempt, worker_host, state.project_id, state.project) end
          ) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
@@ -791,12 +812,27 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp run_issue_task(workflow_name, issue, recipient, attempt, worker_host)
+  defp run_issue_task(workflow_name, issue, recipient, attempt, worker_host, project_id, project)
        when is_binary(workflow_name) do
+    Settings.put_current_project(project)
+
     Workflow.with_workflow(workflow_name, fn ->
-      AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host)
+      AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host, project_id: project_id)
     end)
   end
+
+  defp resolve_project(nil) do
+    case Store.list_projects() do
+      [%Project{} = project | _] -> project
+      _ -> nil
+    end
+  end
+
+  defp resolve_project(id) when is_integer(id) do
+    Store.get_project(id)
+  end
+
+  defp resolve_project(_), do: nil
 
   defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states)
        when is_binary(issue_id) and is_function(issue_fetcher, 1) do
@@ -819,11 +855,27 @@ defmodule SymphonyElixir.Orchestrator do
   defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states), do: {:ok, issue}
 
   defp complete_issue(%State{} = state, issue_id) do
+    issue_state = running_issue_state(state, issue_id)
+    prev = Map.get(state.completed, issue_id)
+
+    entry =
+      case prev do
+        %{state: ^issue_state, count: c} -> %{state: issue_state, count: c + 1}
+        _ -> %{state: issue_state, count: 1}
+      end
+
     %{
       state
-      | completed: MapSet.put(state.completed, issue_id),
+      | completed: Map.put(state.completed, issue_id, entry),
         retry_attempts: Map.delete(state.retry_attempts, issue_id)
     }
+  end
+
+  defp running_issue_state(%State{running: running}, issue_id) do
+    case Map.get(running, issue_id) do
+      %{issue: %Issue{state: state}} -> state
+      _ -> nil
+    end
   end
 
   defp schedule_issue_retry(%State{} = state, issue_id, attempt, metadata)
@@ -957,22 +1009,33 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_active_retry(state, issue, attempt, metadata) do
-    if retry_candidate_issue?(issue, terminal_state_set()) and
-         dispatch_slots_available?(issue, state) and
-         worker_slots_available?(state, metadata[:worker_host]) do
-      {:noreply, dispatch_issue(state, issue, attempt, metadata[:worker_host])}
-    else
-      Logger.debug("No available slots for retrying #{issue_context(issue)}; retrying again")
+    max_continuations = Config.settings!().agent.max_continuations
+    completion_entry = Map.get(state.completed, issue.id)
+    completion_count = if completion_entry, do: completion_entry.count, else: 0
 
-      {:noreply,
-       schedule_issue_retry(
-         state,
-         issue.id,
-         attempt + 1,
-         Map.merge(metadata, %{
-           identifier: issue.identifier,
-           error: "no available orchestrator slots"
-         })
+    cond do
+      metadata[:delay_type] == :continuation and completion_count > max_continuations ->
+        Logger.info("Issue reached max continuations (#{completion_count}/#{max_continuations}): #{issue_context(issue)}; releasing claim")
+
+        {:noreply, release_issue_claim(state, issue.id)}
+
+      retry_candidate_issue?(issue, terminal_state_set()) and
+          dispatch_slots_available?(issue, state) and
+          worker_slots_available?(state, metadata[:worker_host]) ->
+        {:noreply, dispatch_issue(state, issue, attempt, metadata[:worker_host])}
+
+      true ->
+        Logger.debug("No available slots for retrying #{issue_context(issue)}; retrying again")
+
+        {:noreply,
+         schedule_issue_retry(
+           state,
+           issue.id,
+           attempt + 1,
+           Map.merge(metadata, %{
+             identifier: issue.identifier,
+             error: "no available orchestrator slots"
+           })
        )}
     end
   end

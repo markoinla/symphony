@@ -76,6 +76,7 @@ defmodule SymphonyElixirWeb.Layouts do
     <nav class="global-nav">
       <a href="/" class="nav-link">Dashboard</a>
       <a href="/history" class="nav-link">History</a>
+      <a href="/projects" class="nav-link">Projects</a>
       <a href="/settings" class="nav-link">Settings</a>
       <button class="theme-toggle" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme">
         <svg class="theme-toggle-sun" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

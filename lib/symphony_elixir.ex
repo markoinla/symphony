@@ -33,13 +33,12 @@ defmodule SymphonyElixir.Application do
         SymphonyElixir.Repo,
         SymphonyElixir.Store.Migrator,
         {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
-        SymphonyElixir.WorkflowStore
-      ] ++
-        orchestrator_children() ++
-        [
-          SymphonyElixir.HttpServer,
-          SymphonyElixir.StatusDashboard
-        ]
+        SymphonyElixir.WorkflowStore,
+        {DynamicSupervisor, name: SymphonyElixir.OrchestratorSupervisor, strategy: :one_for_one},
+        SymphonyElixir.OrchestratorStarter,
+        SymphonyElixir.HttpServer,
+        SymphonyElixir.StatusDashboard
+      ]
 
     Supervisor.start_link(
       children,
@@ -61,10 +60,4 @@ defmodule SymphonyElixir.Application do
     end
   end
 
-  defp orchestrator_children do
-    SymphonyElixir.Workflow.workflow_names()
-    |> Enum.map(fn workflow_name ->
-      {SymphonyElixir.Orchestrator, workflow_name: workflow_name}
-    end)
-  end
 end
