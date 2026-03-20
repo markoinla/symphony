@@ -970,6 +970,10 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "Do not include \"next steps for user\""
     assert prompt =~ "open and follow `.codex/skills/land/SKILL.md`"
     assert prompt =~ "Do not call `gh pr merge` directly"
+    assert prompt =~ "mutation CreateRelation($issueId: String!, $relatedIssueId: String!, $type: IssueRelationType!)"
+    assert prompt =~ "Type values: `\"blocks\"`, `\"related\"`, `\"duplicate\"`, `\"similar\"`"
+    assert prompt =~ "use `blocks` when the current issue must be"
+    refute prompt =~ "blockedBy"
     assert prompt =~ "Continuation context:"
     assert prompt =~ "retry attempt #2"
   end
