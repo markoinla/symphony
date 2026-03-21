@@ -158,6 +158,28 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
     assert Floki.attribute(thinking_details, "id") != []
   end
 
+  test "shared session routes render the scroll-bottom hook and jump control" do
+    issue_identifier = unique_issue_identifier()
+    session = create_session!(issue_identifier: issue_identifier, issue_title: "Scroll hook")
+
+    append_message!(session.id, 1, "response", "Historical response")
+
+    for path <- ["/session/#{URI.encode(issue_identifier)}", "/history/#{session.id}"] do
+      {:ok, _view, html} = live(build_conn(), path)
+      {:ok, document} = Floki.parse_document(html)
+
+      [message_list] = Floki.find(document, "#message-list.chat-thread")
+      [scroll_button] = Floki.find(document, "[data-scroll-bottom-button]")
+      [scroll_anchor] = Floki.find(document, "[data-scroll-bottom-anchor]")
+
+      assert Floki.attribute(message_list, "phx-hook") == ["ScrollBottom"]
+      assert Floki.attribute(scroll_button, "aria-controls") == ["message-list"]
+      assert Floki.attribute(scroll_anchor, "aria-hidden") == ["true"]
+      assert Floki.text(scroll_button) =~ "Latest"
+      assert document |> Floki.find("#message-list [data-chat-entry]") |> length() == 2
+    end
+  end
+
   test "legacy history detail path renders through the unified session view" do
     issue_identifier = unique_issue_identifier()
     session = create_session!(issue_identifier: issue_identifier, issue_title: "Legacy history alias")

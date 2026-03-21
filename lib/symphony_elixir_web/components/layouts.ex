@@ -47,6 +47,52 @@ defmodule SymphonyElixirWeb.Layouts do
             if (!window.Phoenix || !window.LiveView) return;
 
             var Hooks = {};
+            var scrollButtonThreshold = 72;
+            var scrollButtonTarget = function (list) {
+              var page = document.scrollingElement || document.documentElement;
+
+              return list.scrollHeight > list.clientHeight + scrollButtonThreshold ? list : page;
+            };
+            var syncScrollBottomButtons = function () {
+              document
+                .querySelectorAll("[data-scroll-bottom-button]")
+                .forEach(function (button) {
+                  var layout = button.closest(".chat-layout");
+                  var list = layout && layout.querySelector("#message-list");
+
+                  if (!list) return;
+
+                  var target = scrollButtonTarget(list);
+                  var visible =
+                    target.scrollHeight - target.scrollTop - target.clientHeight >
+                      scrollButtonThreshold &&
+                    list.querySelectorAll("[data-chat-entry]").length > 0;
+
+                  button.classList.toggle("is-visible", visible);
+                  button.setAttribute("aria-hidden", visible ? "false" : "true");
+                  button.tabIndex = visible ? 0 : -1;
+                });
+            };
+
+            document.addEventListener("click", function (event) {
+              var button = event.target.closest("[data-scroll-bottom-button]");
+
+              if (!button) return;
+
+              var layout = button.closest(".chat-layout");
+              var list = layout && layout.querySelector("#message-list");
+
+              if (!list) return;
+
+              var target = scrollButtonTarget(list);
+              event.preventDefault();
+              target.scrollTo({ top: target.scrollHeight, behavior: "smooth" });
+              window.requestAnimationFrame(syncScrollBottomButtons);
+            });
+
+            window.addEventListener("scroll", syncScrollBottomButtons, { passive: true });
+            document.addEventListener("scroll", syncScrollBottomButtons, { passive: true });
+
             Hooks.ScrollBottom = {
               mounted() {
                 this.threshold = 72;
@@ -54,12 +100,28 @@ defmodule SymphonyElixirWeb.Layouts do
                 this.lastEntryCount = this.entryCount();
                 this.lastScrollHeight = this.el.scrollHeight;
                 this.following = true;
+                this.frame = null;
+                this.intersectionObserver = null;
+                this.intersectionRoot = null;
+                this.observedAnchor = null;
+                this.scrollMonitor = null;
+                this.resizeObserver = null;
+                this.scrollAnchor = null;
+                this.scrollTarget = null;
+                this.scrollListenerTargets = [];
+                this.scrollButton = null;
+                this.onButtonClick = null;
                 this.onScroll = () => {
-                  this.following = this.distanceFromBottom() <= this.threshold;
+                  this.refreshFollowingState();
                 };
 
-                this.el.addEventListener("scroll", this.onScroll, { passive: true });
-                this.scrollToBottom();
+                this.refreshScrollTarget();
+                this.refreshScrollAnchor();
+                this.refreshScrollButton();
+                this.refreshIntersectionObserver();
+                this.refreshResizeObserver();
+                this.scrollMonitor = window.setInterval(() => this.refreshFollowingState(), 150);
+                this.deferScrollToBottom();
               },
               beforeUpdate() {
                 this.wasFollowing = this.following;
@@ -67,28 +129,208 @@ defmodule SymphonyElixirWeb.Layouts do
                 this.lastScrollHeight = this.el.scrollHeight;
               },
               updated() {
+                this.refreshScrollTarget();
+                this.refreshScrollAnchor();
+                this.refreshScrollButton();
+                this.refreshIntersectionObserver();
+                this.refreshResizeObserver();
                 var grew = this.el.scrollHeight > (this.lastScrollHeight || 0) + 4;
                 var hasNewEntries = this.entryCount() > (this.lastEntryCount || 0);
 
                 if (this.wasFollowing && (grew || hasNewEntries)) {
-                  this.scrollToBottom(hasNewEntries ? "smooth" : "auto");
+                  this.deferScrollToBottom(hasNewEntries ? "smooth" : "auto");
+                } else {
+                  this.syncScrollButton();
                 }
 
                 this.lastScrollHeight = this.el.scrollHeight;
               },
               destroyed() {
-                if (this.onScroll) this.el.removeEventListener("scroll", this.onScroll);
+                if (this.frame) cancelAnimationFrame(this.frame);
+                if (this.intersectionObserver) this.intersectionObserver.disconnect();
+                if (this.scrollMonitor) window.clearInterval(this.scrollMonitor);
+                if (this.resizeObserver) this.resizeObserver.disconnect();
+                if (this.onScroll) {
+                  this.scrollListenerTargets.forEach((target) => {
+                    target.removeEventListener("scroll", this.onScroll);
+                  });
+                }
+                if (this.scrollButton && this.onButtonClick) {
+                  this.scrollButton.removeEventListener("click", this.onButtonClick);
+                }
               },
               distanceFromBottom() {
-                return this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight;
+                var target = this.currentScrollTarget();
+
+                return target.scrollHeight - target.scrollTop - target.clientHeight;
               },
               entryCount() {
                 return this.el.querySelectorAll("[data-chat-entry]").length;
               },
               scrollToBottom(behavior) {
-                this.el.scrollTo({ top: this.el.scrollHeight, behavior: behavior || "auto" });
+                var target = this.currentScrollTarget();
+
+                target.scrollTo({
+                  top: target.scrollHeight,
+                  behavior: behavior || "auto"
+                });
+
                 this.following = true;
                 this.lastScrollHeight = this.el.scrollHeight;
+                this.syncScrollButton();
+              },
+              deferScrollToBottom(behavior) {
+                if (this.frame) cancelAnimationFrame(this.frame);
+
+                this.frame = requestAnimationFrame(() => {
+                  this.frame = null;
+                  this.scrollToBottom(behavior);
+                });
+              },
+              refreshScrollButton() {
+                var layout = this.el.closest(".chat-layout") || this.el.parentElement;
+                var nextButton =
+                  layout && layout.querySelector("[data-scroll-bottom-button]");
+
+                if (this.scrollButton === nextButton) return;
+
+                if (this.scrollButton && this.onButtonClick) {
+                  this.scrollButton.removeEventListener("click", this.onButtonClick);
+                }
+
+                this.scrollButton = nextButton;
+
+                if (!this.scrollButton) return;
+
+                this.onButtonClick = (event) => {
+                  event.preventDefault();
+                  this.scrollToBottom("smooth");
+                };
+
+                this.scrollButton.addEventListener("click", this.onButtonClick);
+                this.syncScrollButton();
+              },
+              refreshScrollAnchor() {
+                this.scrollAnchor = this.el.querySelector("[data-scroll-bottom-anchor]");
+              },
+              refreshIntersectionObserver() {
+                if (!window.IntersectionObserver) return;
+
+                if (!this.scrollAnchor) {
+                  if (this.intersectionObserver) this.intersectionObserver.disconnect();
+                  this.intersectionObserver = null;
+                  this.intersectionRoot = null;
+                  this.observedAnchor = null;
+                  return;
+                }
+
+                var root = this.currentScrollTarget() === this.el ? this.el : null;
+
+                if (
+                  this.intersectionObserver &&
+                    this.intersectionRoot === root &&
+                    this.observedAnchor === this.scrollAnchor
+                ) {
+                  return;
+                }
+
+                if (this.intersectionObserver) this.intersectionObserver.disconnect();
+
+                this.intersectionRoot = root;
+                this.observedAnchor = this.scrollAnchor;
+                this.intersectionObserver = new window.IntersectionObserver(
+                  (entries) => {
+                    var entry = entries[entries.length - 1];
+
+                    if (!entry) return;
+
+                    this.following = entry.isIntersecting;
+                    this.syncScrollButton();
+                  },
+                  {
+                    root: root,
+                    rootMargin: "0px 0px " + this.threshold + "px 0px",
+                    threshold: 1
+                  }
+                );
+
+                this.intersectionObserver.observe(this.scrollAnchor);
+              },
+              refreshFollowingState() {
+                var following = this.distanceFromBottom() <= this.threshold;
+
+                if (this.following === following) return;
+
+                this.following = following;
+                this.syncScrollButton();
+              },
+              syncScrollButton() {
+                if (!this.scrollButton) return;
+
+                var visible = !this.following && this.entryCount() > 0;
+
+                this.scrollButton.classList.toggle("is-visible", visible);
+                this.scrollButton.setAttribute("aria-hidden", visible ? "false" : "true");
+                this.scrollButton.tabIndex = visible ? 0 : -1;
+              },
+              currentScrollTarget() {
+                return this.scrollTarget || this.el;
+              },
+              refreshScrollTarget() {
+                var page = document.scrollingElement || document.documentElement;
+                var nextTarget =
+                  this.el.scrollHeight > this.el.clientHeight + this.threshold ? this.el : page;
+                var nextListenerTargets =
+                  nextTarget === page ? [window, document, page] : [nextTarget];
+
+                if (
+                  this.scrollTarget === nextTarget &&
+                    this.scrollListenerTargets.length === nextListenerTargets.length &&
+                    this.scrollListenerTargets.every((target, index) => target === nextListenerTargets[index])
+                ) {
+                  return;
+                }
+
+                if (this.onScroll) {
+                  this.scrollListenerTargets.forEach((target) => {
+                    target.removeEventListener("scroll", this.onScroll);
+                  });
+                }
+
+                this.scrollTarget = nextTarget;
+                this.scrollListenerTargets = nextListenerTargets;
+
+                if (this.onScroll) {
+                  this.scrollListenerTargets.forEach((target) => {
+                    target.addEventListener("scroll", this.onScroll, {
+                      passive: true
+                    });
+                  });
+                }
+
+                this.following = this.distanceFromBottom() <= this.threshold;
+                this.syncScrollButton();
+              },
+              refreshResizeObserver() {
+                if (!window.ResizeObserver) return;
+
+                if (!this.resizeObserver) {
+                  this.resizeObserver = new window.ResizeObserver(() => {
+                    this.refreshScrollTarget();
+
+                    if (this.following) {
+                      this.deferScrollToBottom();
+                    } else {
+                      this.syncScrollButton();
+                    }
+                  });
+                }
+
+                this.resizeObserver.disconnect();
+                this.resizeObserver.observe(this.el);
+
+                var container = this.el.querySelector(".chat-messages");
+                if (container && container !== this.el) this.resizeObserver.observe(container);
               }
             };
 
@@ -99,6 +341,8 @@ defmodule SymphonyElixirWeb.Layouts do
 
             liveSocket.connect();
             window.liveSocket = liveSocket;
+            window.setInterval(syncScrollBottomButtons, 150);
+            syncScrollBottomButtons();
           });
         </script>
         <link rel="stylesheet" href="/dashboard.css" />
