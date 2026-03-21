@@ -372,8 +372,23 @@ defmodule SymphonyElixirWeb.Presenter do
       (running && Map.get(running, :workflow_name)) || (retry && Map.get(retry, :workflow_name))
 
     case workflow_name do
-      name when is_binary(name) -> Config.settings!(name).workspace.root
+      name when is_binary(name) -> Config.settings!(base_workflow_name(name)).workspace.root
       _ -> Config.settings!().workspace.root
+    end
+  end
+
+  # Registry keys may include a project-id suffix (e.g. "WORKFLOW:4").
+  # Strip it to get the base workflow name used by Workflow/Config.
+  defp base_workflow_name(name) do
+    case String.split(name, ":", parts: 2) do
+      [base, suffix] ->
+        case Integer.parse(suffix) do
+          {_id, ""} -> base
+          _ -> name
+        end
+
+      _ ->
+        name
     end
   end
 
