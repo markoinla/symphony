@@ -37,6 +37,9 @@ erl_crash.dump
 # IDE folders.
 .idea/
 .vscode/
+
+# Vite cache.
+dashboard/.vite/
 /bin/
 
 # Local environment and auth artifacts.
