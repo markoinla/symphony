@@ -167,17 +167,31 @@ codex:
 - If `WORKFLOW.md` is missing or has invalid YAML at startup, Symphony does not boot.
 - If a later reload fails, Symphony keeps running with the last known good workflow for that file
   and logs the reload error until the file is fixed.
-- `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API at
-  `/`, `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
+- `server.port` or CLI `--port` enables the optional Phoenix observability service, which serves
+  the React dashboard SPA at `/` plus the JSON and SSE API under `/api/v1/*`.
 
 ## Web dashboard
 
-The observability UI now runs on a minimal Phoenix stack:
+The observability UI now runs as a React SPA on a minimal Phoenix stack:
 
-- LiveView for the dashboard at `/`
-- JSON API for operational debugging under `/api/v1/*`
-- Bandit as the HTTP server
-- Phoenix dependency static assets for the LiveView client bootstrap
+- Vite + React serves the dashboard experience from a static bundle under `/`
+- TanStack Query and SSE drive the live dashboard and session views
+- JSON API endpoints power dashboard, history, projects, settings, and session data under `/api/v1/*`
+- Bandit serves both the API and the built SPA assets
+
+Development:
+
+```bash
+mix phx.server
+cd dashboard && npm run dev
+```
+
+Production:
+
+```bash
+mix assets.build
+mix release
+```
 
 ## Project Layout
 

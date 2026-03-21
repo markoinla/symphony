@@ -39,25 +39,19 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
-  @spec messages_payload(String.t(), GenServer.name() | [{String.t(), GenServer.name()}], timeout()) ::
-          {:ok, map()} | {:error, :issue_not_found | :session_log_not_found}
+  @spec messages_payload(String.t(), GenServer.name() | [{String.t(), GenServer.name()}], timeout()) :: {:ok, map()}
   def messages_payload(issue_identifier, orchestrator, snapshot_timeout_ms) do
-    with {:ok, payload} <- issue_payload(issue_identifier, orchestrator, snapshot_timeout_ms),
-         {:ok, issue_id, session_id} <- payload_message_context(payload),
-         {:ok, msgs} <- SessionLog.get_messages(issue_id, session_id) do
-      {:ok,
-       %{
-         issue_identifier: issue_identifier,
-         session_id: session_id,
-         messages: Enum.map(msgs, &message_payload/1)
-       }}
-    else
-      {:error, :not_found} -> {:error, :session_log_not_found}
-      {:error, reason} -> {:error, reason}
-    end
+    payload =
+      case issue_payload(issue_identifier, orchestrator, snapshot_timeout_ms) do
+        {:ok, issue_payload} -> issue_payload
+        {:error, _reason} -> nil
+      end
+
+    {:ok, timeline_payload(issue_identifier, payload)}
   end
 
-  defp message_payload(msg) do
+  @spec message_payload(map()) :: map()
+  def message_payload(msg) do
     %{
       id: msg.id,
       timestamp: iso8601(msg.timestamp),
@@ -65,22 +59,6 @@ defmodule SymphonyElixirWeb.Presenter do
       content: msg.content,
       metadata: msg.metadata
     }
-  end
-
-  defp payload_message_context(payload) when is_map(payload) do
-    issue_id = payload[:issue_id]
-
-    session_id =
-      case payload[:running] do
-        %{session_id: sid} when is_binary(sid) -> sid
-        _ -> nil
-      end
-
-    if issue_id && session_id do
-      {:ok, issue_id, session_id}
-    else
-      {:error, :session_log_not_found}
-    end
   end
 
   @spec refresh_payload(GenServer.name() | [{String.t(), GenServer.name()}]) :: {:ok, map()} | {:error, :unavailable}
@@ -239,6 +217,7 @@ defmodule SymphonyElixirWeb.Presenter do
     %{
       issue_identifier: issue_identifier,
       issue_id: issue_id_from_entries(running, retry),
+      issue_title: issue_title_from_entries(running, retry),
       status: issue_status(running, retry),
       workspace: %{
         path: workspace_path(issue_identifier, running, retry),
@@ -261,6 +240,22 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp issue_id_from_entries(running, retry),
     do: (running && running.issue_id) || (retry && retry.issue_id)
+
+  defp issue_title_from_entries(running, retry) do
+    running_title =
+      case running do
+        %{issue: %{title: title}} when is_binary(title) and title != "" -> title
+        _ -> nil
+      end
+
+    retry_title =
+      case retry do
+        %{issue: %{title: title}} when is_binary(title) and title != "" -> title
+        _ -> nil
+      end
+
+    running_title || retry_title
+  end
 
   defp restart_count(retry), do: max(retry_attempt(retry) - 1, 0)
   defp retry_attempt(nil), do: 0
@@ -404,25 +399,33 @@ defmodule SymphonyElixirWeb.Presenter do
     sessions = Store.list_sessions(Keyword.take(opts, [:limit, :offset, :issue_identifier, :status, :project_id]))
 
     %{
-      sessions:
-        Enum.map(sessions, fn s ->
-          %{
-            id: s.id,
-            issue_identifier: s.issue_identifier,
-            issue_title: s.issue_title,
-            session_id: s.session_id,
-            status: s.status,
-            started_at: iso8601(s.started_at),
-            ended_at: iso8601(s.ended_at),
-            turn_count: s.turn_count,
-            input_tokens: s.input_tokens,
-            output_tokens: s.output_tokens,
-            total_tokens: s.total_tokens,
-            worker_host: s.worker_host,
-            error: s.error
-          }
-        end)
+      sessions: Enum.map(sessions, &session_summary_payload/1)
     }
+  end
+
+  @spec projects_payload() :: map()
+  def projects_payload do
+    %{projects: Enum.map(Store.list_projects(), &project_payload/1)}
+  end
+
+  @spec project_lookup_payload(integer()) :: {:ok, map()} | {:error, :not_found}
+  def project_lookup_payload(id) when is_integer(id) do
+    case Store.get_project(id) do
+      nil -> {:error, :not_found}
+      project -> {:ok, %{project: project_payload(project)}}
+    end
+  end
+
+  @spec settings_payload() :: map()
+  def settings_payload do
+    settings =
+      Store.list_settings()
+      |> Enum.sort_by(& &1.key)
+      |> Enum.map(fn setting ->
+        %{key: setting.key, value: setting.value}
+      end)
+
+    %{settings: settings}
   end
 
   @spec historical_messages_payload(integer()) :: {:ok, map()} | {:error, :not_found}
@@ -477,6 +480,177 @@ defmodule SymphonyElixirWeb.Presenter do
     Map.new(map, fn {k, v} -> {String.to_existing_atom(k), v} end)
   rescue
     ArgumentError -> map
+  end
+
+  defp timeline_payload(issue_identifier, payload) do
+    {issue_id, current_session_id} = extract_session_keys(payload)
+
+    historical_sessions =
+      issue_identifier
+      |> load_past_sessions(current_session_id)
+      |> Enum.map(&historical_session_payload/1)
+
+    live_session =
+      live_session_payload(issue_id, current_session_id, payload)
+
+    sessions =
+      case live_session do
+        nil -> historical_sessions
+        session -> historical_sessions ++ [session]
+      end
+
+    %{
+      issue_identifier: issue_identifier,
+      issue_id: issue_id,
+      issue_title: timeline_issue_title(sessions, payload),
+      status: payload_status(payload, sessions),
+      active_session_id: current_session_id,
+      sessions: sessions
+    }
+  end
+
+  defp load_past_sessions(issue_identifier, current_session_id) do
+    Store.list_sessions(issue_identifier: issue_identifier, limit: 50)
+    |> Enum.reject(fn session -> current_session_id && session.session_id == current_session_id end)
+    |> Enum.reverse()
+  end
+
+  defp historical_session_payload(session) do
+    messages =
+      session.id
+      |> Store.get_session_messages()
+      |> Enum.map(fn message ->
+        %{
+          id: message.seq,
+          timestamp: iso8601(message.timestamp),
+          type: message.type,
+          content: message.content,
+          metadata: decode_metadata(message.metadata)
+        }
+      end)
+
+    session_summary_payload(session)
+    |> Map.put(:live, false)
+    |> Map.put(:messages, messages)
+  end
+
+  defp live_session_payload(issue_id, current_session_id, payload)
+       when is_binary(issue_id) and is_binary(current_session_id) do
+    running = live_running(payload)
+
+    %{
+      id: nil,
+      issue_identifier: live_issue_identifier(payload),
+      issue_title: nil,
+      session_id: current_session_id,
+      status: "running",
+      started_at: Map.get(running, :started_at),
+      ended_at: nil,
+      turn_count: Map.get(running, :turn_count),
+      input_tokens: live_token(running, :input_tokens),
+      output_tokens: live_token(running, :output_tokens),
+      total_tokens: live_token(running, :total_tokens),
+      worker_host: Map.get(running, :worker_host),
+      error: nil,
+      live: true,
+      messages: live_session_messages(issue_id, current_session_id)
+    }
+  end
+
+  defp live_session_payload(_issue_id, _current_session_id, _payload), do: nil
+
+  defp live_session_messages(issue_id, current_session_id) do
+    case SessionLog.get_messages(issue_id, current_session_id) do
+      {:ok, items} -> Enum.map(items, &message_payload/1)
+      {:error, _reason} -> []
+    end
+  end
+
+  defp live_running(%{running: running}) when is_map(running), do: running
+  defp live_running(_payload), do: %{}
+
+  defp live_issue_identifier(%{issue_identifier: issue_identifier})
+       when is_binary(issue_identifier),
+       do: issue_identifier
+
+  defp live_issue_identifier(_payload), do: nil
+
+  defp live_token(running, key), do: get_in(running, [:tokens, key])
+
+  defp timeline_issue_title([], payload) when is_map(payload) do
+    payload[:issue_title]
+  end
+
+  defp timeline_issue_title(sessions, payload) do
+    sessions
+    |> Enum.reverse()
+    |> Enum.find_value(payload && payload[:issue_title], fn session ->
+      case session do
+        %{issue_title: title} when is_binary(title) and title != "" -> title
+        _ -> nil
+      end
+    end)
+  end
+
+  defp payload_status(%{status: status}, _sessions) when is_binary(status), do: status
+
+  defp payload_status(_payload, sessions) do
+    sessions
+    |> Enum.reverse()
+    |> Enum.find_value("idle", fn session ->
+      case session do
+        %{status: status} when is_binary(status) and status != "" -> status
+        _ -> nil
+      end
+    end)
+  end
+
+  defp extract_session_keys(nil), do: {nil, nil}
+
+  defp extract_session_keys(payload) do
+    issue_id = payload[:issue_id]
+
+    session_id =
+      case payload[:running] do
+        %{session_id: sid} when is_binary(sid) -> sid
+        _ -> nil
+      end
+
+    {issue_id, session_id}
+  end
+
+  defp project_payload(project) do
+    %{
+      id: project.id,
+      name: project.name,
+      linear_project_slug: project.linear_project_slug,
+      linear_organization_slug: project.linear_organization_slug,
+      linear_filter_by: project.linear_filter_by,
+      linear_label_name: project.linear_label_name,
+      github_repo: project.github_repo,
+      workspace_root: project.workspace_root,
+      env_vars: project.env_vars,
+      created_at: iso8601(project.created_at),
+      updated_at: iso8601(project.updated_at)
+    }
+  end
+
+  defp session_summary_payload(session) do
+    %{
+      id: session.id,
+      issue_identifier: session.issue_identifier,
+      issue_title: session.issue_title,
+      session_id: session.session_id,
+      status: session.status,
+      started_at: iso8601(session.started_at),
+      ended_at: iso8601(session.ended_at),
+      turn_count: session.turn_count,
+      input_tokens: session.input_tokens,
+      output_tokens: session.output_tokens,
+      total_tokens: session.total_tokens,
+      worker_host: session.worker_host,
+      error: session.error
+    }
   end
 
   defp iso8601(%DateTime{} = datetime) do

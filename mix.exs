@@ -6,7 +6,6 @@ defmodule SymphonyElixir.MixProject do
       app: :symphony_elixir,
       version: "0.1.0",
       elixir: "~> 1.19",
-      compilers: [:phoenix_live_view] ++ Mix.compilers(),
       start_permanent: Mix.env() == :prod,
       test_coverage: [
         summary: [
@@ -44,22 +43,17 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixir.Store.Message,
           SymphonyElixir.Linear.Adapter,
           SymphonyElixir.Linear.Comment,
-          SymphonyElixirWeb.DashboardLive,
-          SymphonyElixirWeb.HistoryLive,
-          SymphonyElixirWeb.HistorySessionLive,
-          SymphonyElixirWeb.ProjectsLive,
-          SymphonyElixirWeb.SessionLive,
-          SymphonyElixirWeb.SettingsLive,
           SymphonyElixirWeb.ObservabilityPubSub,
           SymphonyElixirWeb.Endpoint,
           SymphonyElixirWeb.ErrorHTML,
           SymphonyElixirWeb.ErrorJSON,
-          SymphonyElixirWeb.Layouts,
           SymphonyElixirWeb.ObservabilityApiController,
+          SymphonyElixirWeb.ProjectApiController,
           SymphonyElixirWeb.Presenter,
-          SymphonyElixirWeb.StaticAssetController,
-          SymphonyElixirWeb.StaticAssets,
           SymphonyElixirWeb.Router,
+          SymphonyElixirWeb.SettingsApiController,
+          SymphonyElixirWeb.SpaController,
+          SymphonyElixirWeb.StreamController,
           SymphonyElixirWeb.Router.Helpers
         ]
       ],
@@ -91,8 +85,6 @@ defmodule SymphonyElixir.MixProject do
       {:floki, ">= 0.30.0", only: :test},
       {:lazy_html, ">= 0.1.0", only: :test},
       {:phoenix, "~> 1.8.0"},
-      {:phoenix_html, "~> 4.2"},
-      {:phoenix_live_view, "~> 1.1.0"},
       {:req, "~> 0.5"},
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.12"},
@@ -106,8 +98,15 @@ defmodule SymphonyElixir.MixProject do
 
   defp aliases do
     [
-      setup: ["deps.get"],
-      build: ["escript.build"],
+      setup: ["deps.get", "cmd --cd dashboard npm install"],
+      "assets.build": [
+        "cmd --cd dashboard npm install",
+        "cmd --cd dashboard npm run build",
+        "cmd rm -rf priv/static/dashboard",
+        "cmd mkdir -p priv/static/dashboard",
+        "cmd cp -R dashboard/dist/. priv/static/dashboard"
+      ],
+      build: ["assets.build", "escript.build"],
       lint: ["specs.check", "credo --strict"]
     ]
   end
