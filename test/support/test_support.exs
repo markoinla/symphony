@@ -138,6 +138,7 @@ defmodule SymphonyElixir.TestSupport do
           observability_render_interval_ms: 16,
           server_port: nil,
           server_host: nil,
+          server_public_base_url: nil,
           prompt: @workflow_prompt
         ],
         overrides
@@ -179,6 +180,7 @@ defmodule SymphonyElixir.TestSupport do
     observability_render_interval_ms = Keyword.get(config, :observability_render_interval_ms)
     server_port = Keyword.get(config, :server_port)
     server_host = Keyword.get(config, :server_host)
+    server_public_base_url = Keyword.get(config, :server_public_base_url)
     prompt = Keyword.get(config, :prompt)
 
     sections =
@@ -216,7 +218,7 @@ defmodule SymphonyElixir.TestSupport do
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
-        server_yaml(server_port, server_host),
+        server_yaml(server_port, server_host, server_public_base_url),
         "---",
         prompt
       ]
@@ -287,13 +289,14 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.join("\n")
   end
 
-  defp server_yaml(nil, nil), do: nil
+  defp server_yaml(nil, nil, nil), do: nil
 
-  defp server_yaml(port, host) do
+  defp server_yaml(port, host, public_base_url) do
     [
       "server:",
       port && "  port: #{yaml_value(port)}",
-      host && "  host: #{yaml_value(host)}"
+      host && "  host: #{yaml_value(host)}",
+      public_base_url && "  public_base_url: #{yaml_value(public_base_url)}"
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")

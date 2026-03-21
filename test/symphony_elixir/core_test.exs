@@ -1412,7 +1412,8 @@ defmodule SymphonyElixir.CoreTest do
         tracker_picked_up_label_name: "symphony",
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server"
+        codex_command: "#{codex_binary} app-server",
+        server_public_base_url: "https://symphony.example.com"
       )
 
       issue = %Issue{
@@ -1429,7 +1430,7 @@ defmodule SymphonyElixir.CoreTest do
 
       assert_receive {:memory_tracker_label_add, "issue-label", "symphony"}
       assert_receive {:memory_tracker_comment, "issue-label", workspace_comment}
-      assert_receive {:memory_tracker_issue_resource, "issue-label", "http://home-lab:4000/session/MT-321", "Symphony Session"}
+      assert_receive {:memory_tracker_issue_resource, "issue-label", "https://symphony.example.com/session/MT-321", "Symphony Session"}
       refute_receive {:memory_tracker_issue_resource, "issue-label", _, _}, 50
       assert workspace_comment =~ "Workspace ready: `"
     after

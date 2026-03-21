@@ -975,6 +975,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert config.worker.max_concurrent_agents_per_host == nil
     assert config.agent.max_concurrent_agents == 10
     assert config.codex.command == "codex app-server"
+    assert config.server.public_base_url == nil
 
     assert config.codex.approval_policy == %{
              "reject" => %{
@@ -1168,6 +1169,38 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     config = Config.settings!()
     assert config.tracker.api_key == "env:#{api_key_env_var}"
     assert config.workspace.root == "env:#{workspace_env_var}"
+  end
+
+  test "server public base url resolves from env-backed workflow config" do
+    public_base_url_env_var = "SYMP_PUBLIC_BASE_URL_#{System.unique_integer([:positive])}"
+    public_base_url = "https://symphony.example.com/base"
+    previous_public_base_url = System.get_env(public_base_url_env_var)
+
+    System.put_env(public_base_url_env_var, public_base_url)
+
+    on_exit(fn ->
+      restore_env(public_base_url_env_var, previous_public_base_url)
+    end)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      server_public_base_url: "$#{public_base_url_env_var}"
+    )
+
+    config = Config.settings!()
+    assert config.server.public_base_url == public_base_url
+    assert SymphonyElixir.DashboardLinks.session_issue_url("MT 321") == "#{public_base_url}/session/MT%20321"
+  end
+
+  test "server public base url accepts a literal workflow value" do
+    public_base_url = "https://symphony.example.com/root/"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      server_public_base_url: public_base_url
+    )
+
+    config = Config.settings!()
+    assert config.server.public_base_url == public_base_url
+    assert SymphonyElixir.DashboardLinks.session_issue_url("MT-321") == "https://symphony.example.com/root/session/MT-321"
   end
 
   test "settings returns an empty overlay map when no settings exist in DB" do

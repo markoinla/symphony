@@ -32,6 +32,7 @@ codex:
     type: dangerFullAccess
 server:
   host: "0.0.0.0"
+  # public_base_url: $SYMPHONY_PUBLIC_BASE_URL
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`.
