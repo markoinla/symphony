@@ -53,7 +53,7 @@ Current status: {{ issue.state }}
 Labels: {{ issue.labels }}
 URL: {{ issue.url }}
 Live workpad comment ID: {% if issue.live_workpad_comment_id %}{{ issue.live_workpad_comment_id }}{% else %}none{% endif %}
-Existing workpad comment count: {{ issue.workpad_comment_count }}
+Existing workpad comment count: {% if issue.workpad_comment_count %}{{ issue.workpad_comment_count }}{% else %}0{% endif %}
 
 Description:
 {% if issue.description %}
