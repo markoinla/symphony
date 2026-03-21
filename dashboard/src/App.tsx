@@ -487,83 +487,59 @@ function SessionView() {
   }
 
   return (
-    <div className="space-y-6">
-      <Card>
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <p className="text-xs font-medium uppercase tracking-[0.1em] text-th-text-3">
-              Session
-            </p>
-            <h2 className="mt-1.5 text-xl font-semibold tracking-tight text-th-text-1">
-              {data.issue_identifier}
-            </h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-th-text-3">
-              {data.issue_title ?? 'Historical and live session output for this issue.'}
-            </p>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2">
-            <StatCard
-              label="Status"
-              value={titleCase(data.status)}
-              helper={issue?.workspace.path ?? 'Workspace path unavailable'}
-            />
-            <StatCard
-              label="Active Runtime"
-              value={runtimeForTimeline(data.sessions, now)}
-              helper={issue?.workspace.host ?? 'local'}
-            />
-          </div>
-        </div>
-
-        {issue ? (
-          <div className="mt-5 flex flex-wrap gap-2 border-t border-th-border pt-4">
-            <Badge tone={issue.status === 'retrying' ? 'retrying' : 'running'}>
-              {titleCase(issue.status)}
-            </Badge>
-            <Badge tone="neutral">Restart count {formatNumber(issue.attempts.restart_count)}</Badge>
-            {issue.running?.session_id ? <Badge tone="live">Session {issue.running.session_id}</Badge> : null}
-          </div>
-        ) : null}
-      </Card>
-
-      <Card>
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <div>
-            <h3 className="text-base font-semibold tracking-tight text-th-text-1">Timeline</h3>
-            <p className="mt-1 text-sm text-th-text-3">
-              Historical sessions stay grouped, while live SSE messages append to the active run.
-            </p>
-          </div>
-          {!currentFollowTail ? (
-            <Button
-              onClick={() => {
-                setFollowTail(true)
-                const element = scrollRef.current
-
-                if (element) {
-                  element.scrollTop = element.scrollHeight
-                }
-              }}
-              variant="secondary"
-            >
-              Scroll to latest
-            </Button>
+    <div className="flex flex-col" style={{ height: 'calc(100vh - 5rem)' }}>
+      {/* Minimal top bar */}
+      <div className="flex items-center justify-between gap-4 border-b border-th-border px-2 py-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <Link
+            to="/"
+            className="text-sm text-th-text-3 transition-colors hover:text-th-text-1"
+          >
+            &larr; Back
+          </Link>
+          <span className="text-th-border">|</span>
+          <span className="truncate text-sm font-semibold text-th-text-1">{data.issue_identifier}</span>
+          {data.issue_title ? (
+            <span className="hidden truncate text-sm text-th-text-3 sm:inline">{data.issue_title}</span>
           ) : null}
+          <Badge tone={issue?.status === 'retrying' ? 'retrying' : 'running'}>
+            {titleCase(data.status)}
+          </Badge>
+          <span className="text-xs tabular-nums text-th-text-4">{runtimeForTimeline(data.sessions, now)}</span>
         </div>
 
-        <div
-          className="max-h-[70vh] space-y-4 overflow-y-auto pr-1"
-          onScroll={(event) => {
-            const element = event.currentTarget
-            const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
-            setFollowTail(distanceFromBottom < 96)
-          }}
-          ref={scrollRef}
-        >
+        {!currentFollowTail ? (
+          <Button
+            onClick={() => {
+              setFollowTail(true)
+              const element = scrollRef.current
+
+              if (element) {
+                element.scrollTop = element.scrollHeight
+              }
+            }}
+            variant="secondary"
+            className="shrink-0 text-xs"
+          >
+            Scroll to latest
+          </Button>
+        ) : null}
+      </div>
+
+      {/* Chat message stream */}
+      <div
+        className="flex-1 overflow-y-auto px-4 py-6"
+        onScroll={(event) => {
+          const element = event.currentTarget
+          const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
+          setFollowTail(distanceFromBottom < 96)
+        }}
+        ref={scrollRef}
+      >
+        <div className="mx-auto max-w-3xl space-y-1">
           {data.sessions.length === 0 ? (
-            <div className="rounded-lg border border-dashed border-th-border-muted px-6 py-10 text-center text-sm text-th-text-3">
-              No historical or live messages are available for this issue yet.
+            <div className="px-6 py-20 text-center text-sm text-th-text-3">
+              No messages yet.
             </div>
           ) : null}
 
@@ -571,7 +547,7 @@ function SessionView() {
             <SessionBlock key={`${session.session_id}-${session.live ? 'live' : session.id ?? 'history'}`} now={now} session={session} />
           ))}
         </div>
-      </Card>
+      </div>
     </div>
   )
 }
@@ -580,31 +556,17 @@ function SessionBlock({ now, session }: { now: number; session: TimelineSession 
   const groupedEntries = groupConsecutiveByType(session.messages, 'tool_call') as SessionEntry[]
 
   return (
-    <section className="rounded-xl border border-th-border bg-th-inset p-5">
-      <div className="flex flex-col gap-4 border-b border-th-border pb-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h4 className="text-sm font-semibold text-th-text-1">
-              {session.live ? 'Live session' : 'Historical session'}
-            </h4>
-            <Badge tone={session.live ? 'live' : 'neutral'}>{session.session_id}</Badge>
-          </div>
-          <p className="mt-1.5 text-sm text-th-text-3">
-            Started {formatDateTime(session.started_at)} · {session.live ? runtimeSince(session.started_at, now) : session.status}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          {session.turn_count ? <Badge tone="neutral">{session.turn_count} turns</Badge> : null}
-          {session.total_tokens ? <Badge tone="neutral">{formatNumber(session.total_tokens)} tokens</Badge> : null}
-          {session.error ? <Badge tone="danger">Error</Badge> : null}
-        </div>
+    <div>
+      {/* Session divider */}
+      <div className="chat-divider my-5">
+        {session.live ? 'Live' : 'Session'} {session.session_id} · {formatDateTime(session.started_at)}
+        {session.live ? ` · ${runtimeSince(session.started_at, now)}` : ''}
       </div>
 
-      <div className="mt-4 space-y-2">
+      <div className="space-y-1">
         {groupedEntries.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-th-border-muted px-4 py-6 text-sm text-th-text-3">
-            No captured messages for this session.
+          <div className="py-6 text-center text-sm text-th-text-4">
+            No captured messages.
           </div>
         ) : null}
 
@@ -616,93 +578,93 @@ function SessionBlock({ now, session }: { now: number; session: TimelineSession 
           ),
         )}
       </div>
-    </section>
+    </div>
   )
 }
 
 function TimelineEntryCard({ message }: { message: TimelineMessage }) {
   if (message.type === 'thinking') {
     return (
-      <details className="rounded-lg border border-th-border bg-th-surface px-4 py-3">
-        <summary className="cursor-pointer list-none text-sm font-medium text-th-text-2">
-          Thinking · {formatClock(message.timestamp) || 'live'}
+      <details className="chat-message group py-1">
+        <summary className="cursor-pointer list-none text-sm text-th-text-4 hover:text-th-text-3 transition-colors">
+          <span className="inline-block transition-transform group-open:rotate-90 mr-1">&rsaquo;</span>
+          Thinking&hellip;
+          <span className="ml-2 text-xs">{formatClock(message.timestamp) || ''}</span>
         </summary>
-        <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-sm leading-6 text-th-text-3">
+        <div className="mt-2 ml-4 whitespace-pre-wrap font-mono text-sm leading-6 text-th-text-3">
           {message.content}
-        </pre>
+        </div>
       </details>
     )
   }
 
   if (message.type === 'reasoning_summary') {
     return (
-      <div className="rounded-lg border border-th-accent/20 bg-th-accent-muted p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div className="text-sm font-medium text-th-accent">Reasoning summary</div>
-          <div className="text-xs text-th-text-3">{formatClock(message.timestamp) || 'live'}</div>
-        </div>
-        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-th-text-2">{message.content}</p>
+      <div className="chat-message border-l-4 border-th-accent/40 pl-4 py-3">
+        <div className="text-xs font-medium text-th-accent mb-1">Reasoning summary</div>
+        <div className="whitespace-pre-wrap text-sm leading-6 text-th-text-2">{message.content}</div>
       </div>
     )
   }
 
   if (message.type === 'turn_boundary') {
     return (
-      <div className="rounded-lg border border-th-border bg-th-surface/50 px-4 py-2.5 text-xs font-medium text-th-text-3">
+      <div className="chat-divider my-4">
         {message.content}
       </div>
     )
   }
 
-  return (
-    <div
-      className={cn(
-        'rounded-lg border p-4',
-        message.type === 'error' ? 'border-red-500/20 bg-red-500/5' : 'border-th-border bg-th-surface',
-      )}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Badge tone={messageTone(message.type)}>{messageLabel(message.type)}</Badge>
-          <span className="text-xs text-th-text-4">{formatClock(message.timestamp) || 'live'}</span>
-        </div>
+  if (message.type === 'error') {
+    return (
+      <div className="chat-message border-l-4 border-red-500/40 pl-4 py-3">
+        <div className="text-xs font-medium text-red-500 mb-1">Error</div>
+        <div className="whitespace-pre-wrap text-sm leading-6 text-th-text-2">{message.content}</div>
       </div>
-      <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-sm leading-6 text-th-text-2">
+    )
+  }
+
+  // Default: response and other message types — clean flowing text
+  return (
+    <div className="chat-message py-3">
+      <div className="flex items-center gap-2 mb-1.5">
+        <div className="h-1.5 w-1.5 rounded-full bg-th-accent/60 shrink-0" />
+        <span className="text-xs text-th-text-4">{messageLabel(message.type)} · {formatClock(message.timestamp) || 'live'}</span>
+      </div>
+      <div className="whitespace-pre-wrap text-sm leading-7 text-th-text-2 pl-3.5">
         {message.content}
-      </pre>
+      </div>
     </div>
   )
 }
 
 function ToolGroup({ items }: { items: TimelineMessage[] }) {
   return (
-    <div className="rounded-lg border border-th-border bg-th-surface p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Badge tone="retrying">Tool Calls</Badge>
-          <span className="text-xs text-th-text-3">{items.length} grouped events</span>
-        </div>
-        <div className="text-xs text-th-text-4">{formatClock(items.at(-1)?.timestamp) || 'live'}</div>
-      </div>
+    <details className="chat-message group py-1">
+      <summary className="cursor-pointer list-none text-sm text-th-text-4 hover:text-th-text-3 transition-colors">
+        <span className="inline-block transition-transform group-open:rotate-90 mr-1">&rsaquo;</span>
+        Used {items.length} tool{items.length !== 1 ? 's' : ''}
+        <span className="ml-2 text-xs">{formatClock(items.at(-1)?.timestamp) || ''}</span>
+      </summary>
 
-      <div className="mt-3 space-y-2">
+      <div className="mt-2 ml-4 space-y-1.5">
         {items.map((item) => {
           const metadata = item.metadata as Record<string, unknown>
 
           return (
-            <div key={String(item.id)} className="rounded-lg border border-th-border bg-th-inset p-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="text-sm font-medium text-th-text-2">{item.content}</div>
+            <div key={String(item.id)} className="rounded-md bg-th-muted/50 px-3 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-sm text-th-text-2">{item.content}</span>
                 <Badge tone={toolTone(metadata.status)}>{String(metadata.status ?? 'unknown')}</Badge>
               </div>
-              <div className="mt-2 whitespace-pre-wrap font-mono text-xs leading-5 text-th-text-4">
+              <div className="mt-1 whitespace-pre-wrap font-mono text-xs leading-5 text-th-text-4">
                 {formatJson(metadata)}
               </div>
             </div>
           )
         })}
       </div>
-    </div>
+    </details>
   )
 }
 
@@ -1441,17 +1403,6 @@ function runtimeForTimeline(sessions: TimelineSession[], now: number) {
   }
 
   return runtimeSince(active.started_at, now)
-}
-
-function messageTone(type: string): 'neutral' | 'danger' | 'live' {
-  switch (type) {
-    case 'error':
-      return 'danger'
-    case 'response':
-      return 'live'
-    default:
-      return 'neutral'
-  }
 }
 
 function messageLabel(type: string) {

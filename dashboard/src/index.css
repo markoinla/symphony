@@ -121,3 +121,37 @@ select {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--th-border-muted);
 }
+
+/* Chat divider — centered text on a thin line */
+.chat-divider {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  color: var(--th-text-4);
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.chat-divider::before,
+.chat-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--th-border);
+}
+
+/* Fade-in for new messages */
+@keyframes chat-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chat-message {
+  animation: chat-fade-in 0.2s ease-out;
+}
