@@ -243,17 +243,20 @@ defmodule SymphonyElixir.CLI do
   # In escript context, NIF priv dirs are not embedded in the archive.
   # Replace the exqlite code path so :code.priv_dir(:exqlite) resolves
   # to the real _build directory containing sqlite3_nif.so.
+  # Also fix :code.priv_dir(:symphony_elixir) so the SPA controller
+  # can find built dashboard assets under priv/static/dashboard/.
   defp ensure_nif_code_paths do
-    build_ebin = Path.expand("_build/dev/lib/exqlite/ebin")
+    for app <- [:exqlite, :symphony_elixir] do
+      build_ebin = Path.expand("_build/dev/lib/#{app}/ebin")
 
-    if File.dir?(build_ebin) do
-      # Remove the escript-embedded exqlite ebin (if present) and prepend the real one.
-      case :code.lib_dir(:exqlite) do
-        {:error, :bad_name} -> :ok
-        lib_dir -> :code.del_path(~c"#{lib_dir}/ebin")
+      if File.dir?(build_ebin) do
+        case :code.lib_dir(app) do
+          {:error, :bad_name} -> :ok
+          lib_dir -> :code.del_path(~c"#{lib_dir}/ebin")
+        end
+
+        :code.add_patha(String.to_charlist(build_ebin))
       end
-
-      :code.add_patha(String.to_charlist(build_ebin))
     end
 
     :ok
