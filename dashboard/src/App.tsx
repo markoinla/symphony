@@ -165,62 +165,46 @@ function RootLayout() {
 
   return (
     <div className="min-h-screen bg-th-bg text-th-text-2 transition-colors duration-200">
-      <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-6 py-8 lg:px-8">
-        <header className="mb-10 border-b border-th-border pb-6">
-          <div className="flex flex-col gap-6 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-[0.16em] text-th-text-3">
-                Symphony
-              </p>
-              <h1 className="mt-2 text-2xl font-semibold tracking-tight text-th-text-1">
-                Dashboard
-              </h1>
-            </div>
+      <div className="mx-auto flex min-h-screen max-w-[1120px] flex-col px-6 lg:px-10">
+        <header className="flex h-14 items-center justify-between border-b border-th-border">
+          <div className="flex items-center gap-8">
+            <Link to="/" className="flex items-center gap-2.5">
+              <div className="flex h-6 w-6 items-center justify-center rounded-md bg-th-accent">
+                <svg className="h-3.5 w-3.5 text-white" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M8 1l2.5 5h5L11 9.5l1.5 5.5L8 12l-4.5 3 1.5-5.5L0.5 6h5z" />
+                </svg>
+              </div>
+              <span className="text-sm font-semibold text-th-text-1">Symphony</span>
+            </Link>
 
-            <div className="flex items-center gap-1">
-              <nav className="flex gap-1">
-                <HeaderLink active={pathname === '/'} label="Dashboard" to="/" />
-                <HeaderLink
-                  active={pathname.startsWith('/history')}
-                  label="History"
-                  to="/history"
-                />
-                <HeaderLink
-                  active={pathname.startsWith('/projects')}
-                  label="Projects"
-                  to="/projects"
-                />
-                <HeaderLink
-                  active={pathname.startsWith('/settings')}
-                  label="Settings"
-                  to="/settings"
-                />
-              </nav>
-
-              <div className="ml-2 h-5 w-px bg-th-border" />
-
-              <button
-                aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-                className="ml-2 flex h-8 w-8 items-center justify-center rounded-lg text-th-text-3 transition-colors hover:bg-th-muted hover:text-th-text-1"
-                onClick={toggle}
-                type="button"
-              >
-                {dark ? (
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="5" />
-                    <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
-                  </svg>
-                ) : (
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                  </svg>
-                )}
-              </button>
-            </div>
+            <nav className="flex items-center gap-0.5">
+              <HeaderLink active={pathname === '/'} label="Dashboard" to="/" />
+              <HeaderLink active={pathname.startsWith('/history')} label="History" to="/history" />
+              <HeaderLink active={pathname.startsWith('/projects')} label="Projects" to="/projects" />
+              <HeaderLink active={pathname.startsWith('/settings')} label="Settings" to="/settings" />
+            </nav>
           </div>
+
+          <button
+            aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-th-text-4 transition-colors hover:bg-th-muted hover:text-th-text-2"
+            onClick={toggle}
+            type="button"
+          >
+            {dark ? (
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="5" />
+                <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+              </svg>
+            ) : (
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+              </svg>
+            )}
+          </button>
         </header>
 
-        <main className="flex-1">
+        <main className="flex-1 py-10">
           <Outlet />
         </main>
       </div>
@@ -240,7 +224,7 @@ function HeaderLink({
   return (
     <Link
       className={cn(
-        'rounded-lg px-3.5 py-2 text-sm font-medium transition-colors duration-150',
+        'rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors duration-100',
         active
           ? 'bg-th-muted text-th-text-1'
           : 'text-th-text-3 hover:text-th-text-1',
@@ -277,140 +261,117 @@ function DashboardView() {
   }
 
   const payload = stateQuery.data
-  const groups = buildDashboardGroups(payload)
+  const totalActive = payload.counts.running + payload.counts.retrying
+  const hasEntries = payload.running.length > 0 || payload.retrying.length > 0
 
   return (
-    <div className="space-y-8">
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="Running"
-          value={formatNumber(payload.counts.running)}
-          helper="Active Codex sessions"
-        />
-        <StatCard
-          label="Retrying"
-          value={formatNumber(payload.counts.retrying)}
-          helper="Queued for another pass"
-        />
-        <StatCard
-          label="Total Tokens"
-          value={formatNumber(payload.codex_totals.total_tokens)}
-          helper={`${formatNumber(payload.codex_totals.input_tokens)} in / ${formatNumber(payload.codex_totals.output_tokens)} out`}
-        />
-        <StatCard
-          label="Runtime"
-          value={formatRuntimeFromSeconds(payload.codex_totals.seconds_running)}
-          helper={`Snapshot ${formatClock(payload.generated_at) || 'just now'}`}
-        />
-      </section>
+    <div className="space-y-10">
+      {/* Page heading with inline stats */}
+      <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-[22px] font-semibold tracking-[-0.01em] text-th-text-1">
+            Active sessions
+          </h1>
+          <p className="mt-1.5 text-[13px] text-th-text-3">
+            {totalActive === 0
+              ? 'No sessions are running right now.'
+              : `${totalActive} session${totalActive !== 1 ? 's' : ''} in progress`}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-6 text-[13px] text-th-text-4">
+          <span className="tabular-nums">{formatNumber(payload.codex_totals.total_tokens)} tokens</span>
+          <span className="tabular-nums">{formatRuntimeFromSeconds(payload.codex_totals.seconds_running)}</span>
+        </div>
+      </div>
 
       {payload.error ? (
         <ErrorPanel title="Snapshot warning" detail={`${payload.error.code}: ${payload.error.message}`} />
       ) : null}
 
-      <section className="space-y-6">
-        {groups.length === 0 ? (
-          <Card className="border-dashed border-th-border-muted text-center">
-            <p className="text-base font-medium text-th-text-2">No active sessions</p>
-            <p className="mt-2 text-sm text-th-text-3">
-              New work will appear here as soon as the orchestrator claims tickets.
-            </p>
-          </Card>
-        ) : null}
+      {/* Empty state */}
+      {!hasEntries ? (
+        <div className="flex flex-col items-center justify-center py-24 text-center">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-th-muted">
+            <svg className="h-5 w-5 text-th-text-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+              <path d="M12 6v6l4 2" strokeLinecap="round" />
+              <circle cx="12" cy="12" r="10" />
+            </svg>
+          </div>
+          <p className="mt-4 text-sm font-medium text-th-text-2">No active sessions</p>
+          <p className="mt-1 text-[13px] text-th-text-4">
+            Sessions will appear here when the orchestrator claims tickets.
+          </p>
+        </div>
+      ) : null}
 
-        {groups.map((group) => (
-          <Card key={group.workflowName ?? group.label} className="space-y-6">
-            <div className="flex flex-col gap-3 border-b border-th-border pb-4 sm:flex-row sm:items-end sm:justify-between">
-              <div>
-                <div className="text-xs font-medium uppercase tracking-[0.1em] text-th-text-3">
-                  {group.workflowName ? 'Workflow' : 'Default'}
+      {/* Session cards */}
+      {hasEntries ? (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {payload.running.map((entry, index) => (
+            <Link
+              key={`running-${entry.issue_id}`}
+              className="session-card group rounded-lg border border-th-border bg-th-surface p-5 transition-colors duration-100 hover:border-th-border-muted"
+              params={{ issueIdentifier: entry.issue_identifier }}
+              style={{ animationDelay: `${index * 40}ms` }}
+              to="/session/$issueIdentifier"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+                    <span className="truncate text-sm font-medium text-th-text-1">
+                      {entry.issue_identifier}
+                    </span>
+                  </div>
+                  <p className="mt-2 line-clamp-2 text-[13px] leading-5 text-th-text-3">
+                    {entry.last_message ?? entry.last_event ?? 'Waiting for events\u2026'}
+                  </p>
                 </div>
-                <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-th-text-1">
-                  {group.label}
-                </h2>
               </div>
-              <div className="flex gap-2">
-                <Badge tone="running">{group.running.length} running</Badge>
-                <Badge tone="retrying">{group.retrying.length} retrying</Badge>
+
+              <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-th-text-4">
+                <span className="tabular-nums">{runtimeSince(entry.started_at, now)}</span>
+                <span className="tabular-nums">{formatNumber(entry.turn_count)} turns</span>
+                <span className="tabular-nums">{formatNumber(entry.tokens.total_tokens)} tok</span>
+                {entry.worker_host ? <span>{entry.worker_host}</span> : null}
               </div>
-            </div>
+            </Link>
+          ))}
 
-            <div className="grid gap-4 lg:grid-cols-2">
-              {group.running.map((entry) => (
-                <div
-                  key={`running-${entry.issue_id}`}
-                  className="rounded-xl border border-th-border bg-th-inset p-5"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <Link
-                        className="text-base font-semibold text-th-text-1 transition-colors hover:text-th-accent"
-                        params={{ issueIdentifier: entry.issue_identifier }}
-                        to="/session/$issueIdentifier"
-                      >
-                        {entry.issue_identifier}
-                      </Link>
-                      <p className="mt-1 text-sm text-th-text-3">{entry.state}</p>
-                    </div>
-                    <Badge tone="running">Running</Badge>
+          {payload.retrying.map((entry, index) => (
+            <Link
+              key={`retry-${entry.issue_id}`}
+              className="session-card group rounded-lg border border-th-border bg-th-surface p-5 transition-colors duration-100 hover:border-th-border-muted"
+              params={{ issueIdentifier: entry.issue_identifier }}
+              style={{ animationDelay: `${(payload.running.length + index) * 40}ms` }}
+              to="/session/$issueIdentifier"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+                    <span className="truncate text-sm font-medium text-th-text-1">
+                      {entry.issue_identifier}
+                    </span>
+                    <span className="shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                      Retry {entry.attempt}
+                    </span>
                   </div>
-
-                  <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-                    <MetaItem label="Runtime" value={runtimeSince(entry.started_at, now)} />
-                    <MetaItem label="Turns" value={formatNumber(entry.turn_count)} />
-                    <MetaItem
-                      label="Tokens"
-                      value={formatNumber(entry.tokens.total_tokens)}
-                      helper={`${formatNumber(entry.tokens.input_tokens)} in / ${formatNumber(entry.tokens.output_tokens)} out`}
-                    />
-                    <MetaItem label="Worker" value={entry.worker_host ?? 'local'} />
-                  </dl>
-
-                  <div className="mt-4 rounded-lg border border-th-border bg-th-surface px-4 py-3 text-sm">
-                    <div className="font-medium text-th-text-2">Latest activity</div>
-                    <div className="mt-1 text-th-text-3">{entry.last_message ?? entry.last_event ?? 'Waiting for new events'}</div>
-                    {entry.workspace_path ? (
-                      <div className="mt-2 text-xs text-th-text-4">{entry.workspace_path}</div>
-                    ) : null}
-                  </div>
+                  <p className="mt-2 line-clamp-2 text-[13px] leading-5 text-th-text-3">
+                    {entry.error ?? 'Retry pending'}
+                  </p>
                 </div>
-              ))}
+              </div>
 
-              {group.retrying.map((entry) => (
-                <div
-                  key={`retry-${entry.issue_id}`}
-                  className="rounded-xl border border-th-border bg-th-inset p-5"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <Link
-                        className="text-base font-semibold text-th-text-1 transition-colors hover:text-th-accent"
-                        params={{ issueIdentifier: entry.issue_identifier }}
-                        to="/session/$issueIdentifier"
-                      >
-                        {entry.issue_identifier}
-                      </Link>
-                      <p className="mt-1 text-sm text-th-text-3">{entry.error ?? 'Retry pending'}</p>
-                    </div>
-                    <Badge tone="retrying">Retry {entry.attempt}</Badge>
-                  </div>
-
-                  <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
-                    <MetaItem label="Retrying At" value={formatDateTime(entry.due_at)} />
-                    <MetaItem label="Worker" value={entry.worker_host ?? 'unassigned'} />
-                  </dl>
-
-                  {entry.workspace_path ? (
-                    <div className="mt-4 rounded-lg border border-th-border bg-th-surface px-4 py-3 text-xs text-th-text-3">
-                      {entry.workspace_path}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          </Card>
-        ))}
-      </section>
+              <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-th-text-4">
+                <span className="tabular-nums">{formatDateTime(entry.due_at)}</span>
+                {entry.worker_host ? <span>{entry.worker_host}</span> : null}
+              </div>
+            </Link>
+          ))}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -489,27 +450,31 @@ function SessionView() {
   return (
     <div className="flex flex-col" style={{ height: 'calc(100vh - 5rem)' }}>
       {/* Minimal top bar */}
-      <div className="flex items-center justify-between gap-4 border-b border-th-border px-2 py-3">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="flex items-center justify-between gap-4 border-b border-th-border px-1 py-2.5">
+        <div className="flex items-center gap-2.5 min-w-0">
           <Link
             to="/"
-            className="text-sm text-th-text-3 transition-colors hover:text-th-text-1"
+            className="flex items-center gap-1 text-[13px] text-th-text-4 transition-colors hover:text-th-text-1"
           >
-            &larr; Back
+            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+              <path d="M15 19l-7-7 7-7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Back
           </Link>
-          <span className="text-th-border">|</span>
-          <span className="truncate text-sm font-semibold text-th-text-1">{data.issue_identifier}</span>
+          <span className="h-3.5 w-px bg-th-border" />
+          <span className="truncate text-[13px] font-medium text-th-text-1">{data.issue_identifier}</span>
           {data.issue_title ? (
-            <span className="hidden truncate text-sm text-th-text-3 sm:inline">{data.issue_title}</span>
+            <span className="hidden truncate text-[13px] text-th-text-3 sm:inline">{data.issue_title}</span>
           ) : null}
-          <Badge tone={issue?.status === 'retrying' ? 'retrying' : 'running'}>
-            {titleCase(data.status)}
-          </Badge>
+          <span className={cn(
+            'h-2 w-2 shrink-0 rounded-full',
+            issue?.status === 'retrying' ? 'bg-amber-500' : 'bg-emerald-500',
+          )} />
           <span className="text-xs tabular-nums text-th-text-4">{runtimeForTimeline(data.sessions, now)}</span>
         </div>
 
         {!currentFollowTail ? (
-          <Button
+          <button
             onClick={() => {
               setFollowTail(true)
               const element = scrollRef.current
@@ -518,11 +483,11 @@ function SessionView() {
                 element.scrollTop = element.scrollHeight
               }
             }}
-            variant="secondary"
-            className="shrink-0 text-xs"
+            className="shrink-0 rounded-md px-2.5 py-1 text-xs font-medium text-th-text-3 transition-colors hover:bg-th-muted hover:text-th-text-1"
+            type="button"
           >
             Scroll to latest
-          </Button>
+          </button>
         ) : null}
       </div>
 
@@ -685,65 +650,81 @@ function HistoryView() {
   const payload = sessionsQuery.data
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-10">
       <div>
-        <h2 className="text-lg font-semibold tracking-tight text-th-text-1">Session history</h2>
-        <p className="mt-1 text-sm text-th-text-3">
-          Review past runs and jump directly into the retained timeline for a given issue.
+        <h1 className="text-[22px] font-semibold tracking-[-0.01em] text-th-text-1">History</h1>
+        <p className="mt-1.5 text-[13px] text-th-text-3">
+          Past sessions and their timelines.
         </p>
       </div>
 
-      <div className="space-y-px overflow-hidden rounded-xl border border-th-border">
-        {payload.sessions.length === 0 ? (
-          <div className="bg-th-surface px-6 py-10 text-center text-sm text-th-text-3">
-            No historical sessions have been persisted yet.
+      {payload.sessions.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-24 text-center">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-th-muted">
+            <svg className="h-5 w-5 text-th-text-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+              <path d="M9 12h6M9 16h6M5 8h14M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" strokeLinecap="round" />
+            </svg>
           </div>
-        ) : null}
+          <p className="mt-4 text-sm font-medium text-th-text-2">No sessions yet</p>
+          <p className="mt-1 text-[13px] text-th-text-4">
+            Completed sessions will appear here.
+          </p>
+        </div>
+      ) : null}
 
-        {payload.sessions.map((session) => (
-          <HistoryRow key={session.id} session={session} />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {payload.sessions.map((session, index) => (
+          <HistoryCard key={session.id} index={index} session={session} />
         ))}
       </div>
     </div>
   )
 }
 
-function HistoryRow({ session }: { session: SessionsPayload['sessions'][number] }) {
+function HistoryCard({ index, session }: { index: number; session: SessionsPayload['sessions'][number] }) {
   const issueIdentifier = session.issue_identifier
+  const failed = session.status === 'failed'
 
-  return (
-    <div className="flex items-center justify-between gap-4 border-b border-th-border bg-th-surface px-5 py-4 last:border-b-0">
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          {issueIdentifier ? (
-            <Link
-              className="text-sm font-semibold text-th-text-1 transition-colors hover:text-th-accent"
-              params={{ issueIdentifier }}
-              to="/session/$issueIdentifier"
-            >
-              {issueIdentifier}
-            </Link>
-          ) : (
-            <span className="text-sm font-semibold text-th-text-1">Unknown issue</span>
-          )}
-          <Badge tone={session.status === 'failed' ? 'danger' : 'neutral'}>{titleCase(session.status)}</Badge>
+  const content = (
+    <div
+      className="session-card rounded-lg border border-th-border bg-th-surface p-5 transition-colors duration-100 hover:border-th-border-muted"
+      style={{ animationDelay: `${index * 30}ms` }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className={cn('h-2 w-2 shrink-0 rounded-full', failed ? 'bg-red-500' : 'bg-th-text-4')} />
+            <span className="truncate text-sm font-medium text-th-text-1">
+              {issueIdentifier ?? 'Unknown'}
+            </span>
+            {failed ? (
+              <span className="shrink-0 rounded bg-red-500/10 px-1.5 py-0.5 text-[11px] font-medium text-red-500">
+                Failed
+              </span>
+            ) : null}
+          </div>
+          <p className="mt-2 line-clamp-1 text-[13px] leading-5 text-th-text-3">
+            {session.issue_title ?? 'No title'}
+          </p>
         </div>
-        <p className="mt-1 truncate text-sm text-th-text-3">{session.issue_title ?? 'No title stored'}</p>
-        <p className="mt-0.5 text-xs text-th-text-4">
-          {formatDateTime(session.started_at)} · {session.worker_host ?? 'local'} · {formatNumber(session.total_tokens)} tokens
-        </p>
       </div>
 
-      {issueIdentifier ? (
-        <Link
-          className="shrink-0 rounded-lg border border-th-border-muted px-3.5 py-2 text-sm font-medium text-th-text-2 transition-colors hover:border-th-text-3 hover:text-th-text-1"
-          params={{ issueIdentifier }}
-          to="/session/$issueIdentifier"
-        >
-          Open
-        </Link>
-      ) : null}
+      <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-th-text-4">
+        <span className="tabular-nums">{formatDateTime(session.started_at)}</span>
+        <span className="tabular-nums">{formatNumber(session.total_tokens)} tok</span>
+        {session.worker_host ? <span>{session.worker_host}</span> : null}
+      </div>
     </div>
+  )
+
+  if (!issueIdentifier) {
+    return content
+  }
+
+  return (
+    <Link params={{ issueIdentifier }} to="/session/$issueIdentifier">
+      {content}
+    </Link>
   )
 }
 
@@ -1258,53 +1239,19 @@ function SettingsView() {
 
 function NotFoundView() {
   return (
-    <Card className="mx-auto max-w-2xl text-center">
-      <p className="text-xs font-medium uppercase tracking-[0.1em] text-th-text-3">Not found</p>
-      <h2 className="mt-2 text-lg font-semibold tracking-tight text-th-text-1">
-        The requested dashboard route does not exist.
-      </h2>
-      <p className="mt-2 text-sm text-th-text-3">
-        Phoenix will serve the SPA shell for valid client routes only.
+    <div className="flex flex-col items-center justify-center py-24 text-center">
+      <p className="text-5xl font-semibold text-th-text-4">404</p>
+      <p className="mt-3 text-sm font-medium text-th-text-2">Page not found</p>
+      <p className="mt-1 text-[13px] text-th-text-4">
+        This route doesn&apos;t exist.
       </p>
-    </Card>
-  )
-}
-
-function StatCard({
-  helper,
-  label,
-  value,
-}: {
-  helper: string
-  label: string
-  value: string
-}) {
-  return (
-    <div className="rounded-xl border border-th-border bg-th-surface p-5">
-      <div className="text-xs font-medium uppercase tracking-[0.08em] text-th-text-3">{label}</div>
-      <div className="mt-2 text-2xl font-semibold tracking-tight text-th-text-1">{value}</div>
-      <div className="mt-1 text-sm text-th-text-4">{helper}</div>
+      <Link to="/" className="mt-6 text-[13px] font-medium text-th-accent hover:underline">
+        Back to dashboard
+      </Link>
     </div>
   )
 }
 
-function MetaItem({
-  helper,
-  label,
-  value,
-}: {
-  helper?: string
-  label: string
-  value: string
-}) {
-  return (
-    <div className="rounded-lg border border-th-border bg-th-surface px-3.5 py-2.5">
-      <dt className="text-xs font-medium text-th-text-3">{label}</dt>
-      <dd className="mt-1 text-sm font-medium text-th-text-1">{value}</dd>
-      {helper ? <div className="mt-0.5 text-xs text-th-text-4">{helper}</div> : null}
-    </div>
-  )
-}
 
 function Field({ children, label }: { children: ReactNode; label: string }) {
   return (
@@ -1317,19 +1264,19 @@ function Field({ children, label }: { children: ReactNode; label: string }) {
 
 function LoadingPanel({ compact = false, title }: { compact?: boolean; title: string }) {
   return (
-    <Card className={cn('text-center', compact && 'p-4')}>
-      <p className="text-sm font-medium text-th-text-2">{title}</p>
-      <p className="mt-1 text-sm text-th-text-4">Fetching the latest payload from Phoenix.</p>
-    </Card>
+    <div className={cn('flex flex-col items-center justify-center text-center', compact ? 'py-6' : 'py-24')}>
+      <div className="h-5 w-5 animate-spin rounded-full border-2 border-th-border border-t-th-accent" />
+      <p className="mt-4 text-sm font-medium text-th-text-2">{title}</p>
+    </div>
   )
 }
 
 function ErrorPanel({ detail, title }: { detail: string; title: string }) {
   return (
-    <Card className="border-red-500/20 bg-red-500/5">
-      <p className="text-sm font-medium text-red-400">{title}</p>
-      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-red-300/80">{detail}</p>
-    </Card>
+    <div className="rounded-lg border border-red-500/15 bg-red-500/5 px-5 py-4">
+      <p className="text-sm font-medium text-red-500 dark:text-red-400">{title}</p>
+      <p className="mt-1.5 whitespace-pre-wrap text-[13px] leading-5 text-red-500/70 dark:text-red-400/60">{detail}</p>
+    </div>
   )
 }
 
