@@ -250,16 +250,19 @@ defmodule SymphonyElixir.CLI do
       build_ebin = Path.expand("_build/dev/lib/#{app}/ebin")
 
       if File.dir?(build_ebin) do
-        case :code.lib_dir(app) do
-          {:error, :bad_name} -> :ok
-          lib_dir -> :code.del_path(~c"#{lib_dir}/ebin")
-        end
-
+        remove_existing_code_path(app)
         :code.add_patha(String.to_charlist(build_ebin))
       end
     end
 
     :ok
+  end
+
+  defp remove_existing_code_path(app) do
+    case :code.lib_dir(app) do
+      {:error, :bad_name} -> :ok
+      lib_dir -> :code.del_path(~c"#{lib_dir}/ebin")
+    end
   end
 
   @spec wait_for_shutdown() :: no_return()

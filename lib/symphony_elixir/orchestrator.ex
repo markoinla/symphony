@@ -38,6 +38,26 @@ defmodule SymphonyElixir.Orchestrator do
     Runtime state for the orchestrator polling loop.
     """
 
+    @type completed_entry :: %{state: String.t() | nil, count: non_neg_integer()}
+
+    @type t :: %__MODULE__{
+            workflow_name: String.t() | nil,
+            poll_interval_ms: non_neg_integer() | nil,
+            max_concurrent_agents: pos_integer() | nil,
+            next_poll_due_at_ms: integer() | nil,
+            poll_check_in_progress: boolean() | nil,
+            tick_timer_ref: reference() | nil,
+            tick_token: reference() | nil,
+            project_id: integer() | nil,
+            project: Project.t() | nil,
+            running: %{optional(String.t()) => map()},
+            completed: %{optional(String.t()) => completed_entry()},
+            claimed: MapSet.t(String.t()),
+            retry_attempts: map(),
+            codex_totals: map() | nil,
+            codex_rate_limits: map() | nil
+          }
+
     defstruct [
       :workflow_name,
       :poll_interval_ms,
@@ -622,6 +642,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp terminate_task(_pid), do: :ok
 
+  @spec choose_issues(list(Issue.t()), State.t(), MapSet.t(String.t())) :: State.t()
   defp choose_issues(issues, state, db_claims) do
     active_states = active_state_set()
     terminal_states = terminal_state_set()
@@ -661,6 +682,13 @@ defmodule SymphonyElixir.Orchestrator do
     should_dispatch_issue?(issue, state, active_states, terminal_states, MapSet.new())
   end
 
+  @spec should_dispatch_issue?(
+          Issue.t() | term(),
+          State.t(),
+          MapSet.t(String.t()),
+          MapSet.t(String.t()),
+          MapSet.t(String.t())
+        ) :: boolean()
   defp should_dispatch_issue?(
          %Issue{} = issue,
          %State{running: running, claimed: claimed, completed: completed} = state,
@@ -671,7 +699,7 @@ defmodule SymphonyElixir.Orchestrator do
     candidate_issue?(issue, active_states, terminal_states) and
       !todo_issue_blocked_by_non_terminal?(issue, terminal_states) and
       !MapSet.member?(claimed, issue.id) and
-      !MapSet.member?(db_claims, issue.id) and
+      !Enum.member?(db_claims, issue.id) and
       !Map.has_key?(running, issue.id) and
       !issue_completed_in_current_state?(issue, completed) and
       available_slots(state) > 0 and
