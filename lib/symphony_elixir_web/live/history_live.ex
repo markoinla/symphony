@@ -40,35 +40,70 @@ defmodule SymphonyElixirWeb.HistoryLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <section class="chat-layout">
-      <header class="chat-topbar">
-        <a href="/" class="chat-topbar-back" title="Back to dashboard">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M10 12L6 8l4-4"/>
-          </svg>
-        </a>
+    <section class="dashboard-shell history-shell">
+      <header class="dash-header history-header">
+        <div class="dash-header-left history-header-copy">
+          <div>
+            <p class="history-eyebrow">Observability archive</p>
+            <h1 class="dash-title">Session History</h1>
+            <p class="history-header-subtitle">
+              Review recent session logs with the same dashboard layout language used for active agents.
+            </p>
+          </div>
+        </div>
 
-        <div class="chat-topbar-info">
-          <span class="chat-topbar-title">Session History</span>
+        <div class="history-header-actions">
+          <div class="dash-stats history-summary">
+            <div class="dash-stat">
+              <span class="dash-stat-value numeric"><%= length(@payload.sessions) %></span>
+              <span class="dash-stat-label">shown</span>
+            </div>
+            <div class="dash-stat-sep"></div>
+            <div class="dash-stat">
+              <span class="dash-stat-value numeric"><%= length(@projects) %></span>
+              <span class="dash-stat-label">projects</span>
+            </div>
+          </div>
+
+          <a href="/" class="subtle-button history-header-link">Dashboard</a>
+        </div>
+      </header>
+
+      <section class="section-card history-panel">
+        <div class="section-header history-panel-header">
+          <div>
+            <h2 class="section-title">Recent sessions</h2>
+            <p class="section-copy">
+              <%= history_scope_copy(@projects, @selected_project_id) %>
+            </p>
+          </div>
+
           <%= if @projects != [] do %>
-            <form phx-change="filter_project" class="project-filter" style="margin-left: auto;">
-              <select name="project_id" class="field-input" style="width: auto; min-width: 10rem; padding: 0.35rem 0.5rem; font-size: var(--text-sm);">
+            <form phx-change="filter_project" class="project-filter history-filter">
+              <label class="field-label sr-only" for="history-project-filter">Project</label>
+              <select id="history-project-filter" name="project_id" class="field-input history-filter-input">
                 <option value="">All projects</option>
                 <option :for={p <- @projects} value={p.id} selected={@selected_project_id == p.id}><%= p.name %></option>
               </select>
             </form>
           <% end %>
         </div>
-      </header>
 
-      <div style="max-width: 48rem; margin: 0 auto; width: 100%; padding-top: 0.5rem;">
         <%= if @payload.sessions == [] do %>
-          <p class="empty-state" style="text-align: center; padding: 3rem 0;">No historical sessions recorded yet.</p>
+          <div class="empty-dash history-empty">
+            <div class="empty-dash-icon">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 6h16M7 3h10M7 10h10M7 14h10M7 18h6"/>
+              </svg>
+            </div>
+            <p class="empty-dash-text">No historical sessions recorded yet.</p>
+            <p class="empty-dash-sub">Completed and active session logs will appear here once Symphony has work to display.</p>
+          </div>
         <% else %>
           <div class="history-list">
             <a :for={session <- @payload.sessions} href={history_session_href(session)} class="history-item">
               <div class="history-item-main">
-                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                <div class="history-item-header">
                   <span class="history-item-title"><%= session.issue_identifier || "n/a" %></span>
                   <span class={status_badge_class(session.status)}><%= session.status %></span>
                 </div>
@@ -98,14 +133,14 @@ defmodule SymphonyElixirWeb.HistoryLive do
                     <%= format_int(session.total_tokens) %> tok
                   </span>
                 </div>
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color: var(--ink-tertiary);">
+                <svg class="history-item-chevron" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M6 4l4 4-4 4"/>
                 </svg>
               </div>
             </a>
           </div>
         <% end %>
-      </div>
+      </section>
     </section>
     """
   end
@@ -150,6 +185,17 @@ defmodule SymphonyElixirWeb.HistoryLive do
   end
 
   defp truncate(str, _max), do: str
+
+  defp history_scope_copy(projects, nil) do
+    "Browse the latest sessions across #{length(projects)} tracked projects."
+  end
+
+  defp history_scope_copy(projects, selected_project_id) do
+    case Enum.find(projects, &(&1.id == selected_project_id)) do
+      nil -> "Browse the latest sessions across #{length(projects)} tracked projects."
+      project -> "Showing the latest sessions for #{project.name}."
+    end
+  end
 
   defp history_session_href(%{id: id, issue_identifier: issue_identifier})
        when is_integer(id) and is_binary(issue_identifier) and issue_identifier != "" do
