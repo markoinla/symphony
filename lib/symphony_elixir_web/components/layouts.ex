@@ -48,8 +48,48 @@ defmodule SymphonyElixirWeb.Layouts do
 
             var Hooks = {};
             Hooks.ScrollBottom = {
-              mounted() { this.el.scrollTop = this.el.scrollHeight; },
-              updated() { this.el.scrollTop = this.el.scrollHeight; }
+              mounted() {
+                this.threshold = 72;
+                this.wasFollowing = true;
+                this.lastEntryCount = this.entryCount();
+                this.lastScrollHeight = this.el.scrollHeight;
+                this.following = true;
+                this.onScroll = () => {
+                  this.following = this.distanceFromBottom() <= this.threshold;
+                };
+
+                this.el.addEventListener("scroll", this.onScroll, { passive: true });
+                this.scrollToBottom();
+              },
+              beforeUpdate() {
+                this.wasFollowing = this.following;
+                this.lastEntryCount = this.entryCount();
+                this.lastScrollHeight = this.el.scrollHeight;
+              },
+              updated() {
+                var grew = this.el.scrollHeight > (this.lastScrollHeight || 0) + 4;
+                var hasNewEntries = this.entryCount() > (this.lastEntryCount || 0);
+
+                if (this.wasFollowing && (grew || hasNewEntries)) {
+                  this.scrollToBottom(hasNewEntries ? "smooth" : "auto");
+                }
+
+                this.lastScrollHeight = this.el.scrollHeight;
+              },
+              destroyed() {
+                if (this.onScroll) this.el.removeEventListener("scroll", this.onScroll);
+              },
+              distanceFromBottom() {
+                return this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight;
+              },
+              entryCount() {
+                return this.el.querySelectorAll("[data-chat-entry]").length;
+              },
+              scrollToBottom(behavior) {
+                this.el.scrollTo({ top: this.el.scrollHeight, behavior: behavior || "auto" });
+                this.following = true;
+                this.lastScrollHeight = this.el.scrollHeight;
+              }
             };
 
             var liveSocket = new window.LiveView.LiveSocket("/live", window.Phoenix.Socket, {
