@@ -988,6 +988,118 @@ function ProjectsView() {
   )
 }
 
+function LinearApiKeyCard() {
+  const queryClient = useQueryClient()
+  const settingsQuery = useQuery({
+    queryKey: ['settings'],
+    queryFn: getSettings,
+  })
+
+  const existing = settingsQuery.data?.settings.find(
+    (s: { key: string; value: string }) => s.key === 'tracker.api_key',
+  )
+
+  const [apiKey, setApiKey] = useState('')
+  const [showKey, setShowKey] = useState(false)
+  const [feedback, setFeedback] = useState<string | null>(null)
+
+  const saveMutation = useMutation({
+    mutationFn: (value: string) => upsertSetting('tracker.api_key', value),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setFeedback('Linear API key saved.')
+      setApiKey('')
+      setShowKey(false)
+    },
+    onError: (error: unknown) => {
+      setFeedback(formatQueryError(error))
+    },
+  })
+
+  const removeMutation = useMutation({
+    mutationFn: () => deleteSetting('tracker.api_key'),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setFeedback('Linear API key removed.')
+      setApiKey('')
+    },
+    onError: (error: unknown) => {
+      setFeedback(formatQueryError(error))
+    },
+  })
+
+  const maskedValue = existing
+    ? existing.value.slice(0, 8) + '\u2022'.repeat(Math.max(0, existing.value.length - 8))
+    : null
+
+  return (
+    <Card className="space-y-4">
+      <div>
+        <h2 className="text-3xl font-semibold tracking-[-0.04em] text-stone-950">Linear API Key</h2>
+        <p className="mt-2 text-sm text-stone-500">
+          Required to connect Symphony to Linear. Get a personal API key from Linear Settings &rarr; Security &amp; access &rarr; Personal API keys.
+        </p>
+      </div>
+
+      {feedback ? (
+        <div className="rounded-[1.4rem] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          {feedback}
+        </div>
+      ) : null}
+
+      {existing ? (
+        <div className="rounded-[1.35rem] border border-stone-200/80 bg-stone-50/80 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <code className="text-sm text-stone-600 break-all">
+              {showKey ? existing.value : maskedValue}
+            </code>
+            <div className="flex gap-2">
+              <Button onClick={() => setShowKey(!showKey)} type="button" variant="secondary">
+                {showKey ? 'Hide' : 'Reveal'}
+              </Button>
+              <Button
+                disabled={removeMutation.isPending}
+                onClick={() => {
+                  setFeedback(null)
+                  void removeMutation.mutateAsync()
+                }}
+                type="button"
+                variant="danger"
+              >
+                Remove
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <form
+        className="grid gap-4"
+        onSubmit={(event) => {
+          event.preventDefault()
+          setFeedback(null)
+          void saveMutation.mutateAsync(apiKey.trim())
+        }}
+      >
+        <Field label={existing ? 'Replace API key' : 'API key'}>
+          <Input
+            onChange={(event) => setApiKey(event.target.value)}
+            placeholder="lin_api_..."
+            required
+            type="password"
+            value={apiKey}
+          />
+        </Field>
+        <div>
+          <Button disabled={saveMutation.isPending || !apiKey.trim()} type="submit">
+            {existing ? 'Update key' : 'Save key'}
+          </Button>
+        </div>
+      </form>
+    </Card>
+  )
+}
+
 function SettingsView() {
   const queryClient = useQueryClient()
   const settingsQuery = useQuery({
@@ -1029,6 +1141,8 @@ function SettingsView() {
   })
 
   return (
+    <div className="space-y-6">
+    <LinearApiKeyCard />
     <div className="grid gap-6 xl:grid-cols-[0.9fr,1.1fr]">
       <Card className="space-y-5">
         <div>
@@ -1147,6 +1261,7 @@ function SettingsView() {
           ))}
         </div>
       </Card>
+    </div>
     </div>
   )
 }
