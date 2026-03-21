@@ -223,6 +223,19 @@ defmodule SymphonyElixir.Store do
     where(query, [s], s.status == ^status)
   end
 
+  @spec finalize_stale_sessions(keyword()) :: {integer(), nil}
+  def finalize_stale_sessions(opts \\ []) do
+    project_id = Keyword.get(opts, :project_id)
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    Session
+    |> where([s], s.status == "running")
+    |> maybe_filter_project_id(project_id)
+    |> Repo.update_all(
+      set: [status: "cancelled", ended_at: now, error: "orchestrator restarted"]
+    )
+  end
+
   defp maybe_filter_project_id(query, nil), do: query
 
   defp maybe_filter_project_id(query, project_id) do

@@ -122,9 +122,28 @@ defmodule SymphonyElixir.Orchestrator do
     }
 
     run_terminal_workspace_cleanup()
+    finalize_stale_db_sessions(state)
     state = schedule_tick(state, 0)
 
     {:ok, state}
+  end
+
+  @impl true
+  def terminate(_reason, %State{running: running}) do
+    Enum.each(running, fn {_issue_id, running_entry} ->
+      session_id = running_entry_session_id(running_entry)
+
+      if session_id != "n/a" do
+        Store.complete_session_by_codex_session_id(session_id, %{
+          status: "cancelled",
+          issue_identifier: running_entry.identifier,
+          issue_title: Map.get(running_entry, :issue, %{}) |> Map.get(:title),
+          error: "orchestrator shutdown"
+        })
+      end
+    end)
+
+    :ok
   end
 
   @impl true
@@ -193,8 +212,10 @@ defmodule SymphonyElixir.Orchestrator do
             :normal ->
               Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; scheduling active-state continuation check")
 
+              issue_state = running_entry_issue_state(running_entry)
+
               state
-              |> complete_issue(issue_id)
+              |> complete_issue(issue_id, issue_state)
               |> schedule_issue_retry(issue_id, 1, %{
                 identifier: running_entry.identifier,
                 delay_type: :continuation,
@@ -898,8 +919,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states), do: {:ok, issue}
 
-  defp complete_issue(%State{} = state, issue_id) do
-    issue_state = running_issue_state(state, issue_id)
+  defp complete_issue(%State{} = state, issue_id, issue_state) do
     prev = Map.get(state.completed, issue_id)
 
     entry =
@@ -915,12 +935,8 @@ defmodule SymphonyElixir.Orchestrator do
     }
   end
 
-  defp running_issue_state(%State{running: running}, issue_id) do
-    case Map.get(running, issue_id) do
-      %{issue: %Issue{state: state}} -> state
-      _ -> nil
-    end
-  end
+  defp running_entry_issue_state(%{issue: %Issue{state: state}}), do: state
+  defp running_entry_issue_state(_), do: nil
 
   defp schedule_issue_retry(%State{} = state, issue_id, attempt, metadata)
        when is_binary(issue_id) and is_map(metadata) do
@@ -1048,6 +1064,14 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:error, reason} ->
         Logger.warning("Skipping startup terminal workspace cleanup; failed to fetch terminal issues: #{inspect(reason)}")
+    end
+  end
+
+  defp finalize_stale_db_sessions(%State{project_id: project_id}) do
+    {count, _} = Store.finalize_stale_sessions(project_id: project_id)
+
+    if count > 0 do
+      Logger.warning("Finalized #{count} stale running session(s) from previous orchestrator lifecycle")
     end
   end
 

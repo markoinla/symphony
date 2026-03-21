@@ -552,10 +552,43 @@ defmodule SymphonyElixir.CoreTest do
     state = :sys.get_state(pid)
 
     refute Map.has_key?(state.running, issue_id)
-    assert %{count: 1} = state.completed[issue_id]
+    assert %{state: "In Progress", count: 1} = state.completed[issue_id]
     assert %{attempt: 1, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
     assert is_integer(due_at_ms)
     assert_due_in_range(due_at_ms, 500, 1_100)
+  end
+
+  test "completed issue in same state is not re-dispatched" do
+    issue_id = "issue-completed-guard"
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 2,
+      completed: %{issue_id => %{state: "In Progress", count: 1}},
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    same_state_issue = %Issue{
+      id: issue_id,
+      identifier: "MT-600",
+      state: "In Progress",
+      title: "Same state",
+      description: "Should not dispatch",
+      labels: []
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(same_state_issue, state)
+
+    changed_state_issue = %Issue{
+      id: issue_id,
+      identifier: "MT-600",
+      state: "Todo",
+      title: "Changed state",
+      description: "Should dispatch",
+      labels: []
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(changed_state_issue, state)
   end
 
   test "abnormal worker exit increments retry attempt progressively" do
@@ -812,6 +845,27 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "Ticket S-2"
     assert prompt =~ "workpad=comment-live"
     assert prompt =~ "count=2"
+  end
+
+  test "prompt renders workpad_comment_count of 0 without error" do
+    workflow_prompt =
+      "Existing workpad comment count: {% if issue.workpad_comment_count %}{{ issue.workpad_comment_count }}{% else %}0{% endif %}"
+
+    write_workflow_file!(Workflow.workflow_file_path(), prompt: workflow_prompt)
+
+    issue = %Issue{
+      identifier: "S-3",
+      title: "Zero workpad count",
+      description: "No workpad comments yet",
+      state: "Todo",
+      url: "https://example.org/issues/S-3",
+      labels: [],
+      workpad_comment_count: 0
+    }
+
+    prompt = PromptBuilder.build_prompt(issue)
+
+    assert prompt =~ "Existing workpad comment count: 0"
   end
 
   test "linear client normalizes live workpad metadata from issue comments" do
@@ -2051,5 +2105,80 @@ defmodule SymphonyElixir.CoreTest do
     after
       File.rm_rf(test_root)
     end
+  end
+
+  test "finalize_stale_sessions marks running sessions as cancelled" do
+    started_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {:ok, session} =
+      SymphonyElixir.Store.create_session(%{
+        issue_id: "issue-stale-1",
+        issue_identifier: "MT-900",
+        session_id: "session-stale-1",
+        status: "running",
+        started_at: started_at
+      })
+
+    {:ok, completed_session} =
+      SymphonyElixir.Store.create_session(%{
+        issue_id: "issue-stale-2",
+        issue_identifier: "MT-901",
+        session_id: "session-stale-2",
+        status: "completed",
+        started_at: started_at,
+        ended_at: started_at
+      })
+
+    {count, _} = SymphonyElixir.Store.finalize_stale_sessions()
+
+    assert count >= 1
+
+    updated = SymphonyElixir.Store.get_session(session.id)
+    assert updated.status == "cancelled"
+    assert updated.ended_at != nil
+    assert updated.error == "orchestrator restarted"
+
+    unchanged = SymphonyElixir.Store.get_session(completed_session.id)
+    assert unchanged.status == "completed"
+  end
+
+  test "finalize_stale_sessions only affects specified project" do
+    started_at = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    {:ok, project1} =
+      SymphonyElixir.Store.create_project(%{name: "proj-stale-1-#{System.unique_integer([:positive])}"})
+
+    {:ok, project2} =
+      SymphonyElixir.Store.create_project(%{name: "proj-stale-2-#{System.unique_integer([:positive])}"})
+
+    {:ok, session1} =
+      SymphonyElixir.Store.create_session(%{
+        issue_id: "issue-proj1",
+        issue_identifier: "MT-910",
+        session_id: "session-proj1",
+        status: "running",
+        started_at: started_at,
+        project_id: project1.id
+      })
+
+    {:ok, session2} =
+      SymphonyElixir.Store.create_session(%{
+        issue_id: "issue-proj2",
+        issue_identifier: "MT-911",
+        session_id: "session-proj2",
+        status: "running",
+        started_at: started_at,
+        project_id: project2.id
+      })
+
+    {count, _} = SymphonyElixir.Store.finalize_stale_sessions(project_id: project1.id)
+
+    assert count >= 1
+
+    updated1 = SymphonyElixir.Store.get_session(session1.id)
+    assert updated1.status == "cancelled"
+
+    unchanged2 = SymphonyElixir.Store.get_session(session2.id)
+    assert unchanged2.status == "running"
   end
 end
