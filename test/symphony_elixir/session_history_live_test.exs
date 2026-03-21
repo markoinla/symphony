@@ -11,8 +11,11 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
   setup do
     endpoint_config = Application.get_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, [])
 
+    reset_history_test_store!()
+
     on_exit(fn ->
       Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
+      reset_history_test_store!()
     end)
 
     Application.put_env(
@@ -40,6 +43,8 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
 
     assert history_link
     assert Floki.attribute(history_link, "href") == ["/session/#{URI.encode(issue_identifier)}"]
+    assert document |> Floki.find(".history-shell .history-panel") |> length() == 1
+    assert document |> Floki.find(".chat-topbar") |> Enum.empty?()
   end
 
   test "session page keeps historical agent and thinking messages separated" do
@@ -66,6 +71,45 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
     assert document |> Floki.find(".chat-msg .chat-msg-sender") |> length() == 2
     assert document |> Floki.find("details.chat-thinking") |> length() == 2
     assert document |> Floki.find(".chat-tool .chat-tool-name") |> Enum.map(&Floki.text/1) == ["shell"]
+  end
+
+  test "project filter narrows the visible history list" do
+    {:ok, alpha} = Store.create_project(%{name: "Alpha"})
+    {:ok, beta} = Store.create_project(%{name: "Beta"})
+
+    alpha_issue = unique_issue_identifier()
+    beta_issue = unique_issue_identifier()
+
+    _alpha_session =
+      create_session!(issue_identifier: alpha_issue, issue_title: "Alpha issue", project_id: alpha.id)
+
+    _beta_session =
+      create_session!(issue_identifier: beta_issue, issue_title: "Beta issue", project_id: beta.id)
+
+    {:ok, view, html} = live(build_conn(), "/history")
+
+    assert html =~ alpha_issue
+    assert html =~ beta_issue
+
+    filtered_html =
+      view
+      |> element("form.history-filter")
+      |> render_change(%{"project_id" => Integer.to_string(alpha.id)})
+
+    assert filtered_html =~ alpha_issue
+    refute filtered_html =~ beta_issue
+  end
+
+  test "history list renders the dashboard empty state when no sessions exist" do
+    SymphonyElixir.Repo.delete_all(SymphonyElixir.Store.Message)
+    SymphonyElixir.Repo.delete_all(SymphonyElixir.Store.Session)
+
+    {:ok, _view, html} = live(build_conn(), "/history")
+    {:ok, document} = Floki.parse_document(html)
+
+    assert html =~ "No historical sessions recorded yet."
+    assert document |> Floki.find(".history-empty .empty-dash-text") |> length() == 1
+    assert document |> Floki.find(".chat-topbar") |> Enum.empty?()
   end
 
   test "legacy history detail path renders through the unified session view" do
@@ -134,5 +178,14 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
 
   defp unique_suffix do
     Base.url_encode64(:crypto.strong_rand_bytes(6), padding: false)
+  end
+
+  defp reset_history_test_store! do
+    SymphonyElixir.Settings.put_current_project(nil)
+    SymphonyElixir.Store.delete_all_settings()
+    SymphonyElixir.Repo.delete_all(SymphonyElixir.Store.Message)
+    SymphonyElixir.Repo.delete_all(SymphonyElixir.Store.Session)
+    SymphonyElixir.Store.delete_all_projects()
+    :ok
   end
 end
