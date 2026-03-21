@@ -52,6 +52,8 @@ Title: {{ issue.title }}
 Current status: {{ issue.state }}
 Labels: {{ issue.labels }}
 URL: {{ issue.url }}
+Live workpad comment ID: {% if issue.live_workpad_comment_id %}{{ issue.live_workpad_comment_id }}{% else %}none{% endif %}
+Existing workpad comment count: {{ issue.workpad_comment_count }}
 
 Description:
 {% if issue.description %}
@@ -64,7 +66,7 @@ No description provided.
 Comments (oldest first):
 {% for comment in issue.comments %}
 ---
-**{{ comment.author }}** ({{ comment.created_at }}):
+**{{ comment.author }}** ({{ comment.created_at }}, comment ID: {{ comment.id }}):
 {{ comment.body }}
 {% endfor %}
 ---
@@ -402,11 +404,13 @@ For video, use the same flow with `contentType: "video/webm"` (or mp4). Playwrig
 ## Step 1: Start/continue execution (Todo or In Progress)
 
 1.  Find or create a single persistent scratchpad comment for the issue:
+    - If `issue.live_workpad_comment_id` is present, treat that exact comment ID as the live workpad and update it in place with `linear_update_comment`.
     - Search existing comments for a marker header: `## Codex Workpad`.
     - Ignore resolved comments while searching; only active/unresolved comments are eligible to be reused as the live workpad.
     - If found, reuse that comment; do not create a new workpad comment.
+    - The existing Linear comments listed above include each `comment ID`; record the live workpad comment's ID before editing it.
     - If not found, create one workpad comment and use it for all updates.
-    - Persist the workpad comment ID and only write progress updates to that ID.
+    - Persist the workpad comment ID and only write progress updates to that ID with `linear_update_comment`.
 2.  If arriving from `Todo`, do not delay on additional status transitions: the issue should already be `In Progress` before this step begins.
 3.  Immediately reconcile the workpad before new edits:
     - Check off items that are already done.

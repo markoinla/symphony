@@ -55,10 +55,10 @@ defmodule SymphonyElixir.AgentRunner do
   defp run_on_worker_host(issue, codex_update_recipient, opts, worker_host) do
     Logger.info("Starting worker attempt for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)}")
 
-    case Workspace.create_for_issue(issue, worker_host) do
-      {:ok, workspace} ->
+    case Workspace.create_for_issue_with_status(issue, worker_host) do
+      {:ok, workspace, created?} ->
         send_worker_runtime_info(codex_update_recipient, issue, worker_host, workspace)
-        notify_workspace_ready(issue, workspace, worker_host)
+        maybe_notify_workspace_ready(issue, workspace, worker_host, created?)
 
         try do
           with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
@@ -141,6 +141,12 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp notify_workspace_ready(_issue, _workspace, _worker_host), do: :ok
+
+  defp maybe_notify_workspace_ready(issue, workspace, worker_host, true) do
+    notify_workspace_ready(issue, workspace, worker_host)
+  end
+
+  defp maybe_notify_workspace_ready(_issue, _workspace, _worker_host, false), do: :ok
 
   defp maybe_attach_session_resource(%Issue{id: issue_id, identifier: issue_identifier} = issue)
        when is_binary(issue_id) and is_binary(issue_identifier) do

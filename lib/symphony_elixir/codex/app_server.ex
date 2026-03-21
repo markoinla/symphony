@@ -222,10 +222,11 @@ defmodule SymphonyElixir.Codex.AppServer do
       project_env_vars()
       |> Enum.map(fn {k, v} -> "export #{k}=#{shell_escape(v)}" end)
 
-    (env_exports ++ [
-      "cd #{shell_escape(workspace)}",
-      "exec #{Config.settings!().codex.command}"
-    ])
+    (env_exports ++
+       [
+         "cd #{shell_escape(workspace)}",
+         "exec #{Config.settings!().codex.command}"
+       ])
     |> Enum.join(" && ")
   end
 

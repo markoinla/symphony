@@ -43,6 +43,22 @@ defmodule SymphonyElixir.Linear.Comment do
 
   def symphony_authored?(_comment), do: false
 
+  @spec live_workpad_comment([t()]) :: t() | nil
+  def live_workpad_comment(comments) when is_list(comments) do
+    comments
+    |> Enum.filter(&workpad?/1)
+    |> Enum.max_by(&workpad_sort_key/1, fn -> nil end)
+  end
+
+  def live_workpad_comment(_comments), do: nil
+
+  @spec workpad_comment_count([t()]) :: non_neg_integer()
+  def workpad_comment_count(comments) when is_list(comments) do
+    Enum.count(comments, &workpad?/1)
+  end
+
+  def workpad_comment_count(_comments), do: 0
+
   @spec workpad?(t() | String.t() | nil) :: boolean()
   def workpad?(%__MODULE__{body: body}), do: workpad?(body)
 
@@ -73,4 +89,11 @@ defmodule SymphonyElixir.Linear.Comment do
   end
 
   def agent_reply?(_body), do: false
+
+  defp workpad_sort_key(%__MODULE__{created_at: created_at, id: id}) do
+    {normalize_created_at(created_at), id || ""}
+  end
+
+  defp normalize_created_at(created_at) when is_binary(created_at), do: created_at
+  defp normalize_created_at(_created_at), do: ""
 end
