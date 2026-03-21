@@ -9,11 +9,11 @@ const buttonVariants = cva(
     variants: {
       variant: {
         primary:
-          'border-zinc-100 bg-zinc-100 text-zinc-900 hover:bg-white',
+          'border-th-text-1 bg-th-text-1 text-th-bg hover:opacity-80',
         secondary:
-          'border-zinc-800 bg-transparent text-zinc-300 hover:border-zinc-600 hover:text-zinc-100',
-        ghost: 'border-transparent bg-transparent text-zinc-400 hover:text-zinc-200',
-        danger: 'border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20',
+          'border-th-border bg-transparent text-th-text-2 hover:border-th-border-muted hover:text-th-text-1',
+        ghost: 'border-transparent bg-transparent text-th-text-3 hover:text-th-text-1',
+        danger: 'border-red-500/30 bg-red-500/10 text-red-500 hover:bg-red-500/20',
       },
     },
     defaultVariants: {
@@ -35,11 +35,11 @@ const badgeVariants = cva(
   {
     variants: {
       tone: {
-        neutral: 'bg-zinc-800 text-zinc-400',
-        running: 'bg-emerald-500/10 text-emerald-400',
-        retrying: 'bg-amber-500/10 text-amber-400',
-        danger: 'bg-red-500/10 text-red-400',
-        live: 'bg-indigo-500/10 text-indigo-400',
+        neutral: 'bg-th-muted text-th-text-3',
+        running: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+        retrying: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+        danger: 'bg-red-500/10 text-red-600 dark:text-red-400',
+        live: 'bg-th-accent-muted text-th-accent',
       },
     },
     defaultVariants: {
@@ -60,7 +60,7 @@ export function Card({ className, ...props }: ComponentProps<'section'>) {
   return (
     <section
       className={cn(
-        'rounded-xl border border-zinc-800 bg-zinc-900 p-6',
+        'rounded-xl border border-th-border bg-th-surface p-6',
         className,
       )}
       {...props}
@@ -72,7 +72,7 @@ export function Input({ className, ...props }: ComponentProps<'input'>) {
   return (
     <input
       className={cn(
-        'w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm text-zinc-200 outline-none transition placeholder:text-zinc-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30',
+        'w-full rounded-lg border border-th-border bg-th-inset px-3.5 py-2.5 text-sm text-th-text-1 outline-none transition placeholder:text-th-text-4 focus:border-th-accent focus:ring-1 focus:ring-th-accent/30',
         className,
       )}
       {...props}
@@ -84,7 +84,7 @@ export function Textarea({ className, ...props }: ComponentProps<'textarea'>) {
   return (
     <textarea
       className={cn(
-        'min-h-24 w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm text-zinc-200 outline-none transition placeholder:text-zinc-600 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30',
+        'min-h-24 w-full rounded-lg border border-th-border bg-th-inset px-3.5 py-2.5 text-sm text-th-text-1 outline-none transition placeholder:text-th-text-4 focus:border-th-accent focus:ring-1 focus:ring-th-accent/30',
         className,
       )}
       {...props}

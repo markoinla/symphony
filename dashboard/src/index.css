@@ -1,19 +1,64 @@
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap');
 @import 'tailwindcss';
 
+@custom-variant dark (&:is(.dark *));
+
 @theme {
   --font-sans: 'Manrope', ui-sans-serif, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  --color-th-bg: var(--th-bg);
+  --color-th-surface: var(--th-surface);
+  --color-th-inset: var(--th-inset);
+  --color-th-border: var(--th-border);
+  --color-th-border-muted: var(--th-border-muted);
+  --color-th-text-1: var(--th-text-1);
+  --color-th-text-2: var(--th-text-2);
+  --color-th-text-3: var(--th-text-3);
+  --color-th-text-4: var(--th-text-4);
+  --color-th-muted: var(--th-muted);
+  --color-th-accent: var(--th-accent);
+  --color-th-accent-muted: var(--th-accent-muted);
 }
 
+/* Light theme (default) */
 :root {
-  color: #fafafa;
+  --th-bg: #fafafa;
+  --th-surface: #ffffff;
+  --th-inset: #f4f4f5;
+  --th-border: #e4e4e7;
+  --th-border-muted: #d4d4d8;
+  --th-text-1: #18181b;
+  --th-text-2: #3f3f46;
+  --th-text-3: #71717a;
+  --th-text-4: #a1a1aa;
+  --th-muted: #f4f4f5;
+  --th-accent: #6366f1;
+  --th-accent-muted: #e0e7ff;
+
+  color: var(--th-text-1);
   font-family: var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #09090b;
+  background-color: var(--th-bg);
+}
+
+/* Dark theme */
+.dark {
+  --th-bg: #09090b;
+  --th-surface: #18181b;
+  --th-inset: #09090b;
+  --th-border: #27272a;
+  --th-border-muted: #3f3f46;
+  --th-text-1: #fafafa;
+  --th-text-2: #a1a1aa;
+  --th-text-3: #71717a;
+  --th-text-4: #52525b;
+  --th-muted: #27272a;
+  --th-accent: #818cf8;
+  --th-accent-muted: rgba(99, 102, 241, 0.1);
 }
 
 * {
@@ -27,7 +72,7 @@ html {
 body {
   margin: 0;
   min-width: 320px;
-  background: #09090b;
+  background: var(--th-bg);
 }
 
 body,
@@ -59,7 +104,7 @@ select {
   min-height: 100vh;
 }
 
-/* Custom scrollbar for dark theme */
+/* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
 }
@@ -69,10 +114,10 @@ select {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: var(--th-border);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+  background: var(--th-border-muted);
 }
