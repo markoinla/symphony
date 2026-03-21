@@ -26,20 +26,18 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   @spec messages(Conn.t(), map()) :: Conn.t()
   def messages(conn, %{"issue_identifier" => issue_identifier}) do
-    case Presenter.messages_payload(issue_identifier, orchestrator(), snapshot_timeout_ms()) do
-      {:ok, payload} ->
-        json(conn, payload)
+    {:ok, payload} = Presenter.messages_payload(issue_identifier, orchestrator(), snapshot_timeout_ms())
+    json(conn, payload)
+  end
 
-      {:error, :issue_not_found} ->
-        error_response(conn, 404, "issue_not_found", "Issue not found")
+  @spec sessions(Conn.t(), map()) :: Conn.t()
+  def sessions(conn, params) do
+    opts =
+      []
+      |> maybe_put_issue_identifier(params["issue_identifier"])
+      |> maybe_put_limit(params["limit"])
 
-      {:error, :session_log_not_found} ->
-        json(conn, %{
-          issue_identifier: issue_identifier,
-          session_id: nil,
-          messages: []
-        })
-    end
+    json(conn, Presenter.history_payload(opts))
   end
 
   @spec refresh(Conn.t(), map()) :: Conn.t()
@@ -70,6 +68,22 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
     |> put_status(status)
     |> json(%{error: %{code: code, message: message}})
   end
+
+  defp maybe_put_issue_identifier(opts, issue_identifier)
+       when is_binary(issue_identifier) and issue_identifier != "" do
+    Keyword.put(opts, :issue_identifier, issue_identifier)
+  end
+
+  defp maybe_put_issue_identifier(opts, _issue_identifier), do: opts
+
+  defp maybe_put_limit(opts, limit) when is_binary(limit) do
+    case Integer.parse(limit) do
+      {value, ""} when value > 0 -> Keyword.put(opts, :limit, min(value, 500))
+      _ -> opts
+    end
+  end
+
+  defp maybe_put_limit(opts, _limit), do: opts
 
   defp orchestrator do
     Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator.default_source()

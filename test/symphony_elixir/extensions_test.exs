@@ -2,9 +2,9 @@ defmodule SymphonyElixir.ExtensionsTest do
   use SymphonyElixir.TestSupport
 
   import Phoenix.ConnTest
-  import Phoenix.LiveViewTest
 
   alias SymphonyElixir.Linear.Adapter
+  alias SymphonyElixir.Store
   alias SymphonyElixir.Tracker.Memory
   alias SymphonyElixirWeb.Presenter
 
@@ -104,6 +104,12 @@ defmodule SymphonyElixir.ExtensionsTest do
       Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
     end)
 
+    :ok
+  end
+
+  setup do
+    Store.delete_all_projects()
+    Store.delete_all_settings()
     :ok
   end
 
@@ -654,6 +660,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert issue_payload == %{
              "issue_identifier" => "MT-HTTP",
              "issue_id" => "issue-http",
+             "issue_title" => nil,
              "status" => "running",
              "workspace" => %{
                "path" => Path.join(Config.settings!().workspace.root, "MT-HTTP"),
@@ -712,8 +719,11 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert json_response(post(build_conn(), "/api/v1/MT-1", %{}), 405) ==
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
 
-    assert json_response(get(build_conn(), "/unknown"), 404) ==
+    assert json_response(get(build_conn(), "/api/v1/unknown/extra"), 404) ==
              %{"error" => %{"code" => "not_found", "message" => "Route not found"}}
+
+    assert html_response(get(build_conn(), "/unknown"), 200) =~ ~s(<div id="root"></div>)
+    assert response(get(build_conn(), "/unknown.js"), 404) == "Not found"
 
     state_payload = json_response(get(build_conn(), "/api/v1/state"), 200)
 
@@ -746,7 +756,30 @@ defmodule SymphonyElixir.ExtensionsTest do
              }
   end
 
-  test "dashboard bootstraps liveview from embedded static assets" do
+  test "sse routes bypass json accept negotiation" do
+    assert Phoenix.Router.route_info(
+             SymphonyElixirWeb.Router,
+             "GET",
+             "/api/v1/stream/dashboard",
+             "127.0.0.1"
+           ).pipe_through == []
+
+    assert Phoenix.Router.route_info(
+             SymphonyElixirWeb.Router,
+             "GET",
+             "/api/v1/stream/session/issue-1",
+             "127.0.0.1"
+           ).pipe_through == []
+
+    assert Phoenix.Router.route_info(
+             SymphonyElixirWeb.Router,
+             "GET",
+             "/api/v1/state",
+             "127.0.0.1"
+           ).pipe_through == [:api]
+  end
+
+  test "dashboard serves the built spa shell and assets" do
     orchestrator_name = Module.concat(__MODULE__, :AssetOrchestrator)
 
     {:ok, _pid} =
@@ -761,32 +794,20 @@ defmodule SymphonyElixir.ExtensionsTest do
         }
       )
 
+    write_dashboard_assets!()
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
     html = html_response(get(build_conn(), "/"), 200)
-    assert html =~ "/dashboard.css"
-    assert html =~ "/vendor/phoenix_html/phoenix_html.js"
-    assert html =~ "/vendor/phoenix/phoenix.js"
-    assert html =~ "/vendor/phoenix_live_view/phoenix_live_view.js"
-    refute html =~ "/assets/app.js"
-    refute html =~ "<style>"
+    assert html =~ "<title>Symphony Dashboard</title>"
+    assert html =~ "/assets/app.js"
 
-    dashboard_css = response(get(build_conn(), "/dashboard.css"), 200)
-    assert dashboard_css =~ ":root {"
-    assert dashboard_css =~ ".status-badge-live"
-    assert dashboard_css =~ "[data-phx-main].phx-connected .status-badge-live"
-    assert dashboard_css =~ "[data-phx-main].phx-connected .status-badge-offline"
+    deep_link_html = html_response(get(build_conn(), "/history"), 200)
+    assert deep_link_html =~ "<div id=\"root\"></div>"
 
-    phoenix_html_js = response(get(build_conn(), "/vendor/phoenix_html/phoenix_html.js"), 200)
-    assert phoenix_html_js =~ "phoenix.link.click"
+    asset_js = response(get(build_conn(), "/assets/app.js"), 200)
+    assert asset_js =~ "console.log('dashboard')"
 
-    phoenix_js = response(get(build_conn(), "/vendor/phoenix/phoenix.js"), 200)
-    assert phoenix_js =~ "var Phoenix = (() => {"
-
-    live_view_js =
-      response(get(build_conn(), "/vendor/phoenix_live_view/phoenix_live_view.js"), 200)
-
-    assert live_view_js =~ "var LiveView = (() => {"
+    assert response(get(build_conn(), "/missing.js"), 404) == "Not found"
   end
 
   defp drain_graphql_calls do
@@ -797,90 +818,133 @@ defmodule SymphonyElixir.ExtensionsTest do
     end
   end
 
-  test "dashboard liveview renders and refreshes over pubsub" do
-    orchestrator_name = Module.concat(__MODULE__, :DashboardOrchestrator)
-    snapshot = static_snapshot()
+  test "projects, settings, and history endpoints serve spa data contracts" do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    {:ok, orchestrator_pid} =
-      StaticOrchestrator.start_link(
-        name: orchestrator_name,
-        snapshot: snapshot,
-        refresh: %{
-          queued: true,
-          coalesced: true,
-          requested_at: DateTime.utc_now(),
-          operations: ["poll"]
-        }
-      )
+    {:ok, project} =
+      Store.create_project(%{
+        name: "Symphony",
+        linear_project_slug: "symphony",
+        linear_organization_slug: "marko-la",
+        linear_filter_by: "project",
+        linear_label_name: nil,
+        github_repo: "openai/symphony",
+        workspace_root: "/tmp/symphony",
+        env_vars: "FOO=bar",
+        created_at: now,
+        updated_at: now
+      })
 
-    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+    {:ok, _setting} = Store.put_setting("LINEAR_API_KEY", "secret")
 
-    {:ok, view, html} = live(build_conn(), "/")
-    assert html =~ "Symphony"
-    assert html =~ "MT-HTTP"
-    assert html =~ "MT-RETRY"
-    assert html =~ "rendered"
-    assert html =~ "Runtime"
-    assert html =~ "Live"
-    assert html =~ "Offline"
-    assert html =~ "Session log"
-    refute html =~ "data-runtime-clock="
-    refute html =~ "setInterval(refreshRuntimeClocks"
-    refute html =~ "Refresh now"
-    refute html =~ "Transport"
-    assert html =~ "status-badge-live"
-    assert html =~ "status-badge-offline"
+    {:ok, session} =
+      Store.create_session(%{
+        issue_id: "issue-history",
+        issue_identifier: "MT-HISTORY",
+        issue_title: "Historical session",
+        session_id: "session-history",
+        status: "completed",
+        started_at: now,
+        ended_at: now,
+        turn_count: 2,
+        input_tokens: 11,
+        output_tokens: 13,
+        total_tokens: 24,
+        worker_host: "worker-1",
+        workspace_path: "/tmp/symphony/MT-HISTORY",
+        error: nil
+      })
 
-    updated_snapshot =
-      put_in(snapshot.running, [
-        %{
-          issue_id: "issue-http",
-          identifier: "MT-HTTP",
-          state: "In Progress",
-          session_id: "thread-http",
-          turn_count: 8,
-          last_codex_event: :notification,
-          last_codex_message: %{
-            event: :notification,
-            message: %{
-              payload: %{
-                "method" => "codex/event/agent_message_content_delta",
-                "params" => %{
-                  "msg" => %{
-                    "content" => "structured update"
-                  }
-                }
-              }
-            }
-          },
-          last_codex_timestamp: DateTime.utc_now(),
-          codex_input_tokens: 10,
-          codex_output_tokens: 12,
-          codex_total_tokens: 22,
-          started_at: DateTime.utc_now()
-        }
-      ])
+    {:ok, _message} =
+      Store.append_message(session.id, %{
+        seq: 1,
+        type: "response",
+        content: "Historical message",
+        metadata: Jason.encode!(%{"source" => "test"}),
+        timestamp: now
+      })
 
-    :sys.replace_state(orchestrator_pid, fn state ->
-      Keyword.put(state, :snapshot, updated_snapshot)
-    end)
+    start_test_endpoint(orchestrator: Module.concat(__MODULE__, :MissingDashboardOrchestrator), snapshot_timeout_ms: 5)
 
-    StatusDashboard.notify_update()
+    assert json_response(get(build_conn(), "/api/v1/projects"), 200) == %{
+             "projects" => [
+               %{
+                 "id" => project.id,
+                 "name" => "Symphony",
+                 "linear_project_slug" => "symphony",
+                 "linear_organization_slug" => "marko-la",
+                 "linear_filter_by" => "project",
+                 "linear_label_name" => nil,
+                 "github_repo" => "openai/symphony",
+                 "workspace_root" => "/tmp/symphony",
+                 "env_vars" => "FOO=bar",
+                 "created_at" => DateTime.to_iso8601(now),
+                 "updated_at" => DateTime.to_iso8601(now)
+               }
+             ]
+           }
 
-    assert_eventually(fn ->
-      render(view) =~ "agent message content streaming: structured update"
-    end)
-  end
+    assert %{
+             "project" => %{
+               "id" => project_id,
+               "name" => "Symphony",
+               "github_repo" => "openai/symphony"
+             }
+           } = json_response(get(build_conn(), "/api/v1/projects/#{project.id}"), 200)
 
-  test "dashboard liveview renders an unavailable state without crashing" do
-    start_test_endpoint(
-      orchestrator: Module.concat(__MODULE__, :MissingDashboardOrchestrator),
-      snapshot_timeout_ms: 5
-    )
+    assert project_id == project.id
 
-    {:ok, _view, html} = live(build_conn(), "/")
-    assert html =~ "Snapshot unavailable"
-    assert html =~ "snapshot_unavailable"
+    assert json_response(get(build_conn(), "/api/v1/settings"), 200) == %{
+             "settings" => [%{"key" => "LINEAR_API_KEY", "value" => "secret"}]
+           }
+
+    assert json_response(get(build_conn(), "/api/v1/sessions?issue_identifier=MT-HISTORY&limit=5"), 200) == %{
+             "sessions" => [
+               %{
+                 "id" => session.id,
+                 "issue_identifier" => "MT-HISTORY",
+                 "issue_title" => "Historical session",
+                 "session_id" => "session-history",
+                 "status" => "completed",
+                 "started_at" => DateTime.to_iso8601(now),
+                 "ended_at" => DateTime.to_iso8601(now),
+                 "turn_count" => 2,
+                 "input_tokens" => 11,
+                 "output_tokens" => 13,
+                 "total_tokens" => 24,
+                 "worker_host" => "worker-1",
+                 "error" => nil
+               }
+             ]
+           }
+
+    assert %{
+             "issue_identifier" => "MT-HISTORY",
+             "issue_id" => nil,
+             "issue_title" => "Historical session",
+             "status" => "completed",
+             "active_session_id" => nil,
+             "sessions" => [
+               %{
+                 "id" => session_id,
+                 "issue_identifier" => "MT-HISTORY",
+                 "issue_title" => "Historical session",
+                 "session_id" => "session-history",
+                 "status" => "completed",
+                 "live" => false,
+                 "messages" => [
+                   %{
+                     "id" => 1,
+                     "type" => "response",
+                     "content" => "Historical message",
+                     "metadata" => %{"source" => "test"}
+                   }
+                 ]
+               }
+             ]
+           } = json_response(get(build_conn(), "/api/v1/MT-HISTORY/messages"), 200)
+
+    assert session_id == session.id
   end
 
   test "http server serves embedded assets, accepts form posts, and rejects invalid hosts" do
@@ -910,6 +974,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     start_supervised!({StaticOrchestrator, name: orchestrator_name, snapshot: snapshot, refresh: refresh})
 
+    write_dashboard_assets!()
     start_supervised!({HttpServer, server_opts})
 
     port = wait_for_bound_port()
@@ -919,13 +984,13 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert response.status == 200
     assert response.body["counts"] == %{"running" => 1, "retrying" => 1}
 
-    dashboard_css = Req.get!("http://127.0.0.1:#{port}/dashboard.css")
-    assert dashboard_css.status == 200
-    assert dashboard_css.body =~ ":root {"
+    dashboard_html = Req.get!("http://127.0.0.1:#{port}/")
+    assert dashboard_html.status == 200
+    assert dashboard_html.body =~ "<div id=\"root\"></div>"
 
-    phoenix_js = Req.get!("http://127.0.0.1:#{port}/vendor/phoenix/phoenix.js")
-    assert phoenix_js.status == 200
-    assert phoenix_js.body =~ "var Phoenix = (() => {"
+    asset_js = Req.get!("http://127.0.0.1:#{port}/assets/app.js")
+    assert asset_js.status == 200
+    assert asset_js.body =~ "console.log('dashboard')"
 
     refresh_response =
       Req.post!("http://127.0.0.1:#{port}/api/v1/refresh",
@@ -957,6 +1022,52 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
     start_supervised!({SymphonyElixirWeb.Endpoint, []})
+  end
+
+  defp write_dashboard_assets! do
+    static_root = dashboard_static_root()
+    assets_root = Path.join(static_root, "assets")
+    backup_root = static_root <> ".test-backup-#{System.unique_integer([:positive])}"
+
+    if File.exists?(static_root) do
+      File.rename!(static_root, backup_root)
+    end
+
+    File.mkdir_p!(assets_root)
+
+    File.write!(
+      Path.join(static_root, "index.html"),
+      """
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset=\"utf-8\" />
+          <title>Symphony Dashboard</title>
+        </head>
+        <body>
+          <div id=\"root\"></div>
+          <script type=\"module\" src=\"/assets/app.js\"></script>
+        </body>
+      </html>
+      """
+    )
+
+    File.write!(Path.join(assets_root, "app.js"), "console.log('dashboard')\n")
+
+    on_exit(fn ->
+      File.rm_rf(static_root)
+
+      if File.exists?(backup_root) do
+        File.rename!(backup_root, static_root)
+      end
+    end)
+  end
+
+  defp dashboard_static_root do
+    :symphony_elixir
+    |> :code.priv_dir()
+    |> to_string()
+    |> Path.join("static/dashboard")
   end
 
   defp static_snapshot do

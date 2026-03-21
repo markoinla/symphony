@@ -1,48 +1,52 @@
 defmodule SymphonyElixirWeb.Router do
   @moduledoc """
-  Router for Symphony's observability dashboard and API.
+  Router for Symphony's JSON API and React dashboard SPA.
   """
 
   use Phoenix.Router
-  import Phoenix.LiveView.Router
 
-  pipeline :browser do
-    plug(:fetch_session)
-    plug(:fetch_live_flash)
-    plug(:put_root_layout, html: {SymphonyElixirWeb.Layouts, :root})
-    plug(:protect_from_forgery)
-    plug(:put_secure_browser_headers)
+  pipeline :api do
+    plug(:accepts, ["json"])
   end
 
-  scope "/", SymphonyElixirWeb do
-    get("/dashboard.css", StaticAssetController, :dashboard_css)
-    get("/vendor/phoenix_html/phoenix_html.js", StaticAssetController, :phoenix_html_js)
-    get("/vendor/phoenix/phoenix.js", StaticAssetController, :phoenix_js)
-    get("/vendor/phoenix_live_view/phoenix_live_view.js", StaticAssetController, :phoenix_live_view_js)
+  scope "/api/v1", SymphonyElixirWeb do
+    get("/stream/dashboard", StreamController, :dashboard)
+    get("/stream/session/:issue_id", StreamController, :session)
+    match(:*, "/stream/dashboard", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/stream/session/:issue_id", ObservabilityApiController, :method_not_allowed)
   end
 
-  scope "/", SymphonyElixirWeb do
-    pipe_through(:browser)
+  scope "/api/v1", SymphonyElixirWeb do
+    pipe_through(:api)
 
-    live("/", DashboardLive, :index)
-    live("/session/:issue_identifier", SessionLive, :show)
-    live("/history", HistoryLive, :index)
-    live("/history/:id", SessionLive, :show)
-    live("/projects", ProjectsLive, :index)
-    live("/settings", SettingsLive, :index)
-  end
+    get("/state", ObservabilityApiController, :state)
+    post("/refresh", ObservabilityApiController, :refresh)
+    get("/sessions", ObservabilityApiController, :sessions)
+    get("/projects", ProjectApiController, :index)
+    post("/projects", ProjectApiController, :create)
+    get("/projects/:id", ProjectApiController, :show)
+    put("/projects/:id", ProjectApiController, :update)
+    delete("/projects/:id", ProjectApiController, :delete)
+    get("/settings", SettingsApiController, :index)
+    put("/settings/:key", SettingsApiController, :upsert)
+    delete("/settings/:key", SettingsApiController, :delete)
 
-  scope "/", SymphonyElixirWeb do
-    get("/api/v1/state", ObservabilityApiController, :state)
-
-    match(:*, "/", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/api/v1/state", ObservabilityApiController, :method_not_allowed)
-    post("/api/v1/refresh", ObservabilityApiController, :refresh)
-    match(:*, "/api/v1/refresh", ObservabilityApiController, :method_not_allowed)
-    get("/api/v1/:issue_identifier/messages", ObservabilityApiController, :messages)
-    match(:*, "/api/v1/:issue_identifier/messages", ObservabilityApiController, :method_not_allowed)
-    get("/api/v1/:issue_identifier", ObservabilityApiController, :issue)
-    match(:*, "/api/v1/:issue_identifier", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/state", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/refresh", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/sessions", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/projects", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/projects/:id", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/settings", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/settings/:key", ObservabilityApiController, :method_not_allowed)
+    get("/:issue_identifier/messages", ObservabilityApiController, :messages)
+    match(:*, "/:issue_identifier/messages", ObservabilityApiController, :method_not_allowed)
+    get("/:issue_identifier", ObservabilityApiController, :issue)
+    match(:*, "/:issue_identifier", ObservabilityApiController, :method_not_allowed)
     match(:*, "/*path", ObservabilityApiController, :not_found)
+  end
+
+  scope "/", SymphonyElixirWeb do
+    get("/*path", SpaController, :index)
+    match(:*, "/*path", ObservabilityApiController, :method_not_allowed)
   end
 end

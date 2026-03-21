@@ -80,25 +80,43 @@ defmodule SymphonyElixir.Store do
     end
   end
 
-  @spec all_settings() :: [Ecto.Schema.t()]
-  def all_settings do
+  @spec list_settings() :: [Ecto.Schema.t()]
+  def list_settings do
     Repo.all(Setting)
   end
 
-  @spec set_setting(String.t(), String.t()) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
-  def set_setting(key, value) do
+  @spec all_settings() :: [Ecto.Schema.t()]
+  def all_settings do
+    list_settings()
+  end
+
+  @spec put_setting(String.t(), String.t()) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
+  def put_setting(key, value) do
     %Setting{key: key}
     |> Setting.changeset(%{key: key, value: to_string(value)})
     |> Repo.insert(on_conflict: :replace_all, conflict_target: :key)
   end
 
+  @spec set_setting(String.t(), String.t()) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
+  def set_setting(key, value) do
+    put_setting(key, value)
+  end
+
   @spec set_settings(map()) :: :ok
   def set_settings(settings_map) when is_map(settings_map) do
     Enum.each(settings_map, fn {key, value} ->
-      set_setting(to_string(key), to_string(value))
+      put_setting(to_string(key), to_string(value))
     end)
 
     :ok
+  end
+
+  @spec delete_setting(String.t()) :: {:ok, Ecto.Schema.t()} | {:error, :not_found}
+  def delete_setting(key) do
+    case Repo.get(Setting, key) do
+      nil -> {:error, :not_found}
+      setting -> Repo.delete(setting)
+    end
   end
 
   @spec delete_all_settings() :: :ok

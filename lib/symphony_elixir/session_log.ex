@@ -253,22 +253,38 @@ defmodule SymphonyElixir.SessionLog do
   end
 
   defp merge_tool_metadata(existing, incoming) do
-    existing_args = if is_map(existing[:args]), do: existing[:args], else: %{}
-    incoming_args = if is_map(incoming[:args]), do: incoming[:args], else: %{}
-    merged_args = Map.merge(existing_args, incoming_args)
-
-    status =
-      cond do
-        incoming[:status] not in [nil, "unknown"] -> incoming[:status]
-        existing[:status] not in [nil, "unknown"] -> existing[:status]
-        true -> incoming[:status] || existing[:status] || "unknown"
-      end
-
-    %{status: status, args: merged_args}
-    |> maybe_put_arg(:error, incoming[:error] || existing[:error])
-    |> maybe_put_arg(:reason, incoming[:reason] || existing[:reason])
-    |> maybe_put_arg(:decision, incoming[:decision] || existing[:decision])
+    %{
+      status: merge_tool_status(existing[:status], incoming[:status]),
+      args: merge_tool_args(existing, incoming)
+    }
+    |> maybe_put_arg(:error, first_present(incoming[:error], existing[:error]))
+    |> maybe_put_arg(:reason, first_present(incoming[:reason], existing[:reason]))
+    |> maybe_put_arg(:decision, first_present(incoming[:decision], existing[:decision]))
   end
+
+  defp merge_tool_args(existing, incoming) do
+    Map.merge(tool_args(existing), tool_args(incoming))
+  end
+
+  defp tool_args(metadata) do
+    case metadata[:args] do
+      args when is_map(args) -> args
+      _ -> %{}
+    end
+  end
+
+  defp merge_tool_status(_existing_status, incoming_status)
+       when incoming_status not in [nil, "unknown"],
+       do: incoming_status
+
+  defp merge_tool_status(existing_status, _incoming_status)
+       when existing_status not in [nil, "unknown"],
+       do: existing_status
+
+  defp merge_tool_status(existing_status, incoming_status),
+    do: incoming_status || existing_status || "unknown"
+
+  defp first_present(primary, fallback), do: primary || fallback
 
   defp update_persisted_metadata(nil, _message), do: :ok
 
