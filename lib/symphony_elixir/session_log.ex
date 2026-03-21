@@ -116,7 +116,8 @@ defmodule SymphonyElixir.SessionLog do
       session_id: session_id,
       next_id: 1,
       db_session_id: db_session_id,
-      last_streamable: nil
+      last_streamable: nil,
+      last_tool_call: nil
     }
 
     Logger.info("SessionLog started for issue_id=#{issue_id} session_id=#{session_id} db_session_id=#{inspect(db_session_id)}")
@@ -137,6 +138,9 @@ defmodule SymphonyElixir.SessionLog do
       {:stream, type, content, metadata, stream_key} ->
         handle_streamable_delta(type, content, metadata, codex_message, stream_key, state)
 
+      {:message, :tool_call, tool_name, metadata} ->
+        handle_tool_call(tool_name, metadata, codex_message, state)
+
       {:message, type, content, metadata} ->
         message = %{
           id: state.next_id,
@@ -149,7 +153,7 @@ defmodule SymphonyElixir.SessionLog do
         ObservabilityPubSub.broadcast_session_message(state.issue_id, message)
         persist_message(state.db_session_id, message)
 
-        {:noreply, %{state | next_id: state.next_id + 1, last_streamable: nil}}
+        {:noreply, %{state | next_id: state.next_id + 1, last_streamable: nil, last_tool_call: nil}}
     end
   end
 
@@ -211,6 +215,87 @@ defmodule SymphonyElixir.SessionLog do
     persist_message(state.db_session_id, message)
 
     {:noreply, %{state | next_id: state.next_id + 1, last_streamable: %{stream_key: stream_key, message: message}}}
+  end
+
+  # ── Tool call deduplication ──────────────────────────────────────────
+
+  # Merge with existing tool_call if same tool_name (dedup duplicate events)
+  defp handle_tool_call(
+         tool_name,
+         metadata,
+         _codex_message,
+         %{last_tool_call: %{content: last_name} = last} = state
+       )
+       when tool_name == last_name do
+    merged = merge_tool_metadata(last.metadata, metadata)
+    updated = %{last | metadata: merged}
+
+    ObservabilityPubSub.broadcast_session_message_update(state.issue_id, updated)
+    update_persisted_metadata(state.db_session_id, updated)
+
+    {:noreply, %{state | last_tool_call: updated}}
+  end
+
+  # First tool_call event — create a new message
+  defp handle_tool_call(tool_name, metadata, codex_message, state) do
+    message = %{
+      id: state.next_id,
+      timestamp: Map.get(codex_message, :timestamp, DateTime.utc_now()),
+      type: :tool_call,
+      content: tool_name,
+      metadata: metadata
+    }
+
+    ObservabilityPubSub.broadcast_session_message(state.issue_id, message)
+    persist_message(state.db_session_id, message)
+
+    {:noreply, %{state | next_id: state.next_id + 1, last_streamable: nil, last_tool_call: message}}
+  end
+
+  defp merge_tool_metadata(existing, incoming) do
+    existing_args = if is_map(existing[:args]), do: existing[:args], else: %{}
+    incoming_args = if is_map(incoming[:args]), do: incoming[:args], else: %{}
+    merged_args = Map.merge(existing_args, incoming_args)
+
+    status =
+      cond do
+        incoming[:status] not in [nil, "unknown"] -> incoming[:status]
+        existing[:status] not in [nil, "unknown"] -> existing[:status]
+        true -> incoming[:status] || existing[:status] || "unknown"
+      end
+
+    %{status: status, args: merged_args}
+    |> maybe_put_arg(:error, incoming[:error] || existing[:error])
+    |> maybe_put_arg(:reason, incoming[:reason] || existing[:reason])
+    |> maybe_put_arg(:decision, incoming[:decision] || existing[:decision])
+  end
+
+  defp update_persisted_metadata(nil, _message), do: :ok
+
+  defp update_persisted_metadata(db_session_id, message) do
+    encoded = Jason.encode!(message.metadata)
+
+    Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
+      retry_update_message_metadata(db_session_id, message.id, encoded, 10)
+    end)
+
+    :ok
+  end
+
+  defp retry_update_message_metadata(_db_session_id, _seq, _metadata, 0), do: :ok
+
+  defp retry_update_message_metadata(db_session_id, seq, metadata, attempts_left) do
+    case Store.update_message_metadata(db_session_id, seq, metadata) do
+      {:ok, _message} ->
+        :ok
+
+      {:error, :not_found} ->
+        Process.sleep(10)
+        retry_update_message_metadata(db_session_id, seq, metadata, attempts_left - 1)
+
+      {:error, _reason} ->
+        :ok
+    end
   end
 
   # ── Message classification ──────────────────────────────────────────

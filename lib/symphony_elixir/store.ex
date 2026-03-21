@@ -180,6 +180,17 @@ defmodule SymphonyElixir.Store do
     end
   end
 
+  @spec update_message_metadata(integer(), integer(), String.t()) ::
+          {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t() | :not_found}
+  def update_message_metadata(db_session_id, seq, new_metadata) do
+    case Message
+         |> where([m], m.session_id == ^db_session_id and m.seq == ^seq)
+         |> Repo.one() do
+      nil -> {:error, :not_found}
+      msg -> msg |> Ecto.Changeset.change(metadata: new_metadata) |> Repo.update()
+    end
+  end
+
   @spec list_sessions(keyword()) :: [Ecto.Schema.t()]
   def list_sessions(opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)

@@ -70,7 +70,8 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
 
     assert document |> Floki.find(".chat-msg .chat-msg-sender") |> length() == 2
     assert document |> Floki.find("details.chat-thinking") |> length() == 2
-    assert document |> Floki.find(".chat-tool .chat-tool-chip-primary .chat-tool-chip-label") |> Enum.map(&Floki.text/1) == ["shell"]
+    assert [label] = document |> Floki.find(".chat-tool .chat-tool-chip-label") |> Enum.map(&Floki.text/1)
+    assert label =~ "shell"
   end
 
   test "project filter narrows the visible history list" do
@@ -112,7 +113,7 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
     assert document |> Floki.find(".chat-topbar") |> Enum.empty?()
   end
 
-  test "session page renders compact command tool badges with hovercard details" do
+  test "session page renders single tool badge with hovercard details" do
     issue_identifier = unique_issue_identifier()
     session = create_session!(issue_identifier: issue_identifier, issue_title: "Command context")
 
@@ -125,15 +126,14 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
     {:ok, document} = Floki.parse_document(html)
 
     [tool_card] = Floki.find(document, ".chat-tool")
-    badge_labels = Floki.find(tool_card, ".chat-tool-chip-label") |> Enum.map(&Floki.text/1)
-    hover_titles = Floki.find(tool_card, ".chat-tool-hovercard-title") |> Enum.map(&Floki.text/1)
-    hover_bodies = Floki.find(tool_card, ".chat-tool-hovercard-body") |> Enum.map(&Floki.text/1)
+    [label] = Floki.find(tool_card, ".chat-tool-chip-label") |> Enum.map(&Floki.text/1)
+    [detail] = Floki.find(tool_card, ".chat-tool-hovercard-body") |> Enum.map(&Floki.text/1)
 
-    assert badge_labels == ["Command", "git status --short", "SYM-28 • exit 0", "completed"]
-    assert hover_titles == ["Tool", "Command", "Run details", "Status"]
-    assert Enum.any?(hover_bodies, &String.contains?(&1, "exec_command"))
-    assert Enum.any?(hover_bodies, &String.contains?(&1, "/tmp/workspaces/SYM-28"))
-    assert Enum.any?(hover_bodies, &String.contains?(&1, "State: completed"))
+    assert label =~ "Command"
+    assert label =~ "git status --short"
+    assert detail =~ "Tool: exec_command"
+    assert detail =~ "Workspace: /tmp/workspaces/SYM-28"
+    assert detail =~ "Status: completed"
   end
 
   test "session page preserves details state across live patches" do
@@ -151,13 +151,11 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
     {:ok, document} = Floki.parse_document(html)
 
     chat_entries = Floki.find(document, "[data-chat-entry]")
-    [tool_details] = Floki.find(document, "details.chat-tool-pill")
     [thinking_details] = Floki.find(document, "details.chat-thinking")
 
     assert length(chat_entries) == 3
     assert Enum.all?(chat_entries, &(Floki.attribute(&1, "id") != []))
-    assert Floki.attribute(tool_details, "phx-mounted") != []
-    assert Floki.attribute(tool_details, "id") != []
+    assert Floki.find(document, ".chat-tool-chip") |> length() == 1
     assert Floki.attribute(thinking_details, "phx-mounted") != []
     assert Floki.attribute(thinking_details, "id") != []
   end

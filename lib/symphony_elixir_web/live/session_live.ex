@@ -163,99 +163,103 @@ defmodule SymphonyElixirWeb.SessionLive do
           </div>
         <% else %>
           <div class="chat-messages">
-            <div :for={msg <- @messages} id={msg.dom_id} data-chat-entry>
-              <%= case msg.type do %>
-                <% :session_header -> %>
-                  <div class="chat-session-header">
-                    <div class="chat-session-header-line"></div>
-                    <div class="chat-session-header-content">
-                      <span class={session_status_class(msg.metadata[:status])}>
-                        <%= msg.metadata[:status] %>
-                      </span>
-                      <%= if msg.metadata[:turn_count] do %>
-                        <span class="chat-session-header-stat">
-                          <%= msg.metadata[:turn_count] %> turns
-                        </span>
-                      <% end %>
-                      <%= if msg.metadata[:total_tokens] do %>
-                        <span class="chat-session-header-stat">
-                          <%= format_int(msg.metadata[:total_tokens]) %> tok
-                        </span>
-                      <% end %>
-                      <%= if msg.metadata[:started_at] do %>
-                        <span class="chat-session-header-stat">
-                          <%= format_session_datetime(msg.metadata[:started_at]) %>
-                        </span>
-                      <% end %>
-                      <span class="chat-session-header-id">
-                        <%= truncate_session_id(msg.metadata[:session_id]) %>
-                      </span>
-                    </div>
-                    <div class="chat-session-header-line"></div>
-                  </div>
-
-                <% :response -> %>
-                  <div class="chat-msg">
-                    <div class="chat-msg-header">
-                      <div class="chat-msg-avatar">
-                        <svg viewBox="0 0 16 16"><path d="M4 12l4-8 4 8"/></svg>
-                      </div>
-                      <span class="chat-msg-sender">Agent</span>
-                      <span class="chat-msg-time"><%= format_time(msg.timestamp) %></span>
-                    </div>
-                    <div class="chat-msg-body"><%= msg.content %></div>
-                  </div>
-
-                <% :tool_call -> %>
+            <%= for entry <- group_entries(@messages) do %>
+              <%= if match?(%{type: :tool_group}, entry) do %>
+                <div class="chat-tool-group" id={entry.dom_id} data-chat-entry>
                   <ToolCallComponents.tool_call
+                    :for={msg <- entry.messages}
                     tool_name={msg.content}
                     metadata={msg.metadata}
-                    details_id={message_details_id(msg)}
-                    preserve_open={true}
                   />
+                </div>
+              <% else %>
+                <div id={entry.dom_id} data-chat-entry>
+                  <%= case entry.type do %>
+                    <% :session_header -> %>
+                      <div class="chat-session-header">
+                        <div class="chat-session-header-line"></div>
+                        <div class="chat-session-header-content">
+                          <span class={session_status_class(entry.metadata[:status])}>
+                            <%= entry.metadata[:status] %>
+                          </span>
+                          <%= if entry.metadata[:turn_count] do %>
+                            <span class="chat-session-header-stat">
+                              <%= entry.metadata[:turn_count] %> turns
+                            </span>
+                          <% end %>
+                          <%= if entry.metadata[:total_tokens] do %>
+                            <span class="chat-session-header-stat">
+                              <%= format_int(entry.metadata[:total_tokens]) %> tok
+                            </span>
+                          <% end %>
+                          <%= if entry.metadata[:started_at] do %>
+                            <span class="chat-session-header-stat">
+                              <%= format_session_datetime(entry.metadata[:started_at]) %>
+                            </span>
+                          <% end %>
+                          <span class="chat-session-header-id">
+                            <%= truncate_session_id(entry.metadata[:session_id]) %>
+                          </span>
+                        </div>
+                        <div class="chat-session-header-line"></div>
+                      </div>
 
-                <% :reasoning_summary -> %>
-                  <div class="chat-reasoning-summary">
-                    <div class="chat-reasoning-summary-header">
-                      <svg class="chat-reasoning-summary-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                        <circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/>
-                      </svg>
-                      <span>Reasoning</span>
-                    </div>
-                    <div class="chat-reasoning-summary-body"><%= msg.content %></div>
-                  </div>
+                    <% :response -> %>
+                      <div class="chat-msg">
+                        <div class="chat-msg-header">
+                          <div class="chat-msg-avatar">
+                            <svg viewBox="0 0 16 16"><path d="M4 12l4-8 4 8"/></svg>
+                          </div>
+                          <span class="chat-msg-sender">Agent</span>
+                          <span class="chat-msg-time"><%= format_time(entry.timestamp) %></span>
+                        </div>
+                        <div class="chat-msg-body"><%= entry.content %></div>
+                      </div>
 
-                <% :thinking -> %>
-                  <details
-                    id={message_details_id(msg)}
-                    class="chat-thinking"
-                    phx-mounted={JS.ignore_attributes(["open"])}
-                  >
-                    <summary class="chat-thinking-toggle">
-                      <svg class="chat-thinking-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                        <path d="M6 4l4 4-4 4"/>
-                      </svg>
-                      Thinking
-                    </summary>
-                    <div class="chat-thinking-body"><%= msg.content %></div>
-                  </details>
+                    <% :reasoning_summary -> %>
+                      <div class="chat-reasoning-summary">
+                        <div class="chat-reasoning-summary-header">
+                          <svg class="chat-reasoning-summary-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/>
+                          </svg>
+                          <span>Reasoning</span>
+                        </div>
+                        <div class="chat-reasoning-summary-body"><%= entry.content %></div>
+                      </div>
 
-                <% :turn_boundary -> %>
-                  <div class="chat-divider">
-                    <span class="chat-divider-text"><%= msg.content %></span>
-                  </div>
+                    <% :thinking -> %>
+                      <details
+                        id={message_details_id(entry)}
+                        class="chat-thinking"
+                        phx-mounted={JS.ignore_attributes(["open"])}
+                      >
+                        <summary class="chat-thinking-toggle">
+                          <svg class="chat-thinking-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M6 4l4 4-4 4"/>
+                          </svg>
+                          Thinking
+                        </summary>
+                        <div class="chat-thinking-body"><%= entry.content %></div>
+                      </details>
 
-                <% :error -> %>
-                  <div class="chat-error">
-                    <div class="chat-error-content"><%= msg.content %></div>
-                  </div>
+                    <% :turn_boundary -> %>
+                      <div class="chat-divider">
+                        <span class="chat-divider-text"><%= entry.content %></span>
+                      </div>
 
-                <% _ -> %>
-                  <div class="chat-msg">
-                    <div class="chat-msg-body"><%= msg.content %></div>
-                  </div>
+                    <% :error -> %>
+                      <div class="chat-error">
+                        <div class="chat-error-content"><%= entry.content %></div>
+                      </div>
+
+                    <% _ -> %>
+                      <div class="chat-msg">
+                        <div class="chat-msg-body"><%= entry.content %></div>
+                      </div>
+                  <% end %>
+                </div>
               <% end %>
-            </div>
+            <% end %>
             <div class="chat-scroll-anchor" data-scroll-bottom-anchor aria-hidden="true"></div>
           </div>
         <% end %>
@@ -680,6 +684,18 @@ defmodule SymphonyElixirWeb.SessionLive do
   defp dom_part(value) when is_binary(value), do: value
   defp dom_part(value) when is_integer(value), do: Integer.to_string(value)
   defp dom_part(value), do: inspect(value)
+
+  defp group_entries(messages) do
+    messages
+    |> Enum.chunk_by(&(Map.get(&1, :type) == :tool_call))
+    |> Enum.flat_map(fn chunk ->
+      if Map.get(hd(chunk), :type) == :tool_call do
+        [%{type: :tool_group, messages: chunk, dom_id: "tg-#{hd(chunk).dom_id}"}]
+      else
+        chunk
+      end
+    end)
+  end
 
   defp safe_atom_type(type) when type in ~w(response tool_call thinking reasoning_summary turn_boundary error) do
     String.to_existing_atom(type)

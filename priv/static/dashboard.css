@@ -160,7 +160,7 @@
 
 @keyframes fadeInUp {
   from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  to { opacity: 1; transform: none; }
 }
 
 /* ── Reset & Base ─────────────────────────────────────────────────── */
@@ -1201,7 +1201,12 @@ code, pre, .mono {
 }
 
 .chat-messages > * {
-  animation: fadeInUp var(--duration-slow) var(--ease) both;
+  animation: fadeInUp var(--duration-slow) var(--ease) backwards;
+}
+
+.chat-messages > [data-chat-entry]:has(.chat-tool-chip:hover),
+.chat-messages > [data-chat-entry]:has(.chat-tool-chip:focus-within) {
+  z-index: 1;
 }
 
 /* ── Agent Response ─────────────────────────────────────────────── */
@@ -1271,56 +1276,20 @@ code, pre, .mono {
 
 /* ── Tool Call ──────────────────────────────────────────────────── */
 
+.chat-tool-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
 .chat-tool {
   position: relative;
-  z-index: 0;
-  padding: 0.3rem 0;
 }
 
 .chat-tool:hover,
 .chat-tool:focus-within {
-  z-index: 8;
+  z-index: 10;
 }
-
-.chat-tool-pill {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.55rem;
-  max-width: min(100%, 42rem);
-  border-radius: var(--radius-lg);
-  background: transparent;
-  border: none;
-  font-size: var(--text-sm);
-  transition: filter var(--duration) var(--ease);
-}
-
-.chat-tool-pill-static {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-}
-
-.chat-tool-pill:hover {
-  filter: saturate(1.03);
-}
-
-.chat-tool-pill[open] {
-  width: min(100%, 42rem);
-}
-
-.chat-tool-summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.45rem;
-  cursor: pointer;
-  list-style: none;
-  user-select: none;
-  padding: 0;
-}
-
-.chat-tool-summary::-webkit-details-marker { display: none; }
 
 .chat-tool-chip {
   position: relative;
@@ -1328,13 +1297,15 @@ code, pre, .mono {
   align-items: center;
   gap: 0.4rem;
   min-width: 0;
-  max-width: min(100%, 18rem);
+  max-width: min(100%, 32rem);
   padding: 0.34rem 0.62rem;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--line-subtle) 82%, transparent);
   background: color-mix(in srgb, var(--surface-raised) 86%, var(--page));
   box-shadow: 0 10px 18px color-mix(in srgb, var(--ink) 4%, transparent);
-  color: var(--ink-secondary);
+  color: var(--ink);
+  font-size: var(--text-sm);
+  font-weight: 500;
 }
 
 .chat-tool-chip-label {
@@ -1344,61 +1315,38 @@ code, pre, .mono {
   white-space: nowrap;
 }
 
-.chat-tool-chip-primary {
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.chat-tool-chip-context {
-  font-family: var(--mono);
-  font-size: 0.74rem;
-}
-
-.chat-tool-chip-meta {
-  font-size: 0.7rem;
-  color: var(--ink-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-
-.chat-tool-chip-status {
-  font-size: 0.68rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.chat-tool-chip-status-completed {
-  background: var(--success-soft);
-  color: var(--success-ink);
+.chat-tool-chip-completed {
   border-color: color-mix(in srgb, var(--success) 16%, transparent);
 }
 
-.chat-tool-chip-status-failed {
-  background: var(--danger-soft);
-  color: var(--danger-ink);
+.chat-tool-chip-failed {
   border-color: color-mix(in srgb, var(--danger) 18%, transparent);
+  background: color-mix(in srgb, var(--danger-soft) 36%, var(--surface-raised));
 }
 
-.chat-tool-chip-status-auto_approved {
-  background: var(--info-soft);
-  color: var(--info-ink);
+.chat-tool-chip-auto_approved {
   border-color: color-mix(in srgb, var(--info) 16%, transparent);
 }
 
-.chat-tool-chip-status-unknown {
-  background: var(--surface-raised);
-  color: var(--ink-tertiary);
+.chat-tool-chip-unknown {
+  color: var(--ink-secondary);
 }
 
+.chat-tool-icon {
+  width: 0.75rem;
+  height: 0.75rem;
+  color: currentColor;
+  flex-shrink: 0;
+}
+
+/* Hovercard — absolutely positioned below the chip */
 .chat-tool-hovercard {
   position: absolute;
   left: 0;
   top: calc(100% + 0.55rem);
-  z-index: 20;
-  display: grid;
-  gap: 0.35rem;
+  z-index: 100;
   width: max-content;
-  max-width: min(24rem, calc(100vw - 2rem));
+  max-width: min(28rem, calc(100vw - 2rem));
   padding: 0.75rem 0.85rem;
   border-radius: var(--radius-lg);
   border: 1px solid color-mix(in srgb, var(--line-strong) 45%, transparent);
@@ -1426,68 +1374,31 @@ code, pre, .mono {
   transform: rotate(45deg);
 }
 
+.chat-tool-chip:hover {
+  z-index: 10;
+}
+
 .chat-tool-chip:hover .chat-tool-hovercard,
-.chat-tool-chip:focus-within .chat-tool-hovercard,
-.chat-tool-pill[open] .chat-tool-chip:focus-within .chat-tool-hovercard {
+.chat-tool-chip:focus-within .chat-tool-hovercard {
   opacity: 1;
+  pointer-events: auto;
   transform: translateY(0);
 }
 
-.chat-tool-hovercard-title {
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink-tertiary);
-}
-
 .chat-tool-hovercard-body {
-  font-size: var(--text-sm);
-  line-height: 1.55;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  line-height: 1.6;
   color: var(--ink-secondary);
   white-space: pre-wrap;
   word-break: break-word;
-}
-
-.chat-tool-icon {
-  width: 0.75rem;
-  height: 0.75rem;
-  color: currentColor;
-  flex-shrink: 0;
-}
-
-.chat-tool-body {
-  width: min(100%, 42rem);
-  padding: 0.8rem 0.9rem;
-  background: color-mix(in srgb, var(--page) 88%, var(--surface));
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--line-subtle);
-}
-
-.chat-tool-args {
-  font-family: var(--mono);
-  font-size: var(--text-sm);
-  line-height: 1.5;
-  color: var(--ink-secondary);
-  overflow-x: auto;
-}
-
-.chat-tool-error {
-  margin-top: 0.65rem;
-  font-size: var(--text-sm);
-  color: var(--danger);
-  font-weight: 500;
-}
-
-.chat-tool-time {
-  font-size: var(--text-xs);
-  color: var(--ink-tertiary);
-  margin-top: 0.25rem;
+  overflow: hidden;
+  margin: 0;
 }
 
 /* Failed tool call state */
-.chat-tool-failed .chat-tool-chip-primary {
-  border-color: color-mix(in srgb, var(--danger) 16%, transparent);
+.chat-tool-failed .chat-tool-chip {
+  border-color: color-mix(in srgb, var(--danger) 18%, transparent);
   background: color-mix(in srgb, var(--danger-soft) 36%, var(--surface-raised));
 }
 

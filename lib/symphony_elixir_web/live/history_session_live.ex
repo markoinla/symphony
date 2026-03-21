@@ -79,61 +79,70 @@ defmodule SymphonyElixirWeb.HistorySessionLive do
             </div>
           <% else %>
             <div class="chat-messages">
-              <div :for={msg <- @messages}>
-                <%= case msg.type do %>
-                  <% "response" -> %>
-                    <div class="chat-msg">
-                      <div class="chat-msg-header">
-                        <div class="chat-msg-avatar">
-                          <svg viewBox="0 0 16 16"><path d="M4 12l4-8 4 8"/></svg>
+              <%= for entry <- group_entries(@messages) do %>
+                <%= if match?(%{type: "tool_group"}, entry) do %>
+                  <div class="chat-tool-group">
+                    <ToolCallComponents.tool_call
+                      :for={msg <- entry.messages}
+                      tool_name={msg.content}
+                      metadata={msg.metadata}
+                    />
+                  </div>
+                <% else %>
+                  <div>
+                    <%= case entry.type do %>
+                      <% "response" -> %>
+                        <div class="chat-msg">
+                          <div class="chat-msg-header">
+                            <div class="chat-msg-avatar">
+                              <svg viewBox="0 0 16 16"><path d="M4 12l4-8 4 8"/></svg>
+                            </div>
+                            <span class="chat-msg-sender">Agent</span>
+                            <span class="chat-msg-time"><%= format_time(entry.timestamp) %></span>
+                          </div>
+                          <div class="chat-msg-body"><%= entry.content %></div>
                         </div>
-                        <span class="chat-msg-sender">Agent</span>
-                        <span class="chat-msg-time"><%= format_time(msg.timestamp) %></span>
-                      </div>
-                      <div class="chat-msg-body"><%= msg.content %></div>
-                    </div>
 
-                  <% "tool_call" -> %>
-                    <ToolCallComponents.tool_call tool_name={msg.content} metadata={msg.metadata} />
+                      <% "reasoning_summary" -> %>
+                        <div class="chat-reasoning-summary">
+                          <div class="chat-reasoning-summary-header">
+                            <svg class="chat-reasoning-summary-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                              <circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/>
+                            </svg>
+                            <span>Reasoning</span>
+                          </div>
+                          <div class="chat-reasoning-summary-body"><%= entry.content %></div>
+                        </div>
 
-                  <% "reasoning_summary" -> %>
-                    <div class="chat-reasoning-summary">
-                      <div class="chat-reasoning-summary-header">
-                        <svg class="chat-reasoning-summary-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                          <circle cx="8" cy="8" r="6"/><path d="M8 5v3l2 2"/>
-                        </svg>
-                        <span>Reasoning</span>
-                      </div>
-                      <div class="chat-reasoning-summary-body"><%= msg.content %></div>
-                    </div>
+                      <% "thinking" -> %>
+                        <details class="chat-thinking">
+                          <summary class="chat-thinking-toggle">
+                            <svg class="chat-thinking-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                              <path d="M6 4l4 4-4 4"/>
+                            </svg>
+                            Thinking
+                          </summary>
+                          <div class="chat-thinking-body"><%= entry.content %></div>
+                        </details>
 
-                  <% "thinking" -> %>
-                    <details class="chat-thinking">
-                      <summary class="chat-thinking-toggle">
-                        <svg class="chat-thinking-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="M6 4l4 4-4 4"/>
-                        </svg>
-                        Thinking
-                      </summary>
-                      <div class="chat-thinking-body"><%= msg.content %></div>
-                    </details>
+                      <% "turn_boundary" -> %>
+                        <div class="chat-divider">
+                          <span class="chat-divider-text"><%= entry.content %></span>
+                        </div>
 
-                  <% "turn_boundary" -> %>
-                    <div class="chat-divider">
-                      <span class="chat-divider-text"><%= msg.content %></span>
-                    </div>
+                      <% "error" -> %>
+                        <div class="chat-error">
+                          <div class="chat-error-content"><%= entry.content %></div>
+                        </div>
 
-                  <% "error" -> %>
-                    <div class="chat-error">
-                      <div class="chat-error-content"><%= msg.content %></div>
-                    </div>
-
-                  <% _ -> %>
-                    <div class="chat-msg">
-                      <div class="chat-msg-body"><%= msg.content %></div>
-                    </div>
+                      <% _ -> %>
+                        <div class="chat-msg">
+                          <div class="chat-msg-body"><%= entry.content %></div>
+                        </div>
+                    <% end %>
+                  </div>
                 <% end %>
-              </div>
+              <% end %>
             </div>
           <% end %>
         </div>
@@ -183,4 +192,16 @@ defmodule SymphonyElixirWeb.HistorySessionLive do
   end
 
   defp format_datetime(_), do: nil
+
+  defp group_entries(messages) do
+    messages
+    |> Enum.chunk_by(&(Map.get(&1, :type) == "tool_call"))
+    |> Enum.flat_map(fn chunk ->
+      if Map.get(hd(chunk), :type) == "tool_call" do
+        [%{type: "tool_group", messages: chunk}]
+      else
+        chunk
+      end
+    end)
+  end
 end
