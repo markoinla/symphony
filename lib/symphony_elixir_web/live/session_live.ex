@@ -8,7 +8,7 @@ defmodule SymphonyElixirWeb.SessionLive do
 
   alias Phoenix.LiveView.JS
   alias SymphonyElixir.{SessionLog, Store}
-  alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
+  alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter, ToolCallComponents}
 
   @impl true
   def mount(params, _session, socket) do
@@ -207,41 +207,12 @@ defmodule SymphonyElixirWeb.SessionLive do
                   </div>
 
                 <% :tool_call -> %>
-                  <div class={"chat-tool #{if tool_failed?(msg.metadata), do: "chat-tool-failed", else: ""}"}>
-                    <details
-                      id={message_details_id(msg)}
-                      class="chat-tool-pill"
-                      phx-mounted={JS.ignore_attributes(["open"])}
-                    >
-                      <summary class="chat-tool-summary">
-                        <span class="chat-tool-summary-copy">
-                          <span class="chat-tool-summary-main">
-                            <svg class="chat-tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                              <circle cx="8" cy="8" r="2.5"/><path d="M8 1v2m0 10v2M1 8h2m10 0h2m-2.05-4.95-1.41 1.41m-7.08 7.08-1.41 1.41m0-9.9 1.41 1.41m7.08 7.08 1.41 1.41"/>
-                            </svg>
-                            <span class="chat-tool-name"><%= tool_label(msg.content) %></span>
-                          </span>
-                          <%= if tool_context = tool_context(msg.content, msg.metadata) do %>
-                            <span class="chat-tool-context" title={tool_context}><%= tool_context %></span>
-                          <% end %>
-                          <%= if tool_meta = tool_meta(msg.metadata) do %>
-                            <span class="chat-tool-meta"><%= tool_meta %></span>
-                          <% end %>
-                        </span>
-                        <span class={"chat-tool-badge chat-tool-badge-#{tool_status(msg.metadata)}"}>
-                          <%= tool_status(msg.metadata) %>
-                        </span>
-                      </summary>
-                      <%= if msg.metadata[:args] && msg.metadata[:args] != %{} do %>
-                        <div class="chat-tool-body">
-                          <pre class="chat-tool-args"><%= format_args(msg.metadata[:args]) %></pre>
-                        </div>
-                      <% end %>
-                    </details>
-                    <%= if msg.metadata[:error] do %>
-                      <div class="chat-tool-error"><%= msg.metadata[:error] %></div>
-                    <% end %>
-                  </div>
+                  <ToolCallComponents.tool_call
+                    tool_name={msg.content}
+                    metadata={msg.metadata}
+                    details_id={message_details_id(msg)}
+                    preserve_open={true}
+                  />
 
                 <% :reasoning_summary -> %>
                   <div class="chat-reasoning-summary">
@@ -621,14 +592,6 @@ defmodule SymphonyElixirWeb.SessionLive do
 
   defp format_int(_), do: "n/a"
 
-  defp format_args(args) when is_map(args) do
-    Jason.encode!(args, pretty: true)
-  rescue
-    _ -> inspect(args, pretty: true)
-  end
-
-  defp format_args(_), do: ""
-
   defp maybe_subscribe_session(issue_id) when is_binary(issue_id) do
     :ok = ObservabilityPubSub.subscribe_session(issue_id)
   end
@@ -657,126 +620,6 @@ defmodule SymphonyElixirWeb.SessionLive do
 
   defp back_title("/history"), do: "Back to history"
   defp back_title(_href), do: "Back to dashboard"
-
-  defp tool_label("exec_command"), do: "Command"
-  defp tool_label("apply_patch"), do: "Patch"
-
-  defp tool_label(tool_name) when is_binary(tool_name), do: tool_name
-
-  defp tool_label(_tool_name), do: "Tool"
-
-  defp tool_context("exec_command", metadata) do
-    metadata
-    |> tool_args()
-    |> map_value([:cmd, "cmd"])
-    |> inline_text()
-  end
-
-  defp tool_context(_tool_name, metadata) do
-    metadata
-    |> tool_args()
-    |> generic_tool_context()
-  end
-
-  defp tool_meta(metadata) do
-    args = tool_args(metadata)
-
-    [
-      args |> map_value([:cwd, "cwd"]) |> short_path(),
-      args |> map_value([:exit_code, "exit_code"]) |> format_exit_code()
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.join(" • ")
-    |> case do
-      "" -> nil
-      meta -> meta
-    end
-  end
-
-  defp tool_status(metadata), do: map_value(metadata, [:status, "status"]) || "unknown"
-
-  defp tool_failed?(metadata), do: tool_status(metadata) == "failed"
-
-  defp tool_args(metadata) when is_map(metadata) do
-    case map_value(metadata, [:args, "args"]) do
-      args when is_map(args) -> args
-      _ -> %{}
-    end
-  end
-
-  defp tool_args(_metadata), do: %{}
-
-  defp generic_tool_context(args) when is_map(args) do
-    args
-    |> Enum.reject(fn {key, value} ->
-      to_string(key) in ["cwd", "exit_code"] or blank_value?(value)
-    end)
-    |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
-    |> List.first()
-    |> case do
-      {key, value} -> "#{humanize_key(key)}: #{inline_text(value)}"
-      nil -> nil
-    end
-  end
-
-  defp humanize_key(key) do
-    key
-    |> to_string()
-    |> String.replace("_", " ")
-  end
-
-  defp short_path(path) when is_binary(path) and path != "" do
-    path
-    |> String.trim_trailing("/")
-    |> Path.basename()
-    |> case do
-      "." -> path
-      basename when basename in ["", "/"] -> path
-      basename -> basename
-    end
-  end
-
-  defp short_path(_path), do: nil
-
-  defp format_exit_code(code) when is_integer(code), do: "exit #{code}"
-
-  defp format_exit_code(code) when is_binary(code) do
-    case Integer.parse(code) do
-      {parsed, ""} -> format_exit_code(parsed)
-      _ -> nil
-    end
-  end
-
-  defp format_exit_code(_code), do: nil
-
-  defp map_value(map, keys) when is_map(map) and is_list(keys) do
-    Enum.find_value(keys, &Map.get(map, &1))
-  end
-
-  defp inline_text(text) when is_binary(text) do
-    text
-    |> String.replace("\n", " ")
-    |> String.replace(~r/\s+/, " ")
-    |> String.trim()
-    |> truncate(88)
-    |> case do
-      "" -> nil
-      value -> value
-    end
-  end
-
-  defp inline_text(value) when is_integer(value), do: Integer.to_string(value)
-  defp inline_text(value) when is_atom(value), do: value |> Atom.to_string() |> inline_text()
-  defp inline_text(_value), do: nil
-
-  defp truncate(text, max_length) when is_binary(text) and byte_size(text) > max_length do
-    binary_part(text, 0, max_length - 1) <> "…"
-  end
-
-  defp truncate(text, _max_length), do: text
-
-  defp blank_value?(value) when value in [nil, "", [], %{}], do: true
-  defp blank_value?(_value), do: false
 
   defp ensure_message_dom_id(message, scope) when is_map(message) do
     Map.put_new(message, :dom_id, build_message_dom_id(message, scope))

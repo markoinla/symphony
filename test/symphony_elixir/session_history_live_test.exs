@@ -70,7 +70,7 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
 
     assert document |> Floki.find(".chat-msg .chat-msg-sender") |> length() == 2
     assert document |> Floki.find("details.chat-thinking") |> length() == 2
-    assert document |> Floki.find(".chat-tool .chat-tool-name") |> Enum.map(&Floki.text/1) == ["shell"]
+    assert document |> Floki.find(".chat-tool .chat-tool-chip-primary .chat-tool-chip-label") |> Enum.map(&Floki.text/1) == ["shell"]
   end
 
   test "project filter narrows the visible history list" do
@@ -112,7 +112,7 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
     assert document |> Floki.find(".chat-topbar") |> Enum.empty?()
   end
 
-  test "session page renders command tool badges with collapsed command context" do
+  test "session page renders compact command tool badges with hovercard details" do
     issue_identifier = unique_issue_identifier()
     session = create_session!(issue_identifier: issue_identifier, issue_title: "Command context")
 
@@ -125,11 +125,15 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
     {:ok, document} = Floki.parse_document(html)
 
     [tool_card] = Floki.find(document, ".chat-tool")
+    badge_labels = Floki.find(tool_card, ".chat-tool-chip-label") |> Enum.map(&Floki.text/1)
+    hover_titles = Floki.find(tool_card, ".chat-tool-hovercard-title") |> Enum.map(&Floki.text/1)
+    hover_bodies = Floki.find(tool_card, ".chat-tool-hovercard-body") |> Enum.map(&Floki.text/1)
 
-    assert tool_card |> Floki.find(".chat-tool-name") |> Floki.text() == "Command"
-    assert tool_card |> Floki.find(".chat-tool-context") |> Floki.text() == "git status --short"
-    assert tool_card |> Floki.find(".chat-tool-meta") |> Floki.text() == "SYM-28 • exit 0"
-    assert tool_card |> Floki.find(".chat-tool-badge") |> Floki.text() |> String.trim() == "completed"
+    assert badge_labels == ["Command", "git status --short", "SYM-28 • exit 0", "completed"]
+    assert hover_titles == ["Tool", "Command", "Run details", "Status"]
+    assert Enum.any?(hover_bodies, &String.contains?(&1, "exec_command"))
+    assert Enum.any?(hover_bodies, &String.contains?(&1, "/tmp/workspaces/SYM-28"))
+    assert Enum.any?(hover_bodies, &String.contains?(&1, "State: completed"))
   end
 
   test "session page preserves details state across live patches" do

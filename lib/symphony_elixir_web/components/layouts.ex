@@ -5,6 +5,8 @@ defmodule SymphonyElixirWeb.Layouts do
 
   use Phoenix.Component
 
+  alias SymphonyElixirWeb.StaticAssets
+
   @spec root(map()) :: Phoenix.LiveView.Rendered.t()
   def root(assigns) do
     assigns = assign(assigns, :csrf_token, Plug.CSRFProtection.get_csrf_token())
@@ -345,7 +347,7 @@ defmodule SymphonyElixirWeb.Layouts do
             syncScrollBottomButtons();
           });
         </script>
-        <link rel="stylesheet" href="/dashboard.css" />
+        <link rel="stylesheet" href={StaticAssets.dashboard_css_path()} />
       </head>
       <body>
         {@inner_content}
