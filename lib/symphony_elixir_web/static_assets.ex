@@ -12,6 +12,7 @@ defmodule SymphonyElixirWeb.StaticAssets do
   @external_resource @phoenix_live_view_js_path
 
   @dashboard_css File.read!(@dashboard_css_path)
+  @dashboard_css_version :crypto.hash(:sha256, @dashboard_css) |> Base.encode16(case: :lower) |> binary_part(0, 12)
   @phoenix_html_js File.read!(@phoenix_html_js_path)
   @phoenix_js File.read!(@phoenix_js_path)
   @phoenix_live_view_js File.read!(@phoenix_live_view_js_path)
@@ -30,4 +31,7 @@ defmodule SymphonyElixirWeb.StaticAssets do
       :error -> :error
     end
   end
+
+  @spec dashboard_css_path() :: String.t()
+  def dashboard_css_path, do: "/dashboard.css?v=#{@dashboard_css_version}"
 end
