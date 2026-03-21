@@ -1050,6 +1050,14 @@ body:has(.chat-layout) .app-shell {
   padding-bottom: 0;
 }
 
+/* Bridge the LiveView wrapper div so the flex height chain reaches .chat-layout */
+body:has(.chat-layout) .app-shell > * {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* ── Chat Session Layout ────────────────────────────────────────── */
 
 .chat-layout {
