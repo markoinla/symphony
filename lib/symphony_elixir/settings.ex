@@ -211,17 +211,7 @@ defmodule SymphonyElixir.Settings do
     |> String.split("\n")
     |> Enum.map(&String.trim/1)
     |> Enum.reject(&(&1 == "" or String.starts_with?(&1, "#")))
-    |> Enum.flat_map(fn line ->
-      case String.split(line, "=", parts: 2) do
-        [key, value] ->
-          key = String.trim(key)
-          value = value |> String.trim() |> strip_quotes()
-          if key != "", do: [{key, value}], else: []
-
-        _ ->
-          []
-      end
-    end)
+    |> Enum.flat_map(&parse_env_var_line/1)
   end
 
   defp strip_quotes(value) do
@@ -247,4 +237,20 @@ defmodule SymphonyElixir.Settings do
   end
 
   defp extract_project_slug(_segments), do: ""
+
+  defp parse_env_var_line(line) when is_binary(line) do
+    case String.split(line, "=", parts: 2) do
+      [key, value] ->
+        build_env_var_entry(String.trim(key), value)
+
+      _ ->
+        []
+    end
+  end
+
+  defp build_env_var_entry("", _value), do: []
+
+  defp build_env_var_entry(key, value) when is_binary(key) and is_binary(value) do
+    [{key, value |> String.trim() |> strip_quotes()}]
+  end
 end

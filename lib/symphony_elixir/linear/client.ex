@@ -632,6 +632,8 @@ defmodule SymphonyElixir.Linear.Client do
 
   defp normalize_issue(issue, assignee_filter) when is_map(issue) do
     assignee = issue["assignee"]
+    comments = extract_comments(issue)
+    live_workpad_comment = Comment.live_workpad_comment(comments)
 
     %Issue{
       id: issue["id"],
@@ -643,9 +645,11 @@ defmodule SymphonyElixir.Linear.Client do
       branch_name: issue["branchName"],
       url: issue["url"],
       assignee_id: assignee_field(assignee, "id"),
+      live_workpad_comment_id: live_workpad_comment && live_workpad_comment.id,
+      workpad_comment_count: Comment.workpad_comment_count(comments),
       blocked_by: extract_blockers(issue),
       labels: extract_labels(issue),
-      comments: extract_comments(issue),
+      comments: comments,
       assigned_to_worker: assigned_to_worker?(assignee, assignee_filter),
       created_at: parse_datetime(issue["createdAt"]),
       updated_at: parse_datetime(issue["updatedAt"])

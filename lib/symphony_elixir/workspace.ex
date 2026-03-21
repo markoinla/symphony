@@ -13,6 +13,15 @@ defmodule SymphonyElixir.Workspace do
   @spec create_for_issue(map() | String.t() | nil, worker_host()) ::
           {:ok, Path.t()} | {:error, term()}
   def create_for_issue(issue_or_identifier, worker_host \\ nil) do
+    case create_for_issue_with_status(issue_or_identifier, worker_host) do
+      {:ok, workspace, _created?} -> {:ok, workspace}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @spec create_for_issue_with_status(map() | String.t() | nil, worker_host()) ::
+          {:ok, Path.t(), boolean()} | {:error, term()}
+  def create_for_issue_with_status(issue_or_identifier, worker_host \\ nil) do
     issue_context = issue_context(issue_or_identifier)
 
     try do
@@ -22,7 +31,7 @@ defmodule SymphonyElixir.Workspace do
            :ok <- validate_workspace_path(workspace, worker_host),
            {:ok, workspace, created?} <- ensure_workspace(workspace, worker_host),
            :ok <- maybe_run_after_create_hook(workspace, issue_context, created?, worker_host) do
-        {:ok, workspace}
+        {:ok, workspace, created?}
       end
     rescue
       error in [ArgumentError, ErlangError, File.Error] ->

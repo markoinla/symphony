@@ -790,6 +790,75 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "attempt=3"
   end
 
+  test "prompt builder renders live workpad metadata from issue fields" do
+    workflow_prompt =
+      "Ticket {{ issue.identifier }} workpad={{ issue.live_workpad_comment_id }} count={{ issue.workpad_comment_count }}"
+
+    write_workflow_file!(Workflow.workflow_file_path(), prompt: workflow_prompt)
+
+    issue = %Issue{
+      identifier: "S-2",
+      title: "Reuse workpad",
+      description: "Keep updating one comment",
+      state: "In Progress",
+      url: "https://example.org/issues/S-2",
+      labels: ["bug"],
+      live_workpad_comment_id: "comment-live",
+      workpad_comment_count: 2
+    }
+
+    prompt = PromptBuilder.build_prompt(issue)
+
+    assert prompt =~ "Ticket S-2"
+    assert prompt =~ "workpad=comment-live"
+    assert prompt =~ "count=2"
+  end
+
+  test "linear client normalizes live workpad metadata from issue comments" do
+    issue =
+      Client.normalize_issue_for_test(%{
+        "id" => "issue-workpad",
+        "identifier" => "SYM-27",
+        "title" => "Multiple codex workpad comments",
+        "description" => "Track the live workpad",
+        "priority" => 0,
+        "state" => %{"name" => "In Progress"},
+        "branchName" => "m/sym-27-multiple-codex-workpad-comments",
+        "url" => "https://example.org/issues/SYM-27",
+        "assignee" => %{"id" => "user-1"},
+        "labels" => %{"nodes" => []},
+        "comments" => %{
+          "nodes" => [
+            %{
+              "id" => "comment-early",
+              "body" => "## Codex Workpad\n\nold state",
+              "createdAt" => "2026-03-20T17:00:00Z",
+              "user" => %{"id" => "user-1", "name" => "Symphony"}
+            },
+            %{
+              "id" => "comment-ready",
+              "body" => "Workspace ready: `home-lab:/tmp/SYM-27`",
+              "createdAt" => "2026-03-20T17:05:00Z",
+              "user" => %{"id" => "user-1", "name" => "Symphony"}
+            },
+            %{
+              "id" => "comment-latest",
+              "body" => "## Codex Workpad\n\nnew state",
+              "createdAt" => "2026-03-20T17:10:00Z",
+              "user" => %{"id" => "user-1", "name" => "Symphony"}
+            }
+          ]
+        },
+        "inverseRelations" => %{"nodes" => []},
+        "createdAt" => "2026-03-20T16:55:00Z",
+        "updatedAt" => "2026-03-20T17:10:00Z"
+      })
+
+    assert issue.live_workpad_comment_id == "comment-latest"
+    assert issue.workpad_comment_count == 2
+    assert Enum.map(issue.comments, & &1.id) == ["comment-early", "comment-ready", "comment-latest"]
+  end
+
   test "prompt builder renders issue datetime fields without crashing" do
     workflow_prompt = "Ticket {{ issue.identifier }} created={{ issue.created_at }} updated={{ issue.updated_at }}"
 
@@ -956,7 +1025,15 @@ defmodule SymphonyElixir.CoreTest do
       description: "Render with rich template variables",
       state: "In Progress",
       url: "https://example.org/issues/MT-616/use-rich-templates-for-workflowmd",
-      labels: ["templating", "workflow"]
+      labels: ["templating", "workflow"],
+      comments: [
+        %SymphonyElixir.Linear.Comment{
+          id: "comment-workpad-1",
+          author: "Symphony",
+          created_at: "2026-03-20T18:00:00Z",
+          body: "## Codex Workpad\n\nExisting state"
+        }
+      ]
     }
 
     on_exit(fn -> Workflow.set_workflow_file_path(workflow_path) end)
@@ -974,6 +1051,10 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "Do not include \"next steps for user\""
     assert prompt =~ "open and follow `.codex/skills/land/SKILL.md`"
     assert prompt =~ "Do not call `gh pr merge` directly"
+    assert prompt =~ "Comments (oldest first):"
+    assert prompt =~ "comment ID: comment-workpad-1"
+    assert prompt =~ "record the live workpad comment's ID before editing it"
+    assert prompt =~ "only write progress updates to that ID with `linear_update_comment`"
     assert prompt =~ "mutation CreateRelation($issueId: String!, $relatedIssueId: String!, $type: IssueRelationType!)"
     assert prompt =~ "Type values: `\"blocks\"`, `\"related\"`, `\"duplicate\"`, `\"similar\"`"
     assert prompt =~ "use `blocks` when the current issue must be"
@@ -1310,6 +1391,79 @@ defmodule SymphonyElixir.CoreTest do
       refute_receive {:memory_tracker_label_add, "issue-label-skip", _label_name}, 100
       assert_receive {:memory_tracker_comment, "issue-label-skip", workspace_comment}
       assert workspace_comment =~ "Workspace ready: `"
+    after
+      Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+      File.rm_rf(test_root)
+    end
+  end
+
+  test "agent runner does not repost workspace-ready comments when reusing an existing workspace" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-agent-runner-reuse-workspace-#{System.unique_integer([:positive])}"
+      )
+
+    try do
+      template_repo = Path.join(test_root, "source")
+      workspace_root = Path.join(test_root, "workspaces")
+      codex_binary = Path.join(test_root, "fake-codex")
+
+      File.mkdir_p!(template_repo)
+      File.write!(Path.join(template_repo, "README.md"), "# test")
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+      while IFS= read -r _line; do
+        count=$((count + 1))
+        case "$count" in
+          1)
+            printf '%s\\n' '{"id":1,"result":{}}'
+            ;;
+          3)
+            printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-reuse"}}}'
+            ;;
+          4)
+            printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-reuse"}}}'
+            printf '%s\\n' '{"method":"turn/completed"}'
+            exit 0
+            ;;
+          *)
+            ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+
+      Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_kind: "memory",
+        workspace_root: workspace_root,
+        hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
+        codex_command: "#{codex_binary} app-server"
+      )
+
+      issue = %Issue{
+        id: "issue-reuse-workspace",
+        identifier: "MT-323",
+        title: "Reuse workspace comments",
+        description: "Do not repost workspace ready",
+        state: "In Progress",
+        url: "https://example.org/issues/MT-323",
+        labels: []
+      }
+
+      state_fetcher = fn [_issue_id] -> {:ok, [%{issue | state: "Done"}]} end
+
+      assert :ok = AgentRunner.run(issue, nil, issue_state_fetcher: state_fetcher)
+      assert_receive {:memory_tracker_comment, "issue-reuse-workspace", first_workspace_comment}
+      assert first_workspace_comment =~ "Workspace ready: `"
+
+      assert :ok = AgentRunner.run(issue, nil, issue_state_fetcher: state_fetcher)
+      refute_receive {:memory_tracker_comment, "issue-reuse-workspace", _workspace_comment}, 100
     after
       Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
       File.rm_rf(test_root)
