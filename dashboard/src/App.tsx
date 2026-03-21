@@ -32,7 +32,6 @@ import {
   type MessagesPayload,
   type Project,
   type SessionsPayload,
-  type StatePayload,
   type TimelineMessage,
   type TimelineSession,
   updateProject,
@@ -67,13 +66,6 @@ function useTheme() {
   const toggle = useCallback(() => setDark((d) => !d), [])
 
   return { dark, toggle }
-}
-
-type DashboardGroup = {
-  label: string
-  workflowName: string | null
-  running: StatePayload['running']
-  retrying: StatePayload['retrying']
 }
 
 type SessionEntry =
@@ -1296,51 +1288,6 @@ function useNow(intervalMs = 1_000) {
   return now
 }
 
-function buildDashboardGroups(payload: StatePayload): DashboardGroup[] {
-  const groups = new Map<string, DashboardGroup>()
-
-  for (const entry of payload.running) {
-    const key = entry.workflow_name ?? 'default'
-    const group = groups.get(key) ?? {
-      label: humanizeWorkflowName(entry.workflow_name),
-      workflowName: entry.workflow_name ?? null,
-      running: [],
-      retrying: [],
-    }
-
-    group.running.push(entry)
-    groups.set(key, group)
-  }
-
-  for (const entry of payload.retrying) {
-    const key = entry.workflow_name ?? 'default'
-    const group = groups.get(key) ?? {
-      label: humanizeWorkflowName(entry.workflow_name),
-      workflowName: entry.workflow_name ?? null,
-      running: [],
-      retrying: [],
-    }
-
-    group.retrying.push(entry)
-    groups.set(key, group)
-  }
-
-  return [...groups.values()].sort((left, right) => left.label.localeCompare(right.label))
-}
-
-function humanizeWorkflowName(name: string | undefined) {
-  if (!name) {
-    return 'Default project'
-  }
-
-  const [base, maybeProjectId] = name.split(':')
-
-  if (maybeProjectId) {
-    return `${base} · project ${maybeProjectId}`
-  }
-
-  return base
-}
 
 function runtimeForTimeline(sessions: TimelineSession[], now: number) {
   const active = sessions.findLast((session: TimelineSession) => session.live)

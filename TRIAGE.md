@@ -27,6 +27,7 @@ codex:
     type: dangerFullAccess
 server:
   host: "0.0.0.0"
+  public_base_url: "http://zl-marko-test:4000"
 ---
 
 You are an issue triage agent. Your job is to evaluate a Linear issue in the "Staged" status and decide whether it is ready to be worked on ("Todo") or needs to go back to "Backlog" with actionable feedback. You do NOT make code changes.
