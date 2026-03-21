@@ -145,41 +145,34 @@ function RootLayout() {
   })
 
   return (
-    <div className="min-h-screen bg-[linear-gradient(180deg,#fff9ef_0%,#f5eee0_42%,#efe7da_100%)] text-stone-800">
-      <div className="mx-auto flex min-h-screen max-w-7xl flex-col px-4 py-6 sm:px-6 lg:px-8">
-        <header className="mb-6 overflow-hidden rounded-[2rem] border border-white/70 bg-[radial-gradient(circle_at_top_left,rgba(251,191,36,0.28),transparent_38%),linear-gradient(135deg,rgba(255,255,255,0.96),rgba(255,247,237,0.82))] p-6 shadow-[0_28px_80px_-48px_rgba(120,53,15,0.55)] backdrop-blur">
-          <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-            <div className="max-w-2xl">
-              <p className="text-xs font-semibold uppercase tracking-[0.32em] text-amber-700">
-                Symphony Dashboard
+    <div className="min-h-screen bg-zinc-950 text-zinc-300">
+      <div className="mx-auto flex min-h-screen max-w-6xl flex-col px-6 py-8 lg:px-8">
+        <header className="mb-10 border-b border-zinc-800 pb-6">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">
+                Symphony
               </p>
-              <h1 className="mt-3 text-4xl font-semibold tracking-[-0.04em] text-stone-950 sm:text-5xl">
-                Observe the orchestration layer without the LiveView shell.
+              <h1 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-50">
+                Dashboard
               </h1>
-              <p className="mt-3 max-w-xl text-sm leading-6 text-stone-600 sm:text-base">
-                Phoenix now acts as a thin JSON and static server while the dashboard runs as a
-                client-side React SPA with query-driven refresh and SSE updates.
-              </p>
             </div>
 
-            <nav className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              <HeaderLink active={pathname === '/'} label="Dashboard" subtitle="Live fleet" to="/" />
+            <nav className="flex gap-1">
+              <HeaderLink active={pathname === '/'} label="Dashboard" to="/" />
               <HeaderLink
                 active={pathname.startsWith('/history')}
                 label="History"
-                subtitle="Past runs"
                 to="/history"
               />
               <HeaderLink
                 active={pathname.startsWith('/projects')}
                 label="Projects"
-                subtitle="Tracker mappings"
                 to="/projects"
               />
               <HeaderLink
                 active={pathname.startsWith('/settings')}
                 label="Settings"
-                subtitle="Global config"
                 to="/settings"
               />
             </nav>
@@ -197,26 +190,23 @@ function RootLayout() {
 function HeaderLink({
   active,
   label,
-  subtitle,
   to,
 }: {
   active: boolean
   label: string
-  subtitle: string
   to: string
 }) {
   return (
     <Link
       className={cn(
-        'rounded-[1.5rem] border px-4 py-3 text-left transition duration-200',
+        'rounded-lg px-3.5 py-2 text-sm font-medium transition-colors duration-150',
         active
-          ? 'border-amber-300 bg-stone-950 text-white shadow-[0_18px_48px_-28px_rgba(17,24,39,0.85)]'
-          : 'border-white/70 bg-white/70 text-stone-700 hover:-translate-y-0.5 hover:border-amber-200 hover:bg-white',
+          ? 'bg-zinc-800 text-zinc-100'
+          : 'text-zinc-500 hover:text-zinc-200',
       )}
       to={to}
     >
-      <div className="text-sm font-semibold">{label}</div>
-      <div className={cn('mt-1 text-xs', active ? 'text-stone-300' : 'text-stone-500')}>{subtitle}</div>
+      {label}
     </Link>
   )
 }
@@ -249,7 +239,7 @@ function DashboardView() {
   const groups = buildDashboardGroups(payload)
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Running"
@@ -277,28 +267,28 @@ function DashboardView() {
         <ErrorPanel title="Snapshot warning" detail={`${payload.error.code}: ${payload.error.message}`} />
       ) : null}
 
-      <section className="grid gap-4">
+      <section className="space-y-6">
         {groups.length === 0 ? (
-          <Card className="border-dashed border-stone-300 bg-white/70 text-center">
-            <p className="text-lg font-semibold text-stone-800">No active sessions</p>
-            <p className="mt-2 text-sm text-stone-500">
+          <Card className="border-dashed border-zinc-700 text-center">
+            <p className="text-base font-medium text-zinc-300">No active sessions</p>
+            <p className="mt-2 text-sm text-zinc-500">
               New work will appear here as soon as the orchestrator claims tickets.
             </p>
           </Card>
         ) : null}
 
         {groups.map((group) => (
-          <Card key={group.workflowName ?? group.label} className="space-y-5">
-            <div className="flex flex-col gap-3 border-b border-stone-200/80 pb-4 sm:flex-row sm:items-end sm:justify-between">
+          <Card key={group.workflowName ?? group.label} className="space-y-6">
+            <div className="flex flex-col gap-3 border-b border-zinc-800 pb-4 sm:flex-row sm:items-end sm:justify-between">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.26em] text-amber-700">
-                  {group.workflowName ? 'Workflow slice' : 'Default workflow'}
+                <div className="text-xs font-medium uppercase tracking-[0.1em] text-zinc-500">
+                  {group.workflowName ? 'Workflow' : 'Default'}
                 </div>
-                <h2 className="mt-2 text-2xl font-semibold tracking-[-0.04em] text-stone-950">
+                <h2 className="mt-1.5 text-lg font-semibold tracking-tight text-zinc-100">
                   {group.label}
                 </h2>
               </div>
-              <div className="flex flex-wrap gap-2 text-sm text-stone-500">
+              <div className="flex gap-2">
                 <Badge tone="running">{group.running.length} running</Badge>
                 <Badge tone="retrying">{group.retrying.length} retrying</Badge>
               </div>
@@ -306,25 +296,25 @@ function DashboardView() {
 
             <div className="grid gap-4 lg:grid-cols-2">
               {group.running.map((entry) => (
-                <Card
+                <div
                   key={`running-${entry.issue_id}`}
-                  className="border-emerald-100/80 bg-[linear-gradient(180deg,rgba(236,253,245,0.95),rgba(255,255,255,0.88))] shadow-[0_24px_70px_-48px_rgba(5,150,105,0.6)]"
+                  className="rounded-xl border border-zinc-800 bg-zinc-950 p-5"
                 >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex items-start justify-between gap-3">
                     <div>
                       <Link
-                        className="text-lg font-semibold tracking-[-0.03em] text-stone-950 transition hover:text-amber-700"
+                        className="text-base font-semibold text-zinc-100 transition-colors hover:text-indigo-400"
                         params={{ issueIdentifier: entry.issue_identifier }}
                         to="/session/$issueIdentifier"
                       >
                         {entry.issue_identifier}
                       </Link>
-                      <p className="mt-1 text-sm text-stone-500">{entry.state}</p>
+                      <p className="mt-1 text-sm text-zinc-500">{entry.state}</p>
                     </div>
                     <Badge tone="running">Running</Badge>
                   </div>
 
-                  <dl className="mt-5 grid gap-3 text-sm text-stone-600 sm:grid-cols-2">
+                  <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
                     <MetaItem label="Runtime" value={runtimeSince(entry.started_at, now)} />
                     <MetaItem label="Turns" value={formatNumber(entry.turn_count)} />
                     <MetaItem
@@ -335,46 +325,46 @@ function DashboardView() {
                     <MetaItem label="Worker" value={entry.worker_host ?? 'local'} />
                   </dl>
 
-                  <div className="mt-4 rounded-[1.5rem] border border-emerald-100 bg-white/80 px-4 py-3 text-sm text-stone-600">
-                    <div className="font-medium text-stone-900">Latest activity</div>
-                    <div className="mt-1">{entry.last_message ?? entry.last_event ?? 'Waiting for new events'}</div>
+                  <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-sm">
+                    <div className="font-medium text-zinc-300">Latest activity</div>
+                    <div className="mt-1 text-zinc-500">{entry.last_message ?? entry.last_event ?? 'Waiting for new events'}</div>
                     {entry.workspace_path ? (
-                      <div className="mt-2 text-xs text-stone-500">{entry.workspace_path}</div>
+                      <div className="mt-2 text-xs text-zinc-600">{entry.workspace_path}</div>
                     ) : null}
                   </div>
-                </Card>
+                </div>
               ))}
 
               {group.retrying.map((entry) => (
-                <Card
+                <div
                   key={`retry-${entry.issue_id}`}
-                  className="border-amber-100/80 bg-[linear-gradient(180deg,rgba(255,247,237,0.98),rgba(255,255,255,0.9))] shadow-[0_24px_70px_-48px_rgba(217,119,6,0.55)]"
+                  className="rounded-xl border border-zinc-800 bg-zinc-950 p-5"
                 >
-                  <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="flex items-start justify-between gap-3">
                     <div>
                       <Link
-                        className="text-lg font-semibold tracking-[-0.03em] text-stone-950 transition hover:text-amber-700"
+                        className="text-base font-semibold text-zinc-100 transition-colors hover:text-indigo-400"
                         params={{ issueIdentifier: entry.issue_identifier }}
                         to="/session/$issueIdentifier"
                       >
                         {entry.issue_identifier}
                       </Link>
-                      <p className="mt-1 text-sm text-stone-500">{entry.error ?? 'Retry pending'}</p>
+                      <p className="mt-1 text-sm text-zinc-500">{entry.error ?? 'Retry pending'}</p>
                     </div>
                     <Badge tone="retrying">Retry {entry.attempt}</Badge>
                   </div>
 
-                  <dl className="mt-5 grid gap-3 text-sm text-stone-600 sm:grid-cols-2">
+                  <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
                     <MetaItem label="Retrying At" value={formatDateTime(entry.due_at)} />
                     <MetaItem label="Worker" value={entry.worker_host ?? 'unassigned'} />
                   </dl>
 
                   {entry.workspace_path ? (
-                    <div className="mt-4 rounded-[1.5rem] border border-amber-100 bg-white/80 px-4 py-3 text-xs text-stone-500">
+                    <div className="mt-4 rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3 text-xs text-zinc-500">
                       {entry.workspace_path}
                     </div>
                   ) : null}
-                </Card>
+                </div>
               ))}
             </div>
           </Card>
@@ -457,16 +447,16 @@ function SessionView() {
 
   return (
     <div className="space-y-6">
-      <Card className="overflow-hidden">
+      <Card>
         <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.3em] text-amber-700">
-              Session Timeline
+            <p className="text-xs font-medium uppercase tracking-[0.1em] text-zinc-500">
+              Session
             </p>
-            <h2 className="mt-2 text-3xl font-semibold tracking-[-0.04em] text-stone-950">
+            <h2 className="mt-1.5 text-xl font-semibold tracking-tight text-zinc-100">
               {data.issue_identifier}
             </h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-stone-600">
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-zinc-500">
               {data.issue_title ?? 'Historical and live session output for this issue.'}
             </p>
           </div>
@@ -486,7 +476,7 @@ function SessionView() {
         </div>
 
         {issue ? (
-          <div className="mt-5 flex flex-wrap gap-2 border-t border-stone-200/80 pt-4">
+          <div className="mt-5 flex flex-wrap gap-2 border-t border-zinc-800 pt-4">
             <Badge tone={issue.status === 'retrying' ? 'retrying' : 'running'}>
               {titleCase(issue.status)}
             </Badge>
@@ -496,11 +486,11 @@ function SessionView() {
         ) : null}
       </Card>
 
-      <Card className="relative overflow-hidden">
+      <Card>
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <h3 className="text-xl font-semibold tracking-[-0.03em] text-stone-950">Unified timeline</h3>
-            <p className="mt-1 text-sm text-stone-500">
+            <h3 className="text-base font-semibold tracking-tight text-zinc-100">Timeline</h3>
+            <p className="mt-1 text-sm text-zinc-500">
               Historical sessions stay grouped, while live SSE messages append to the active run.
             </p>
           </div>
@@ -531,7 +521,7 @@ function SessionView() {
           ref={scrollRef}
         >
           {data.sessions.length === 0 ? (
-            <div className="rounded-[1.5rem] border border-dashed border-stone-300 bg-stone-50/80 px-6 py-10 text-center text-sm text-stone-500">
+            <div className="rounded-lg border border-dashed border-zinc-700 px-6 py-10 text-center text-sm text-zinc-500">
               No historical or live messages are available for this issue yet.
             </div>
           ) : null}
@@ -549,16 +539,16 @@ function SessionBlock({ now, session }: { now: number; session: TimelineSession 
   const groupedEntries = groupConsecutiveByType(session.messages, 'tool_call') as SessionEntry[]
 
   return (
-    <section className="rounded-[1.75rem] border border-stone-200/70 bg-white/80 p-5 shadow-[0_20px_60px_-50px_rgba(68,64,60,0.8)]">
-      <div className="flex flex-col gap-4 border-b border-stone-200/80 pb-4 sm:flex-row sm:items-end sm:justify-between">
+    <section className="rounded-xl border border-zinc-800 bg-zinc-950 p-5">
+      <div className="flex flex-col gap-4 border-b border-zinc-800 pb-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h4 className="text-lg font-semibold tracking-[-0.03em] text-stone-950">
+            <h4 className="text-sm font-semibold text-zinc-200">
               {session.live ? 'Live session' : 'Historical session'}
             </h4>
             <Badge tone={session.live ? 'live' : 'neutral'}>{session.session_id}</Badge>
           </div>
-          <p className="mt-2 text-sm text-stone-500">
+          <p className="mt-1.5 text-sm text-zinc-500">
             Started {formatDateTime(session.started_at)} · {session.live ? runtimeSince(session.started_at, now) : session.status}
           </p>
         </div>
@@ -570,9 +560,9 @@ function SessionBlock({ now, session }: { now: number; session: TimelineSession 
         </div>
       </div>
 
-      <div className="mt-4 space-y-3">
+      <div className="mt-4 space-y-2">
         {groupedEntries.length === 0 ? (
-          <div className="rounded-[1.25rem] border border-dashed border-stone-300 px-4 py-6 text-sm text-stone-500">
+          <div className="rounded-lg border border-dashed border-zinc-700 px-4 py-6 text-sm text-zinc-500">
             No captured messages for this session.
           </div>
         ) : null}
@@ -592,11 +582,11 @@ function SessionBlock({ now, session }: { now: number; session: TimelineSession 
 function TimelineEntryCard({ message }: { message: TimelineMessage }) {
   if (message.type === 'thinking') {
     return (
-      <details className="rounded-[1.25rem] border border-stone-200/80 bg-stone-50/80 px-4 py-3">
-        <summary className="cursor-pointer list-none font-medium text-stone-900">
+      <details className="rounded-lg border border-zinc-800 bg-zinc-900 px-4 py-3">
+        <summary className="cursor-pointer list-none text-sm font-medium text-zinc-300">
           Thinking · {formatClock(message.timestamp) || 'live'}
         </summary>
-        <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-sm leading-6 text-stone-600">
+        <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-sm leading-6 text-zinc-500">
           {message.content}
         </pre>
       </details>
@@ -605,74 +595,73 @@ function TimelineEntryCard({ message }: { message: TimelineMessage }) {
 
   if (message.type === 'reasoning_summary') {
     return (
-      <Card className="border-sky-100 bg-sky-50/70 p-4 shadow-none">
+      <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 p-4">
         <div className="flex items-center justify-between gap-3">
-          <div className="text-sm font-semibold text-sky-800">Reasoning summary</div>
-          <div className="text-xs text-sky-700">{formatClock(message.timestamp) || 'live'}</div>
+          <div className="text-sm font-medium text-indigo-400">Reasoning summary</div>
+          <div className="text-xs text-zinc-500">{formatClock(message.timestamp) || 'live'}</div>
         </div>
-        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-sky-900">{message.content}</p>
-      </Card>
+        <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-300">{message.content}</p>
+      </div>
     )
   }
 
   if (message.type === 'turn_boundary') {
     return (
-      <div className="rounded-[1.25rem] border border-stone-200/70 bg-stone-100/70 px-4 py-3 text-sm font-medium text-stone-600">
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 px-4 py-2.5 text-xs font-medium text-zinc-500">
         {message.content}
       </div>
     )
   }
 
   return (
-    <Card
+    <div
       className={cn(
-        'p-4 shadow-none',
-        message.type === 'error' && 'border-rose-200 bg-rose-50/80',
-        message.type === 'response' && 'border-stone-200/80 bg-white/90',
+        'rounded-lg border p-4',
+        message.type === 'error' ? 'border-red-500/20 bg-red-500/5' : 'border-zinc-800 bg-zinc-900',
       )}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Badge tone={messageTone(message.type)}>{messageLabel(message.type)}</Badge>
-          <span className="text-xs text-stone-500">{formatClock(message.timestamp) || 'live'}</span>
+          <span className="text-xs text-zinc-600">{formatClock(message.timestamp) || 'live'}</span>
         </div>
       </div>
-      <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-sm leading-6 text-stone-700">
+      <pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-sm leading-6 text-zinc-400">
         {message.content}
       </pre>
-    </Card>
+    </div>
   )
 }
 
 function ToolGroup({ items }: { items: TimelineMessage[] }) {
   return (
-    <Card className="border-amber-100 bg-amber-50/70 p-4 shadow-none">
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Badge tone="retrying">Tool Calls</Badge>
-          <span className="text-xs text-amber-800">{items.length} grouped events</span>
+          <span className="text-xs text-zinc-500">{items.length} grouped events</span>
         </div>
-        <div className="text-xs text-amber-800">{formatClock(items.at(-1)?.timestamp) || 'live'}</div>
+        <div className="text-xs text-zinc-600">{formatClock(items.at(-1)?.timestamp) || 'live'}</div>
       </div>
 
-      <div className="mt-3 space-y-3">
+      <div className="mt-3 space-y-2">
         {items.map((item) => {
           const metadata = item.metadata as Record<string, unknown>
 
           return (
-            <div key={String(item.id)} className="rounded-[1.1rem] border border-amber-100 bg-white/85 p-3">
+            <div key={String(item.id)} className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="font-medium text-stone-900">{item.content}</div>
+                <div className="text-sm font-medium text-zinc-300">{item.content}</div>
                 <Badge tone={toolTone(metadata.status)}>{String(metadata.status ?? 'unknown')}</Badge>
               </div>
-              <div className="mt-2 whitespace-pre-wrap text-xs leading-5 text-stone-600">
+              <div className="mt-2 whitespace-pre-wrap font-mono text-xs leading-5 text-zinc-600">
                 {formatJson(metadata)}
               </div>
             </div>
           )
         })}
       </div>
-    </Card>
+    </div>
   )
 }
 
@@ -694,18 +683,18 @@ function HistoryView() {
 
   return (
     <div className="space-y-6">
-      <Card>
-        <h2 className="text-3xl font-semibold tracking-[-0.04em] text-stone-950">Session history</h2>
-        <p className="mt-2 text-sm text-stone-500">
+      <div>
+        <h2 className="text-lg font-semibold tracking-tight text-zinc-100">Session history</h2>
+        <p className="mt-1 text-sm text-zinc-500">
           Review past runs and jump directly into the retained timeline for a given issue.
         </p>
-      </Card>
+      </div>
 
-      <div className="grid gap-4">
+      <div className="space-y-px overflow-hidden rounded-xl border border-zinc-800">
         {payload.sessions.length === 0 ? (
-          <Card className="border-dashed border-stone-300 bg-white/75 text-center">
-            <p className="text-sm text-stone-500">No historical sessions have been persisted yet.</p>
-          </Card>
+          <div className="bg-zinc-900 px-6 py-10 text-center text-sm text-zinc-500">
+            No historical sessions have been persisted yet.
+          </div>
         ) : null}
 
         {payload.sessions.map((session) => (
@@ -720,40 +709,38 @@ function HistoryRow({ session }: { session: SessionsPayload['sessions'][number] 
   const issueIdentifier = session.issue_identifier
 
   return (
-    <Card className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <div>
+    <div className="flex items-center justify-between gap-4 border-b border-zinc-800 bg-zinc-900 px-5 py-4 last:border-b-0">
+      <div className="min-w-0">
         <div className="flex flex-wrap items-center gap-2">
           {issueIdentifier ? (
             <Link
-              className="text-lg font-semibold tracking-[-0.03em] text-stone-950 transition hover:text-amber-700"
+              className="text-sm font-semibold text-zinc-200 transition-colors hover:text-indigo-400"
               params={{ issueIdentifier }}
               to="/session/$issueIdentifier"
             >
               {issueIdentifier}
             </Link>
           ) : (
-            <span className="text-lg font-semibold tracking-[-0.03em] text-stone-950">Unknown issue</span>
+            <span className="text-sm font-semibold text-zinc-200">Unknown issue</span>
           )}
           <Badge tone={session.status === 'failed' ? 'danger' : 'neutral'}>{titleCase(session.status)}</Badge>
         </div>
-        <p className="mt-2 text-sm text-stone-600">{session.issue_title ?? 'No title stored'}</p>
-        <p className="mt-1 text-xs text-stone-500">
+        <p className="mt-1 truncate text-sm text-zinc-500">{session.issue_title ?? 'No title stored'}</p>
+        <p className="mt-0.5 text-xs text-zinc-600">
           {formatDateTime(session.started_at)} · {session.worker_host ?? 'local'} · {formatNumber(session.total_tokens)} tokens
         </p>
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        {issueIdentifier ? (
-          <Link
-            className="inline-flex items-center justify-center rounded-full border border-stone-950 bg-stone-950 px-4 py-2 text-sm font-semibold text-stone-50 transition hover:-translate-y-0.5 hover:bg-stone-800"
-            params={{ issueIdentifier }}
-            to="/session/$issueIdentifier"
-          >
-            Open timeline
-          </Link>
-        ) : null}
-      </div>
-    </Card>
+      {issueIdentifier ? (
+        <Link
+          className="shrink-0 rounded-lg border border-zinc-700 px-3.5 py-2 text-sm font-medium text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100"
+          params={{ issueIdentifier }}
+          to="/session/$issueIdentifier"
+        >
+          Open
+        </Link>
+      ) : null}
+    </div>
   )
 }
 
@@ -799,14 +786,14 @@ function ProjectsView() {
     <div className="grid gap-6 xl:grid-cols-[1.2fr,0.8fr]">
       <Card className="space-y-5">
         <div>
-          <h2 className="text-3xl font-semibold tracking-[-0.04em] text-stone-950">Projects</h2>
-          <p className="mt-2 text-sm text-stone-500">
+          <h2 className="text-lg font-semibold tracking-tight text-zinc-100">Projects</h2>
+          <p className="mt-1 text-sm text-zinc-500">
             Map Linear projects to GitHub repos and per-project workspace defaults.
           </p>
         </div>
 
         {feedback ? (
-          <div className="rounded-[1.4rem] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div className="rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-3 text-sm text-zinc-300">
             {feedback}
           </div>
         ) : null}
@@ -853,7 +840,7 @@ function ProjectsView() {
           <div className="grid gap-4 lg:grid-cols-2">
             <Field label="Filter mode">
               <select
-                className="w-full rounded-2xl border border-stone-200 bg-stone-50/80 px-4 py-3 text-sm text-stone-700 outline-none transition focus:border-amber-500 focus:bg-white focus:ring-4 focus:ring-amber-100"
+                className="w-full rounded-lg border border-zinc-800 bg-zinc-950 px-3.5 py-2.5 text-sm text-zinc-200 outline-none transition focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30"
                 onChange={(event) =>
                   setDraft((current) => ({ ...current, linear_filter_by: event.target.value }))
                 }
@@ -924,8 +911,8 @@ function ProjectsView() {
 
       <Card className="space-y-4">
         <div>
-          <h3 className="text-xl font-semibold tracking-[-0.03em] text-stone-950">Current mappings</h3>
-          <p className="mt-1 text-sm text-stone-500">Each project card represents one stored mapping.</p>
+          <h3 className="text-base font-semibold tracking-tight text-zinc-100">Current mappings</h3>
+          <p className="mt-1 text-sm text-zinc-500">Each project card represents one stored mapping.</p>
         </div>
 
         {projectsQuery.isPending ? <LoadingPanel title="Loading projects" compact /> : null}
@@ -933,16 +920,16 @@ function ProjectsView() {
           <ErrorPanel detail={formatQueryError(projectsQuery.error)} title="Projects unavailable" />
         ) : null}
 
-        <div className="space-y-3">
+        <div className="space-y-2">
           {projectsQuery.data?.projects.map((project: Project) => (
             <div
-              className="rounded-[1.35rem] border border-stone-200/80 bg-stone-50/80 p-4"
+              className="rounded-lg border border-zinc-800 bg-zinc-950 p-4"
               key={project.id}
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-base font-semibold text-stone-950">{project.name}</div>
-                  <div className="mt-1 text-xs text-stone-500">
+                  <div className="text-sm font-semibold text-zinc-200">{project.name}</div>
+                  <div className="mt-1 text-xs text-zinc-500">
                     {project.github_repo ?? 'No repo configured'}
                   </div>
                 </div>
@@ -971,7 +958,7 @@ function ProjectsView() {
                   </Button>
                 </div>
               </div>
-              <div className="mt-3 text-xs leading-5 text-stone-600">
+              <div className="mt-3 font-mono text-xs leading-5 text-zinc-600">
                 {formatJson({
                   linear_project_slug: project.linear_project_slug,
                   linear_organization_slug: project.linear_organization_slug,
@@ -1035,22 +1022,22 @@ function LinearApiKeyCard() {
   return (
     <Card className="space-y-4">
       <div>
-        <h2 className="text-3xl font-semibold tracking-[-0.04em] text-stone-950">Linear API Key</h2>
-        <p className="mt-2 text-sm text-stone-500">
+        <h2 className="text-lg font-semibold tracking-tight text-zinc-100">Linear API Key</h2>
+        <p className="mt-1 text-sm text-zinc-500">
           Required to connect Symphony to Linear. Get a personal API key from Linear Settings &rarr; Security &amp; access &rarr; Personal API keys.
         </p>
       </div>
 
       {feedback ? (
-        <div className="rounded-[1.4rem] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <div className="rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-3 text-sm text-zinc-300">
           {feedback}
         </div>
       ) : null}
 
       {existing ? (
-        <div className="rounded-[1.35rem] border border-stone-200/80 bg-stone-50/80 p-4">
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
           <div className="flex items-center justify-between gap-3">
-            <code className="text-sm text-stone-600 break-all">
+            <code className="text-sm text-zinc-400 break-all">
               {showKey ? existing.value : maskedValue}
             </code>
             <div className="flex gap-2">
@@ -1146,14 +1133,14 @@ function SettingsView() {
     <div className="grid gap-6 xl:grid-cols-[0.9fr,1.1fr]">
       <Card className="space-y-5">
         <div>
-          <h2 className="text-3xl font-semibold tracking-[-0.04em] text-stone-950">Settings</h2>
-          <p className="mt-2 text-sm text-stone-500">
+          <h2 className="text-lg font-semibold tracking-tight text-zinc-100">Settings</h2>
+          <p className="mt-1 text-sm text-zinc-500">
             Manage global key-value settings used to build the workflow config overlay.
           </p>
         </div>
 
         {feedback ? (
-          <div className="rounded-[1.4rem] border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <div className="rounded-lg border border-zinc-700 bg-zinc-800 px-4 py-3 text-sm text-zinc-300">
             {feedback}
           </div>
         ) : null}
@@ -1207,8 +1194,8 @@ function SettingsView() {
 
       <Card className="space-y-4">
         <div>
-          <h3 className="text-xl font-semibold tracking-[-0.03em] text-stone-950">Stored settings</h3>
-          <p className="mt-1 text-sm text-stone-500">
+          <h3 className="text-base font-semibold tracking-tight text-zinc-100">Stored settings</h3>
+          <p className="mt-1 text-sm text-zinc-500">
             Click edit to reuse an existing key without retyping it.
           </p>
         </div>
@@ -1218,16 +1205,16 @@ function SettingsView() {
           <ErrorPanel detail={formatQueryError(settingsQuery.error)} title="Settings unavailable" />
         ) : null}
 
-        <div className="space-y-3">
+        <div className="space-y-2">
           {settingsQuery.data?.settings.map((setting: { key: string; value: string }) => (
             <div
-              className="rounded-[1.35rem] border border-stone-200/80 bg-stone-50/80 p-4"
+              className="rounded-lg border border-zinc-800 bg-zinc-950 p-4"
               key={setting.key}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="truncate font-semibold text-stone-950">{setting.key}</div>
-                  <pre className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-stone-600">
+                  <div className="truncate text-sm font-semibold text-zinc-200">{setting.key}</div>
+                  <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-zinc-500">
                     {setting.value}
                   </pre>
                 </div>
@@ -1269,11 +1256,11 @@ function SettingsView() {
 function NotFoundView() {
   return (
     <Card className="mx-auto max-w-2xl text-center">
-      <p className="text-xs font-semibold uppercase tracking-[0.3em] text-amber-700">Not found</p>
-      <h2 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-stone-950">
+      <p className="text-xs font-medium uppercase tracking-[0.1em] text-zinc-500">Not found</p>
+      <h2 className="mt-2 text-lg font-semibold tracking-tight text-zinc-100">
         The requested dashboard route does not exist.
       </h2>
-      <p className="mt-3 text-sm text-stone-500">
+      <p className="mt-2 text-sm text-zinc-500">
         Phoenix will serve the SPA shell for valid client routes only.
       </p>
     </Card>
@@ -1290,11 +1277,11 @@ function StatCard({
   value: string
 }) {
   return (
-    <Card className="border-white/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(255,251,235,0.78))]">
-      <div className="text-xs font-semibold uppercase tracking-[0.28em] text-amber-700">{label}</div>
-      <div className="mt-3 text-3xl font-semibold tracking-[-0.05em] text-stone-950">{value}</div>
-      <div className="mt-2 text-sm text-stone-500">{helper}</div>
-    </Card>
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+      <div className="text-xs font-medium uppercase tracking-[0.08em] text-zinc-500">{label}</div>
+      <div className="mt-2 text-2xl font-semibold tracking-tight text-zinc-100">{value}</div>
+      <div className="mt-1 text-sm text-zinc-600">{helper}</div>
+    </div>
   )
 }
 
@@ -1308,17 +1295,17 @@ function MetaItem({
   value: string
 }) {
   return (
-    <div className="rounded-[1.2rem] border border-white/80 bg-white/70 px-4 py-3">
-      <dt className="text-xs font-semibold uppercase tracking-[0.24em] text-stone-400">{label}</dt>
-      <dd className="mt-2 text-sm font-medium text-stone-900">{value}</dd>
-      {helper ? <div className="mt-1 text-xs text-stone-500">{helper}</div> : null}
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900 px-3.5 py-2.5">
+      <dt className="text-xs font-medium text-zinc-500">{label}</dt>
+      <dd className="mt-1 text-sm font-medium text-zinc-200">{value}</dd>
+      {helper ? <div className="mt-0.5 text-xs text-zinc-600">{helper}</div> : null}
     </div>
   )
 }
 
 function Field({ children, label }: { children: ReactNode; label: string }) {
   return (
-    <label className="grid gap-2 text-sm font-medium text-stone-700">
+    <label className="grid gap-1.5 text-sm font-medium text-zinc-400">
       <span>{label}</span>
       {children}
     </label>
@@ -1328,17 +1315,17 @@ function Field({ children, label }: { children: ReactNode; label: string }) {
 function LoadingPanel({ compact = false, title }: { compact?: boolean; title: string }) {
   return (
     <Card className={cn('text-center', compact && 'p-4')}>
-      <p className="text-lg font-semibold text-stone-900">{title}</p>
-      <p className="mt-2 text-sm text-stone-500">Fetching the latest payload from Phoenix.</p>
+      <p className="text-sm font-medium text-zinc-300">{title}</p>
+      <p className="mt-1 text-sm text-zinc-600">Fetching the latest payload from Phoenix.</p>
     </Card>
   )
 }
 
 function ErrorPanel({ detail, title }: { detail: string; title: string }) {
   return (
-    <Card className="border-rose-200 bg-rose-50/80">
-      <p className="text-lg font-semibold text-rose-900">{title}</p>
-      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-rose-800">{detail}</p>
+    <Card className="border-red-500/20 bg-red-500/5">
+      <p className="text-sm font-medium text-red-400">{title}</p>
+      <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-red-300/80">{detail}</p>
     </Card>
   )
 }
