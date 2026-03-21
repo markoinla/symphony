@@ -1029,6 +1029,27 @@ code, pre, .mono {
   font-size: var(--text-md);
 }
 
+/* ── Chat Viewport Lock ─────────────────────────────────────────── */
+
+body:has(.chat-layout) {
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+body:has(.chat-layout) .global-nav {
+  flex-shrink: 0;
+}
+
+body:has(.chat-layout) .app-shell {
+  flex: 1;
+  min-height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
 /* ── Chat Session Layout ────────────────────────────────────────── */
 
 .chat-layout {
@@ -1129,6 +1150,7 @@ code, pre, .mono {
   overflow-y: auto;
   padding: 1.25rem 0 4rem;
   scroll-padding-bottom: 2rem;
+  isolation: isolate;
 }
 
 .chat-scroll-bottom {
