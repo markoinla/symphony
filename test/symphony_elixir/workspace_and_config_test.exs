@@ -1171,7 +1171,9 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   end
 
   test "settings returns an empty overlay map when no settings exist in DB" do
+    SymphonyElixir.Settings.put_current_project(nil)
     SymphonyElixir.Store.delete_all_settings()
+    SymphonyElixir.Store.delete_all_projects()
 
     assert SymphonyElixir.Settings.config_overlay() == %{}
   end
