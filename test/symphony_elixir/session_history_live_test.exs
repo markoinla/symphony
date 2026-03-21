@@ -68,6 +68,52 @@ defmodule SymphonyElixir.SessionHistoryLiveTest do
     assert document |> Floki.find(".chat-tool .chat-tool-name") |> Enum.map(&Floki.text/1) == ["shell"]
   end
 
+  test "session page renders command tool badges with collapsed command context" do
+    issue_identifier = unique_issue_identifier()
+    session = create_session!(issue_identifier: issue_identifier, issue_title: "Command context")
+
+    append_message!(session.id, 1, "tool_call", "exec_command", %{
+      status: "completed",
+      args: %{cmd: "git status --short", cwd: "/tmp/workspaces/SYM-28", exit_code: 0}
+    })
+
+    {:ok, _view, html} = live(build_conn(), "/session/#{URI.encode(issue_identifier)}")
+    {:ok, document} = Floki.parse_document(html)
+
+    [tool_card] = Floki.find(document, ".chat-tool")
+
+    assert tool_card |> Floki.find(".chat-tool-name") |> Floki.text() == "Command"
+    assert tool_card |> Floki.find(".chat-tool-context") |> Floki.text() == "git status --short"
+    assert tool_card |> Floki.find(".chat-tool-meta") |> Floki.text() == "SYM-28 • exit 0"
+    assert tool_card |> Floki.find(".chat-tool-badge") |> Floki.text() |> String.trim() == "completed"
+  end
+
+  test "session page preserves details state across live patches" do
+    issue_identifier = unique_issue_identifier()
+    session = create_session!(issue_identifier: issue_identifier, issue_title: "Details state")
+
+    append_message!(session.id, 1, "tool_call", "exec_command", %{
+      status: "completed",
+      args: %{cmd: "mix test"}
+    })
+
+    append_message!(session.id, 2, "thinking", "Reviewing session updates")
+
+    {:ok, _view, html} = live(build_conn(), "/session/#{URI.encode(issue_identifier)}")
+    {:ok, document} = Floki.parse_document(html)
+
+    chat_entries = Floki.find(document, "[data-chat-entry]")
+    [tool_details] = Floki.find(document, "details.chat-tool-pill")
+    [thinking_details] = Floki.find(document, "details.chat-thinking")
+
+    assert length(chat_entries) == 3
+    assert Enum.all?(chat_entries, &(Floki.attribute(&1, "id") != []))
+    assert Floki.attribute(tool_details, "phx-mounted") != []
+    assert Floki.attribute(tool_details, "id") != []
+    assert Floki.attribute(thinking_details, "phx-mounted") != []
+    assert Floki.attribute(thinking_details, "id") != []
+  end
+
   test "legacy history detail path renders through the unified session view" do
     issue_identifier = unique_issue_identifier()
     session = create_session!(issue_identifier: issue_identifier, issue_title: "Legacy history alias")

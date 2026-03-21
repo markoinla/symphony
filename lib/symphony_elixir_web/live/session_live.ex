@@ -6,6 +6,7 @@ defmodule SymphonyElixirWeb.SessionLive do
 
   use Phoenix.LiveView, layout: {SymphonyElixirWeb.Layouts, :app}
 
+  alias Phoenix.LiveView.JS
   alias SymphonyElixir.{SessionLog, Store}
   alias SymphonyElixirWeb.{Endpoint, ObservabilityPubSub, Presenter}
 
@@ -26,7 +27,7 @@ defmodule SymphonyElixirWeb.SessionLive do
     if connected?(socket) do
       if socket.assigns.issue_id, do: maybe_subscribe_session(socket.assigns.issue_id)
       :ok = ObservabilityPubSub.subscribe()
-      schedule_runtime_tick()
+      if socket.assigns.runtime_clock_enabled, do: schedule_runtime_tick()
     end
 
     {:ok, socket}
@@ -34,6 +35,7 @@ defmodule SymphonyElixirWeb.SessionLive do
 
   @impl true
   def handle_info({:session_message, message}, socket) do
+    message = ensure_message_dom_id(message, {:live_message, socket.assigns.session_id})
     messages = socket.assigns.messages
 
     # Inject the live session header before the first real message
@@ -41,12 +43,7 @@ defmodule SymphonyElixirWeb.SessionLive do
       if has_live_session_header?(messages) do
         messages ++ [message]
       else
-        header = %{
-          type: :session_header,
-          content: "Live Session",
-          timestamp: DateTime.utc_now(),
-          metadata: %{status: "running", session_id: socket.assigns.session_id}
-        }
+        header = live_session_header(socket.assigns.session_id)
 
         messages ++ [header, message]
       end
@@ -56,6 +53,8 @@ defmodule SymphonyElixirWeb.SessionLive do
 
   @impl true
   def handle_info({:session_message_update, updated_message}, socket) do
+    updated_message = ensure_message_dom_id(updated_message, {:live_message, socket.assigns.session_id})
+
     messages =
       case List.last(socket.assigns.messages) do
         %{id: id} when id == updated_message.id ->
@@ -79,6 +78,7 @@ defmodule SymphonyElixirWeb.SessionLive do
           socket
           |> assign(:payload, payload)
           |> maybe_resubscribe(issue_id, session_id)
+          |> maybe_update_runtime_clock(payload)
 
         if session_id != socket.assigns.session_id do
           {messages, issue_title, historical_status} =
@@ -103,8 +103,12 @@ defmodule SymphonyElixirWeb.SessionLive do
 
   @impl true
   def handle_info(:runtime_tick, socket) do
-    schedule_runtime_tick()
-    {:noreply, assign(socket, :now, DateTime.utc_now())}
+    if socket.assigns.runtime_clock_enabled do
+      schedule_runtime_tick()
+      {:noreply, assign(socket, :now, DateTime.utc_now())}
+    else
+      {:noreply, socket}
+    end
   end
 
   @impl true
@@ -159,7 +163,7 @@ defmodule SymphonyElixirWeb.SessionLive do
           </div>
         <% else %>
           <div class="chat-messages">
-            <div :for={msg <- @messages}>
+            <div :for={msg <- @messages} id={msg.dom_id} data-chat-entry>
               <%= case msg.type do %>
                 <% :session_header -> %>
                   <div class="chat-session-header">
@@ -203,15 +207,29 @@ defmodule SymphonyElixirWeb.SessionLive do
                   </div>
 
                 <% :tool_call -> %>
-                  <div class={"chat-tool #{if msg.metadata[:status] == "failed", do: "chat-tool-failed", else: ""}"}>
-                    <details class="chat-tool-pill">
+                  <div class={"chat-tool #{if tool_failed?(msg.metadata), do: "chat-tool-failed", else: ""}"}>
+                    <details
+                      id={message_details_id(msg)}
+                      class="chat-tool-pill"
+                      phx-mounted={JS.ignore_attributes(["open"])}
+                    >
                       <summary class="chat-tool-summary">
-                        <svg class="chat-tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                          <circle cx="8" cy="8" r="2.5"/><path d="M8 1v2m0 10v2M1 8h2m10 0h2m-2.05-4.95-1.41 1.41m-7.08 7.08-1.41 1.41m0-9.9 1.41 1.41m7.08 7.08 1.41 1.41"/>
-                        </svg>
-                        <span class="chat-tool-name"><%= msg.content %></span>
-                        <span class={"chat-tool-badge chat-tool-badge-#{msg.metadata[:status] || "unknown"}"}>
-                          <%= msg.metadata[:status] || "unknown" %>
+                        <span class="chat-tool-summary-copy">
+                          <span class="chat-tool-summary-main">
+                            <svg class="chat-tool-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                              <circle cx="8" cy="8" r="2.5"/><path d="M8 1v2m0 10v2M1 8h2m10 0h2m-2.05-4.95-1.41 1.41m-7.08 7.08-1.41 1.41m0-9.9 1.41 1.41m7.08 7.08 1.41 1.41"/>
+                            </svg>
+                            <span class="chat-tool-name"><%= tool_label(msg.content) %></span>
+                          </span>
+                          <%= if tool_context = tool_context(msg.content, msg.metadata) do %>
+                            <span class="chat-tool-context" title={tool_context}><%= tool_context %></span>
+                          <% end %>
+                          <%= if tool_meta = tool_meta(msg.metadata) do %>
+                            <span class="chat-tool-meta"><%= tool_meta %></span>
+                          <% end %>
+                        </span>
+                        <span class={"chat-tool-badge chat-tool-badge-#{tool_status(msg.metadata)}"}>
+                          <%= tool_status(msg.metadata) %>
                         </span>
                       </summary>
                       <%= if msg.metadata[:args] && msg.metadata[:args] != %{} do %>
@@ -237,7 +255,11 @@ defmodule SymphonyElixirWeb.SessionLive do
                   </div>
 
                 <% :thinking -> %>
-                  <details class="chat-thinking">
+                  <details
+                    id={message_details_id(msg)}
+                    class="chat-thinking"
+                    phx-mounted={JS.ignore_attributes(["open"])}
+                  >
                     <summary class="chat-thinking-toggle">
                       <svg class="chat-thinking-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M6 4l4 4-4 4"/>
@@ -278,8 +300,11 @@ defmodule SymphonyElixirWeb.SessionLive do
     live_messages =
       if current_issue_id && current_session_id do
         case SessionLog.get_messages(current_issue_id, current_session_id) do
-          {:ok, msgs} -> msgs
-          {:error, _} -> []
+          {:ok, msgs} ->
+            Enum.map(msgs, &ensure_message_dom_id(&1, {:live_message, current_session_id}))
+
+          {:error, _} ->
+            []
         end
       else
         []
@@ -293,12 +318,7 @@ defmodule SymphonyElixirWeb.SessionLive do
 
     live_entries =
       if current_session_id && live_messages != [] do
-        header = %{
-          type: :session_header,
-          content: "Live Session",
-          timestamp: DateTime.utc_now(),
-          metadata: %{status: "running", session_id: current_session_id}
-        }
+        header = live_session_header(current_session_id)
 
         [header | live_messages]
       else
@@ -313,19 +333,34 @@ defmodule SymphonyElixirWeb.SessionLive do
   end
 
   defp session_header_message(session) do
-    %{
-      type: :session_header,
-      content: session.status,
-      timestamp: session.started_at,
-      metadata: %{
-        status: session.status,
-        started_at: session.started_at,
-        ended_at: session.ended_at,
-        turn_count: session.turn_count,
-        total_tokens: session.total_tokens,
-        session_id: session.session_id
-      }
-    }
+    ensure_message_dom_id(
+      %{
+        type: :session_header,
+        content: session.status,
+        timestamp: session.started_at,
+        metadata: %{
+          status: session.status,
+          started_at: session.started_at,
+          ended_at: session.ended_at,
+          turn_count: session.turn_count,
+          total_tokens: session.total_tokens,
+          session_id: session.session_id
+        }
+      },
+      {:session_header, session.session_id, session.started_at}
+    )
+  end
+
+  defp live_session_header(session_id) do
+    ensure_message_dom_id(
+      %{
+        type: :session_header,
+        content: "Live Session",
+        timestamp: DateTime.utc_now(),
+        metadata: %{status: "running", session_id: session_id}
+      },
+      {:session_header, session_id, "running"}
+    )
   end
 
   defp has_live_session_header?(messages) do
@@ -343,13 +378,16 @@ defmodule SymphonyElixirWeb.SessionLive do
   defp historical_session_messages(db_session_id) when is_integer(db_session_id) do
     Store.get_session_messages(db_session_id)
     |> Enum.map(fn m ->
-      %{
-        id: m.seq,
-        timestamp: m.timestamp,
-        type: safe_atom_type(m.type),
-        content: m.content,
-        metadata: decode_metadata(m.metadata)
-      }
+      ensure_message_dom_id(
+        %{
+          id: m.seq,
+          timestamp: m.timestamp,
+          type: safe_atom_type(m.type),
+          content: m.content,
+          metadata: decode_metadata(m.metadata)
+        },
+        {:historical_message, db_session_id}
+      )
     end)
   end
 
@@ -408,6 +446,7 @@ defmodule SymphonyElixirWeb.SessionLive do
     |> assign(:back_href, back_href)
     |> assign(:back_title, back_title(back_href))
     |> assign(:not_found, false)
+    |> assign(:runtime_clock_enabled, runtime_clock_enabled?(payload))
     |> assign(:now, DateTime.utc_now())
   end
 
@@ -427,6 +466,7 @@ defmodule SymphonyElixirWeb.SessionLive do
     |> assign(:back_href, back_href)
     |> assign(:back_title, back_title(back_href))
     |> assign(:not_found, false)
+    |> assign(:runtime_clock_enabled, false)
     |> assign(:now, DateTime.utc_now())
   end
 
@@ -443,6 +483,7 @@ defmodule SymphonyElixirWeb.SessionLive do
     |> assign(:back_href, "/history")
     |> assign(:back_title, back_title("/history"))
     |> assign(:not_found, true)
+    |> assign(:runtime_clock_enabled, false)
     |> assign(:now, DateTime.utc_now())
   end
 
@@ -575,6 +616,20 @@ defmodule SymphonyElixirWeb.SessionLive do
 
   defp maybe_subscribe_session(_issue_id), do: :ok
 
+  defp maybe_update_runtime_clock(socket, payload) do
+    enabled = runtime_clock_enabled?(payload)
+    previously_enabled = socket.assigns[:runtime_clock_enabled] || false
+
+    if enabled and not previously_enabled do
+      schedule_runtime_tick()
+    end
+
+    assign(socket, :runtime_clock_enabled, enabled)
+  end
+
+  defp runtime_clock_enabled?(%{running: running}) when is_map(running), do: true
+  defp runtime_clock_enabled?(_payload), do: false
+
   defp payload_status(payload, fallback_status) when is_map(payload) do
     payload[:status] || fallback_status
   end
@@ -583,6 +638,186 @@ defmodule SymphonyElixirWeb.SessionLive do
 
   defp back_title("/history"), do: "Back to history"
   defp back_title(_href), do: "Back to dashboard"
+
+  defp tool_label("exec_command"), do: "Command"
+  defp tool_label("apply_patch"), do: "Patch"
+
+  defp tool_label(tool_name) when is_binary(tool_name), do: tool_name
+
+  defp tool_label(_tool_name), do: "Tool"
+
+  defp tool_context("exec_command", metadata) do
+    metadata
+    |> tool_args()
+    |> map_value([:cmd, "cmd"])
+    |> inline_text()
+  end
+
+  defp tool_context(_tool_name, metadata) do
+    metadata
+    |> tool_args()
+    |> generic_tool_context()
+  end
+
+  defp tool_meta(metadata) do
+    args = tool_args(metadata)
+
+    [
+      args |> map_value([:cwd, "cwd"]) |> short_path(),
+      args |> map_value([:exit_code, "exit_code"]) |> format_exit_code()
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" • ")
+    |> case do
+      "" -> nil
+      meta -> meta
+    end
+  end
+
+  defp tool_status(metadata), do: map_value(metadata, [:status, "status"]) || "unknown"
+
+  defp tool_failed?(metadata), do: tool_status(metadata) == "failed"
+
+  defp tool_args(metadata) when is_map(metadata) do
+    case map_value(metadata, [:args, "args"]) do
+      args when is_map(args) -> args
+      _ -> %{}
+    end
+  end
+
+  defp tool_args(_metadata), do: %{}
+
+  defp generic_tool_context(args) when is_map(args) do
+    args
+    |> Enum.reject(fn {key, value} ->
+      to_string(key) in ["cwd", "exit_code"] or blank_value?(value)
+    end)
+    |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
+    |> List.first()
+    |> case do
+      {key, value} -> "#{humanize_key(key)}: #{inline_text(value)}"
+      nil -> nil
+    end
+  end
+
+  defp humanize_key(key) do
+    key
+    |> to_string()
+    |> String.replace("_", " ")
+  end
+
+  defp short_path(path) when is_binary(path) and path != "" do
+    path
+    |> String.trim_trailing("/")
+    |> Path.basename()
+    |> case do
+      "." -> path
+      basename when basename in ["", "/"] -> path
+      basename -> basename
+    end
+  end
+
+  defp short_path(_path), do: nil
+
+  defp format_exit_code(code) when is_integer(code), do: "exit #{code}"
+
+  defp format_exit_code(code) when is_binary(code) do
+    case Integer.parse(code) do
+      {parsed, ""} -> format_exit_code(parsed)
+      _ -> nil
+    end
+  end
+
+  defp format_exit_code(_code), do: nil
+
+  defp map_value(map, keys) when is_map(map) and is_list(keys) do
+    Enum.find_value(keys, &Map.get(map, &1))
+  end
+
+  defp inline_text(text) when is_binary(text) do
+    text
+    |> String.replace("\n", " ")
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+    |> truncate(88)
+    |> case do
+      "" -> nil
+      value -> value
+    end
+  end
+
+  defp inline_text(value) when is_integer(value), do: Integer.to_string(value)
+  defp inline_text(value) when is_atom(value), do: value |> Atom.to_string() |> inline_text()
+  defp inline_text(_value), do: nil
+
+  defp truncate(text, max_length) when is_binary(text) and byte_size(text) > max_length do
+    binary_part(text, 0, max_length - 1) <> "…"
+  end
+
+  defp truncate(text, _max_length), do: text
+
+  defp blank_value?(value) when value in [nil, "", [], %{}], do: true
+  defp blank_value?(_value), do: false
+
+  defp ensure_message_dom_id(message, scope) when is_map(message) do
+    Map.put_new(message, :dom_id, build_message_dom_id(message, scope))
+  end
+
+  defp message_details_id(%{dom_id: dom_id}) when is_binary(dom_id), do: dom_id <> "-details"
+
+  defp build_message_dom_id(%{type: :session_header, metadata: metadata}, scope) do
+    dom_id([
+      "chat-entry",
+      scope_label(scope),
+      metadata[:session_id] || metadata["session_id"] || "session",
+      metadata[:status] || metadata["status"] || "status"
+    ])
+  end
+
+  defp build_message_dom_id(%{type: type, id: id}, scope) do
+    dom_id(["chat-entry", scope_label(scope), type, id])
+  end
+
+  defp build_message_dom_id(message, scope) do
+    dom_id([
+      "chat-entry",
+      scope_label(scope),
+      Map.get(message, :type, "message"),
+      Map.get(message, :timestamp, DateTime.utc_now()),
+      Map.get(message, :content, "")
+    ])
+  end
+
+  defp scope_label({label, value}) do
+    dom_id_segment([label, value])
+  end
+
+  defp scope_label({label, value, extra}) do
+    dom_id_segment([label, value, extra])
+  end
+
+  defp dom_id(parts) when is_list(parts) do
+    parts
+    |> dom_id_segment()
+    |> case do
+      "" -> "chat-entry"
+      value -> value
+    end
+  end
+
+  defp dom_id_segment(parts) when is_list(parts) do
+    parts
+    |> Enum.map_join("-", &dom_part/1)
+    |> String.downcase()
+    |> String.replace(~r/[^a-z0-9]+/, "-")
+    |> String.trim("-")
+  end
+
+  defp dom_part(%DateTime{} = timestamp), do: DateTime.to_unix(timestamp, :microsecond)
+  defp dom_part(value) when is_atom(value), do: Atom.to_string(value)
+  defp dom_part(value) when is_binary(value), do: value
+  defp dom_part(value) when is_integer(value), do: Integer.to_string(value)
+  defp dom_part(value), do: inspect(value)
 
   defp safe_atom_type(type) when type in ~w(response tool_call thinking reasoning_summary turn_boundary error) do
     String.to_existing_atom(type)
