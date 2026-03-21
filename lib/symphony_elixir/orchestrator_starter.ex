@@ -21,6 +21,7 @@ defmodule SymphonyElixir.OrchestratorStarter do
   @impl true
   def init(:ok) do
     Process.monitor(SymphonyElixir.OrchestratorSupervisor)
+    SymphonyElixir.Store.clear_all_issue_claims()
     ensure_orchestrators()
     schedule_reconcile()
     {:ok, %{}}

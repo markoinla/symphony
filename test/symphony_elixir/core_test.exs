@@ -591,6 +591,64 @@ defmodule SymphonyElixir.CoreTest do
     assert Orchestrator.should_dispatch_issue_for_test(changed_state_issue, state)
   end
 
+  test "DB issue claim blocks dispatch from another orchestrator" do
+    issue_id = "issue-cross-orch-claim"
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 2,
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-CLAIM",
+      state: "In Progress",
+      title: "Claimed by another",
+      description: "Should be blocked",
+      labels: []
+    }
+
+    # Without a DB claim, the issue is dispatchable
+    assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+
+    # Simulate another orchestrator claiming the issue
+    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue(issue_id, "OTHER_WORKFLOW:1")
+
+    # With a DB claim present, the batch check blocks dispatch
+    db_claims = SymphonyElixir.Store.list_claimed_issue_ids()
+    assert MapSet.member?(db_claims, issue_id)
+
+    # Releasing the claim makes it dispatchable again
+    :ok = SymphonyElixir.Store.release_issue_claim(issue_id)
+    db_claims = SymphonyElixir.Store.list_claimed_issue_ids()
+    refute MapSet.member?(db_claims, issue_id)
+    assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "claim_issue returns error when issue is already claimed" do
+    issue_id = "issue-double-claim"
+
+    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue(issue_id, "WORKFLOW:1")
+    assert {:error, :already_claimed} = SymphonyElixir.Store.claim_issue(issue_id, "TRIAGE:1")
+
+    # Cleanup
+    :ok = SymphonyElixir.Store.release_issue_claim(issue_id)
+  end
+
+  test "clear_all_issue_claims removes all claims" do
+    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue("issue-clear-1", "WORKFLOW:1")
+    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue("issue-clear-2", "TRIAGE:1")
+
+    claims = SymphonyElixir.Store.list_claimed_issue_ids()
+    assert MapSet.member?(claims, "issue-clear-1")
+    assert MapSet.member?(claims, "issue-clear-2")
+
+    :ok = SymphonyElixir.Store.clear_all_issue_claims()
+
+    assert SymphonyElixir.Store.list_claimed_issue_ids() == MapSet.new()
+  end
+
   test "abnormal worker exit increments retry attempt progressively" do
     issue_id = "issue-crash"
     ref = make_ref()

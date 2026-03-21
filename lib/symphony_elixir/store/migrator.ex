@@ -105,6 +105,14 @@ defmodule SymphonyElixir.Store.Migrator do
 
     maybe_add_column("projects", "env_vars", "TEXT")
 
+    SQL.query!(Repo, """
+    CREATE TABLE IF NOT EXISTS issue_claims (
+      issue_id TEXT PRIMARY KEY,
+      orchestrator_key TEXT NOT NULL,
+      claimed_at TEXT NOT NULL
+    )
+    """)
+
     maybe_import_settings_file()
 
     Logger.info("SQLite auto-migrations complete")

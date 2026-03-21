@@ -4,16 +4,16 @@ import type { ComponentProps } from 'react'
 import { cn } from '../lib/utils'
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center rounded-full border px-4 py-2 text-sm font-semibold transition duration-200 disabled:pointer-events-none disabled:opacity-50',
+  'inline-flex items-center justify-center rounded-lg border px-3.5 py-2 text-sm font-medium transition-colors duration-150 disabled:pointer-events-none disabled:opacity-40',
   {
     variants: {
       variant: {
         primary:
-          'border-stone-950 bg-stone-950 text-stone-50 shadow-[0_14px_30px_-18px_rgba(17,24,39,0.8)] hover:-translate-y-0.5 hover:bg-stone-800',
+          'border-th-text-1 bg-th-text-1 text-th-bg hover:opacity-80',
         secondary:
-          'border-white/70 bg-white/80 text-stone-700 backdrop-blur hover:border-stone-300 hover:bg-white',
-        ghost: 'border-transparent bg-transparent text-stone-600 hover:bg-stone-100/70',
-        danger: 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100',
+          'border-th-border bg-transparent text-th-text-2 hover:border-th-border-muted hover:text-th-text-1',
+        ghost: 'border-transparent bg-transparent text-th-text-3 hover:text-th-text-1',
+        danger: 'border-red-500/30 bg-red-500/10 text-red-500 hover:bg-red-500/20',
       },
     },
     defaultVariants: {
@@ -31,15 +31,15 @@ export function Button({
 }
 
 const badgeVariants = cva(
-  'inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.24em]',
+  'inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium',
   {
     variants: {
       tone: {
-        neutral: 'bg-stone-200/70 text-stone-700',
-        running: 'bg-emerald-100 text-emerald-700',
-        retrying: 'bg-amber-100 text-amber-700',
-        danger: 'bg-rose-100 text-rose-700',
-        live: 'bg-sky-100 text-sky-700',
+        neutral: 'bg-th-muted text-th-text-3',
+        running: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+        retrying: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+        danger: 'bg-red-500/10 text-red-600 dark:text-red-400',
+        live: 'bg-th-accent-muted text-th-accent',
       },
     },
     defaultVariants: {
@@ -60,7 +60,7 @@ export function Card({ className, ...props }: ComponentProps<'section'>) {
   return (
     <section
       className={cn(
-        'rounded-[2rem] border border-white/70 bg-white/85 p-6 shadow-[0_25px_80px_-40px_rgba(120,53,15,0.35)] backdrop-blur',
+        'rounded-xl border border-th-border bg-th-surface p-6',
         className,
       )}
       {...props}
@@ -72,7 +72,7 @@ export function Input({ className, ...props }: ComponentProps<'input'>) {
   return (
     <input
       className={cn(
-        'w-full rounded-2xl border border-stone-200 bg-stone-50/80 px-4 py-3 text-sm text-stone-700 outline-none transition placeholder:text-stone-400 focus:border-amber-500 focus:bg-white focus:ring-4 focus:ring-amber-100',
+        'w-full rounded-lg border border-th-border bg-th-inset px-3.5 py-2.5 text-sm text-th-text-1 outline-none transition placeholder:text-th-text-4 focus:border-th-accent focus:ring-1 focus:ring-th-accent/30',
         className,
       )}
       {...props}
@@ -84,7 +84,7 @@ export function Textarea({ className, ...props }: ComponentProps<'textarea'>) {
   return (
     <textarea
       className={cn(
-        'min-h-28 w-full rounded-3xl border border-stone-200 bg-stone-50/80 px-4 py-3 text-sm text-stone-700 outline-none transition placeholder:text-stone-400 focus:border-amber-500 focus:bg-white focus:ring-4 focus:ring-amber-100',
+        'min-h-24 w-full rounded-lg border border-th-border bg-th-inset px-3.5 py-2.5 text-sm text-th-text-1 outline-none transition placeholder:text-th-text-4 focus:border-th-accent focus:ring-1 focus:ring-th-accent/30',
         className,
       )}
       {...props}

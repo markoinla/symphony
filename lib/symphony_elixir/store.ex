@@ -9,7 +9,7 @@ defmodule SymphonyElixir.Store do
 
   import Ecto.Query
   alias SymphonyElixir.Repo
-  alias SymphonyElixir.Store.{Message, Project, Session, Setting}
+  alias SymphonyElixir.Store.{IssueClaim, Message, Project, Session, Setting}
 
   # ── Project CRUD ──────────────────────────────────────────────────
 
@@ -128,6 +128,53 @@ defmodule SymphonyElixir.Store do
   @spec delete_all_projects() :: :ok
   def delete_all_projects do
     Repo.delete_all(Project)
+    :ok
+  end
+
+  # ── Issue Claims ────────────────────────────────────────────────
+
+  @spec claim_issue(String.t(), String.t()) :: {:ok, :claimed} | {:error, :already_claimed}
+  def claim_issue(issue_id, orchestrator_key)
+      when is_binary(issue_id) and is_binary(orchestrator_key) do
+    case Repo.get(IssueClaim, issue_id) do
+      %IssueClaim{} ->
+        {:error, :already_claimed}
+
+      nil ->
+        %IssueClaim{}
+        |> IssueClaim.changeset(%{
+          issue_id: issue_id,
+          orchestrator_key: orchestrator_key,
+          claimed_at: DateTime.utc_now()
+        })
+        |> Repo.insert()
+        |> case do
+          {:ok, _claim} -> {:ok, :claimed}
+          {:error, _changeset} -> {:error, :already_claimed}
+        end
+    end
+  end
+
+  @spec release_issue_claim(String.t()) :: :ok
+  def release_issue_claim(issue_id) when is_binary(issue_id) do
+    IssueClaim
+    |> where([c], c.issue_id == ^issue_id)
+    |> Repo.delete_all()
+
+    :ok
+  end
+
+  @spec list_claimed_issue_ids() :: MapSet.t(String.t())
+  def list_claimed_issue_ids do
+    IssueClaim
+    |> select([c], c.issue_id)
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
+  @spec clear_all_issue_claims() :: :ok
+  def clear_all_issue_claims do
+    Repo.delete_all(IssueClaim)
     :ok
   end
 

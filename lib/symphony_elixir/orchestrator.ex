@@ -318,10 +318,12 @@ defmodule SymphonyElixir.Orchestrator do
   defp maybe_dispatch(%State{} = state) do
     state = reconcile_running_issues(state)
 
+    db_claims = Store.list_claimed_issue_ids()
+
     with :ok <- Config.validate!(state.workflow_name),
          {:ok, issues} <- Tracker.fetch_candidate_issues(state.workflow_name),
          true <- available_slots(state) > 0 do
-      choose_issues(issues, state)
+      choose_issues(issues, state, db_claims)
     else
       {:error, :missing_linear_api_token} ->
         Logger.error("Linear API token missing in WORKFLOW.md")
@@ -535,6 +537,8 @@ defmodule SymphonyElixir.Orchestrator do
           Process.demonitor(ref, [:flush])
         end
 
+        Store.release_issue_claim(issue_id)
+
         %{
           state
           | running: Map.delete(state.running, issue_id),
@@ -618,14 +622,14 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp terminate_task(_pid), do: :ok
 
-  defp choose_issues(issues, state) do
+  defp choose_issues(issues, state, db_claims) do
     active_states = active_state_set()
     terminal_states = terminal_state_set()
 
     issues
     |> sort_issues_for_dispatch()
     |> Enum.reduce(state, fn issue, state_acc ->
-      if should_dispatch_issue?(issue, state_acc, active_states, terminal_states) do
+      if should_dispatch_issue?(issue, state_acc, active_states, terminal_states, db_claims) do
         dispatch_issue(state_acc, issue)
       else
         state_acc
@@ -653,15 +657,21 @@ defmodule SymphonyElixir.Orchestrator do
   defp issue_created_at_sort_key(%Issue{}), do: 9_223_372_036_854_775_807
   defp issue_created_at_sort_key(_issue), do: 9_223_372_036_854_775_807
 
+  defp should_dispatch_issue?(issue, state, active_states, terminal_states) do
+    should_dispatch_issue?(issue, state, active_states, terminal_states, MapSet.new())
+  end
+
   defp should_dispatch_issue?(
          %Issue{} = issue,
          %State{running: running, claimed: claimed, completed: completed} = state,
          active_states,
-         terminal_states
+         terminal_states,
+         db_claims
        ) do
     candidate_issue?(issue, active_states, terminal_states) and
       !todo_issue_blocked_by_non_terminal?(issue, terminal_states) and
       !MapSet.member?(claimed, issue.id) and
+      !MapSet.member?(db_claims, issue.id) and
       !Map.has_key?(running, issue.id) and
       !issue_completed_in_current_state?(issue, completed) and
       available_slots(state) > 0 and
@@ -669,7 +679,8 @@ defmodule SymphonyElixir.Orchestrator do
       worker_slots_available?(state)
   end
 
-  defp should_dispatch_issue?(_issue, _state, _active_states, _terminal_states), do: false
+  defp should_dispatch_issue?(_issue, _state, _active_states, _terminal_states, _db_claims),
+    do: false
 
   defp issue_completed_in_current_state?(%Issue{id: id, state: current_state}, completed) do
     case Map.get(completed, id) do
@@ -771,6 +782,17 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil, comment_watch_state \\ nil) do
+    case Store.claim_issue(issue.id, orchestrator_key(state)) do
+      {:ok, :claimed} ->
+        dispatch_claimed_issue(state, issue, attempt, preferred_worker_host, comment_watch_state)
+
+      {:error, :already_claimed} ->
+        Logger.info("Skipping dispatch; issue already claimed by another orchestrator: #{issue_context(issue)}")
+        state
+    end
+  end
+
+  defp dispatch_claimed_issue(%State{} = state, issue, attempt, preferred_worker_host, comment_watch_state) do
     issue_fetcher = fn issue_ids -> Tracker.fetch_issue_states_by_ids(issue_ids, state.workflow_name) end
 
     case revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_state_set()) do
@@ -779,15 +801,17 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:skip, :missing} ->
         Logger.info("Skipping dispatch; issue no longer active or visible: #{issue_context(issue)}")
+        Store.release_issue_claim(issue.id)
         state
 
       {:skip, %Issue{} = refreshed_issue} ->
         Logger.info("Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} blocked_by=#{length(refreshed_issue.blocked_by)}")
-
+        Store.release_issue_claim(issue.id)
         state
 
       {:error, reason} ->
         Logger.warning("Skipping dispatch; issue refresh failed for #{issue_context(issue)}: #{inspect(reason)}")
+        Store.release_issue_claim(issue.id)
         state
     end
   end
@@ -1112,6 +1136,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp release_issue_claim(%State{} = state, issue_id) do
+    Store.release_issue_claim(issue_id)
     %{state | claimed: MapSet.delete(state.claimed, issue_id)}
   end
 
@@ -1250,6 +1275,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp issue_context(%Issue{id: issue_id, identifier: identifier}) do
     "issue_id=#{issue_id} issue_identifier=#{identifier}"
+  end
+
+  defp orchestrator_key(%State{workflow_name: workflow_name, project_id: project_id}) do
+    if project_id, do: "#{workflow_name}:#{project_id}", else: workflow_name
   end
 
   defp available_slots(%State{} = state) do
