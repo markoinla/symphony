@@ -625,12 +625,14 @@ function SessionView() {
     queryFn: () => getIssue(issueIdentifier),
   })
 
-  const hasLiveSession = timeline?.sessions.some((s) => s.live) ?? false
-
   const timelineQuery = useQuery({
     queryKey: ['timeline', issueIdentifier],
     queryFn: () => getSessionTimeline(issueIdentifier),
-    refetchInterval: hasLiveSession ? 5_000 : false,
+    refetchInterval: (query) => {
+      const sseHasLive = timeline?.sessions.some((s) => s.live) ?? false
+      const fetchedHasLive = query.state.data?.sessions.some((s: TimelineSession) => s.live) ?? false
+      return sseHasLive || fetchedHasLive ? 5_000 : false
+    },
   })
 
   // Merge fresh session metadata (tokens, status) from periodic refetches
@@ -662,10 +664,16 @@ function SessionView() {
         turn_count: fresh.turn_count,
         status: fresh.status,
         ended_at: fresh.ended_at,
+        live: fresh.live,
       }
     })
 
-    return { ...local, sessions }
+    // Append sessions from fetched data that don't exist in local state
+    // (e.g., a new retry session created while the page was open)
+    const localIds = new Set(local.sessions.map((s) => s.session_id))
+    const newSessions = fetched.sessions.filter((s) => !localIds.has(s.session_id))
+
+    return { ...local, sessions: [...sessions, ...newSessions] }
   }, [timeline, timelineQuery.data, issueIdentifier])
   const currentFollowTail = followTail
   const activeIssueId = issueQuery.data?.issue_id ?? currentTimeline?.issue_id
