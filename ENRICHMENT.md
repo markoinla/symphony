@@ -17,10 +17,13 @@ tracker:
     - Duplicate
 polling:
   interval_ms: 10000
+engine: claude
 agent:
   max_concurrent_agents: 3
   max_turns: 10
   max_continuations: 0
+claude:
+  permission_mode: bypassPermissions
 codex:
   command: codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --config model_reasoning_summary=detailed app-server
   approval_policy: never
