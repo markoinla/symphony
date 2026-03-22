@@ -313,6 +313,27 @@ defmodule SymphonyElixir.Store do
   defp maybe_filter_project_id(query, nil), do: query
 
   defp maybe_filter_project_id(query, project_id) do
-    where(query, [s], s.project_id == ^project_id)
+    case Repo.get(Project, project_id) do
+      %Project{workspace_root: workspace_root} when is_binary(workspace_root) and workspace_root != "" ->
+        legacy_workspace_pattern = legacy_workspace_pattern(workspace_root)
+
+        where(
+          query,
+          [s],
+          s.project_id == ^project_id or
+            (is_nil(s.project_id) and fragment("? LIKE ? ESCAPE '\\'", s.workspace_path, ^legacy_workspace_pattern))
+        )
+
+      _ ->
+        where(query, [s], s.project_id == ^project_id)
+    end
+  end
+
+  defp legacy_workspace_pattern(workspace_root) do
+    workspace_root
+    |> String.replace("\\", "\\\\")
+    |> String.replace("%", "\\%")
+    |> String.replace("_", "\\_")
+    |> Path.join("%")
   end
 end

@@ -34,6 +34,7 @@ import {
   type MessagesPayload,
   type Project,
   type Setting,
+  type StatePayload,
   type SessionsPayload,
   type TimelineMessage,
   type TimelineSession,
@@ -84,6 +85,16 @@ type AgentSettingDefinition = {
   label: string
   description: string
   defaultValueKey: keyof AgentSettingsDefaults
+}
+
+type RunningEntry = StatePayload['running'][number]
+type RetryEntry = StatePayload['retrying'][number]
+type DashboardProjectSection = {
+  key: string
+  title: string
+  description: string
+  running: RunningEntry[]
+  retrying: RetryEntry[]
 }
 
 const queryClient = new QueryClient({
@@ -334,6 +345,7 @@ function DashboardView() {
   }
 
   const payload = stateQuery.data
+  const sections = buildDashboardProjectSections(payload)
   const totalActive = payload.counts.running + payload.counts.retrying
   const hasEntries = payload.running.length > 0 || payload.retrying.length > 0
 
@@ -380,73 +392,212 @@ function DashboardView() {
 
       {/* Session cards */}
       {hasEntries ? (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {payload.running.map((entry, index) => (
-            <Link
-              key={`running-${entry.issue_id}`}
-              className="session-card group rounded-lg border border-th-border bg-th-surface p-5 transition-colors duration-100 hover:border-th-border-muted"
-              params={{ issueIdentifier: entry.issue_identifier }}
-              style={{ animationDelay: `${index * 40}ms` }}
-              to="/session/$issueIdentifier"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
-                    <span className="truncate text-sm font-medium text-th-text-1">
-                      {entry.issue_identifier}
-                    </span>
-                  </div>
-                  <p className="mt-2 line-clamp-2 text-[13px] leading-5 text-th-text-3">
-                    {entry.last_message ?? entry.last_event ?? 'Waiting for events\u2026'}
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-th-text-4">
-                <span className="tabular-nums">{runtimeSince(entry.started_at, now)}</span>
-                <span className="tabular-nums">{formatNumber(entry.turn_count)} turns</span>
-                <span className="tabular-nums">{formatNumber(entry.tokens.total_tokens)} tok</span>
-                {entry.worker_host ? <span>{entry.worker_host}</span> : null}
-              </div>
-            </Link>
-          ))}
-
-          {payload.retrying.map((entry, index) => (
-            <Link
-              key={`retry-${entry.issue_id}`}
-              className="session-card group rounded-lg border border-th-border bg-th-surface p-5 transition-colors duration-100 hover:border-th-border-muted"
-              params={{ issueIdentifier: entry.issue_identifier }}
-              style={{ animationDelay: `${(payload.running.length + index) * 40}ms` }}
-              to="/session/$issueIdentifier"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
-                    <span className="truncate text-sm font-medium text-th-text-1">
-                      {entry.issue_identifier}
-                    </span>
-                    <span className="shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
-                      Retry {entry.attempt}
-                    </span>
-                  </div>
-                  <p className="mt-2 line-clamp-2 text-[13px] leading-5 text-th-text-3">
-                    {entry.error ?? 'Retry pending'}
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-th-text-4">
-                <span className="tabular-nums">{formatDateTime(entry.due_at)}</span>
-                {entry.worker_host ? <span>{entry.worker_host}</span> : null}
-              </div>
-            </Link>
+        <div className="space-y-6">
+          {sections.map((section) => (
+            <ProjectSessionSection key={section.key} now={now} section={section} />
           ))}
         </div>
       ) : null}
     </div>
   )
+}
+
+function ProjectSessionSection({
+  now,
+  section,
+}: {
+  now: number
+  section: DashboardProjectSection
+}) {
+  const totalEntries = section.running.length + section.retrying.length
+
+  return (
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-lg font-semibold text-th-text-1">{section.title}</h2>
+          <p className="mt-1 text-[13px] text-th-text-4">{section.description}</p>
+        </div>
+
+        <span className="rounded-full bg-th-muted px-2.5 py-1 text-xs font-medium text-th-text-3">
+          {totalEntries} active
+        </span>
+      </div>
+
+      {totalEntries === 0 ? (
+        <div className="rounded-xl border border-dashed border-th-border bg-th-surface/60 px-4 py-5 text-sm text-th-text-4">
+          No live agents in this project right now.
+        </div>
+      ) : (
+        <div className="-mx-1 overflow-x-auto pb-2">
+          <div className="flex min-w-full gap-3 px-1">
+            {section.running.map((entry, index) => (
+              <RunningSessionCard key={`running-${entry.issue_id}`} entry={entry} index={index} now={now} />
+            ))}
+
+            {section.retrying.map((entry, index) => (
+              <RetrySessionCard
+                key={`retry-${entry.issue_id}`}
+                entry={entry}
+                index={section.running.length + index}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+    </section>
+  )
+}
+
+function RunningSessionCard({
+  entry,
+  index,
+  now,
+}: {
+  entry: RunningEntry
+  index: number
+  now: number
+}) {
+  return (
+    <Link
+      className="session-card group w-[280px] shrink-0 rounded-lg border border-th-border bg-th-surface p-5 transition-colors duration-100 hover:border-th-border-muted sm:w-[320px]"
+      params={{ issueIdentifier: entry.issue_identifier }}
+      style={{ animationDelay: `${index * 40}ms` }}
+      to="/session/$issueIdentifier"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+            <span className="truncate text-sm font-medium text-th-text-1">{entry.issue_identifier}</span>
+          </div>
+          <p className="mt-2 line-clamp-2 text-[13px] leading-5 text-th-text-3">
+            {entry.last_message ?? entry.last_event ?? 'Waiting for events\u2026'}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-th-text-4">
+        <span className="tabular-nums">{runtimeSince(entry.started_at, now)}</span>
+        <span className="tabular-nums">{formatNumber(entry.turn_count)} turns</span>
+        <span className="tabular-nums">{formatNumber(entry.tokens.total_tokens)} tok</span>
+        {entry.worker_host ? <span>{entry.worker_host}</span> : null}
+      </div>
+    </Link>
+  )
+}
+
+function RetrySessionCard({
+  entry,
+  index,
+}: {
+  entry: RetryEntry
+  index: number
+}) {
+  return (
+    <Link
+      className="session-card group w-[280px] shrink-0 rounded-lg border border-th-border bg-th-surface p-5 transition-colors duration-100 hover:border-th-border-muted sm:w-[320px]"
+      params={{ issueIdentifier: entry.issue_identifier }}
+      style={{ animationDelay: `${index * 40}ms` }}
+      to="/session/$issueIdentifier"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
+            <span className="truncate text-sm font-medium text-th-text-1">{entry.issue_identifier}</span>
+            <span className="shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+              Retry {entry.attempt}
+            </span>
+          </div>
+          <p className="mt-2 line-clamp-2 text-[13px] leading-5 text-th-text-3">
+            {entry.error ?? 'Retry pending'}
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-th-text-4">
+        <span className="tabular-nums">{formatDateTime(entry.due_at)}</span>
+        {entry.worker_host ? <span>{entry.worker_host}</span> : null}
+      </div>
+    </Link>
+  )
+}
+
+function buildDashboardProjectSections(
+  payload: StatePayload,
+): DashboardProjectSection[] {
+  const groupedSections = new Map<number, DashboardProjectSection>()
+
+  for (const entry of payload.running) {
+    if (entry.project_id === null) {
+      continue
+    }
+
+    const current =
+      groupedSections.get(entry.project_id) ??
+        {
+          key: `project-${entry.project_id}`,
+          title: dashboardProjectTitle(entry.project_id, entry.project_name),
+          description: dashboardProjectSectionDescription(entry.project_id, entry.project_name),
+          running: [],
+          retrying: [],
+        }
+
+    current.running.push(entry)
+    groupedSections.set(entry.project_id, current)
+  }
+
+  for (const entry of payload.retrying) {
+    if (entry.project_id === null) {
+      continue
+    }
+
+    const current =
+      groupedSections.get(entry.project_id) ??
+        {
+          key: `project-${entry.project_id}`,
+          title: dashboardProjectTitle(entry.project_id, entry.project_name),
+          description: dashboardProjectSectionDescription(entry.project_id, entry.project_name),
+          running: [],
+          retrying: [],
+        }
+
+    current.retrying.push(entry)
+    groupedSections.set(entry.project_id, current)
+  }
+
+  const sections = Array.from(groupedSections.values())
+  const runningWithoutProject = payload.running.filter((entry) => entry.project_id === null)
+  const retryingWithoutProject = payload.retrying.filter((entry) => entry.project_id === null)
+
+  if (runningWithoutProject.length > 0 || retryingWithoutProject.length > 0) {
+    sections.push({
+      key: 'project-unassigned',
+      title: 'Unassigned',
+      description: 'Live entries without a project mapping.',
+      running: runningWithoutProject,
+      retrying: retryingWithoutProject,
+    })
+  }
+
+  return sections
+}
+
+function dashboardProjectTitle(projectId: number, projectName: string | null) {
+  if (projectName) {
+    return projectName
+  }
+
+  return `Project ${projectId}`
+}
+
+function dashboardProjectSectionDescription(projectId: number, projectName: string | null) {
+  if (projectName) {
+    return `Live sessions for ${projectName}.`
+  }
+
+  return `Live sessions for project ${projectId}.`
 }
 
 function SessionView() {
@@ -737,9 +888,14 @@ function ToolGroup({ items }: { items: TimelineMessage[] }) {
 }
 
 function HistoryView() {
+  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null)
+  const projectsQuery = useQuery({
+    queryKey: ['projects'],
+    queryFn: getProjects,
+  })
   const sessionsQuery = useQuery({
-    queryKey: ['sessions', 'history'],
-    queryFn: () => getSessions({ limit: 100 }),
+    queryKey: ['sessions', 'history', selectedProjectId],
+    queryFn: () => getSessions({ limit: 100, projectId: selectedProjectId ?? undefined }),
   })
 
   if (sessionsQuery.isPending) {
@@ -751,6 +907,8 @@ function HistoryView() {
   }
 
   const payload = sessionsQuery.data
+  const projects = projectsQuery.data?.projects ?? []
+  const selectedProject = projects.find((project) => project.id === selectedProjectId)
 
   return (
     <div className="space-y-10">
@@ -761,6 +919,47 @@ function HistoryView() {
         </p>
       </div>
 
+      <Card className="space-y-3">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div className="space-y-1">
+            <h2 className="text-sm font-semibold tracking-tight text-th-text-1">Filter history</h2>
+            <p className="text-[13px] text-th-text-3">
+              Narrow completed sessions to a single configured project.
+            </p>
+          </div>
+
+          <div className="w-full md:max-w-xs">
+            <Field label="Project">
+              <select
+                className="w-full rounded-lg border border-th-border bg-th-inset px-3.5 py-2.5 text-sm text-th-text-1 outline-none transition focus:border-th-accent focus:ring-1 focus:ring-th-accent/30"
+                onChange={(event) => {
+                  const value = event.target.value
+                  setSelectedProjectId(value === '' ? null : Number(value))
+                }}
+                value={selectedProjectId ?? ''}
+              >
+                <option value="">All projects</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+        </div>
+
+        {projectsQuery.isPending ? (
+          <p className="text-xs text-th-text-4">Loading available projects…</p>
+        ) : null}
+
+        {projectsQuery.isError ? (
+          <p className="text-xs text-th-text-4">
+            Project list unavailable. Showing all history until project data loads again.
+          </p>
+        ) : null}
+      </Card>
+
       {payload.sessions.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 text-center">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-th-muted">
@@ -768,9 +967,11 @@ function HistoryView() {
               <path d="M9 12h6M9 16h6M5 8h14M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" strokeLinecap="round" />
             </svg>
           </div>
-          <p className="mt-4 text-sm font-medium text-th-text-2">No sessions yet</p>
+          <p className="mt-4 text-sm font-medium text-th-text-2">
+            {selectedProject ? `No sessions for ${selectedProject.name} yet` : 'No sessions yet'}
+          </p>
           <p className="mt-1 text-[13px] text-th-text-4">
-            Completed sessions will appear here.
+            {selectedProject ? 'Try another project or switch back to all history.' : 'Completed sessions will appear here.'}
           </p>
         </div>
       ) : null}

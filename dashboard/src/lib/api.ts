@@ -150,6 +150,8 @@ export type StatePayload = {
   running: Array<{
     issue_id: string
     issue_identifier: string
+    project_id: number | null
+    project_name: string | null
     workflow_name?: string
     state: string
     worker_host: string | null
@@ -169,6 +171,8 @@ export type StatePayload = {
   retrying: Array<{
     issue_id: string
     issue_identifier: string
+    project_id: number | null
+    project_name: string | null
     workflow_name?: string
     attempt: number
     due_at: string | null
@@ -232,7 +236,7 @@ export function getSessionTimeline(issueIdentifier: string) {
   return requestJson<MessagesPayload>(`/api/v1/${encodeURIComponent(issueIdentifier)}/messages`)
 }
 
-export function getSessions(params?: { issueIdentifier?: string; limit?: number }) {
+export function getSessions(params?: { issueIdentifier?: string; limit?: number; projectId?: number }) {
   const search = new URLSearchParams()
 
   if (params?.issueIdentifier) {
@@ -241,6 +245,10 @@ export function getSessions(params?: { issueIdentifier?: string; limit?: number 
 
   if (params?.limit) {
     search.set('limit', String(params.limit))
+  }
+
+  if (params?.projectId) {
+    search.set('project_id', String(params.projectId))
   }
 
   const query = search.toString()

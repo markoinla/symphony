@@ -547,6 +547,8 @@ defmodule SymphonyElixir.ExtensionsTest do
             %{
               issue_id: "issue-1",
               identifier: "SYM-1",
+              project_id: 11,
+              project_name: "Implementation",
               state: "In Progress",
               session_id: "thread-1",
               turn_count: 1,
@@ -572,7 +574,15 @@ defmodule SymphonyElixir.ExtensionsTest do
         snapshot: %{
           running: [],
           retrying: [
-            %{issue_id: "issue-2", identifier: "SYM-2", attempt: 2, due_in_ms: 1_500, error: "boom"}
+            %{
+              issue_id: "issue-2",
+              identifier: "SYM-2",
+              project_id: 22,
+              project_name: "Enrichment",
+              attempt: 2,
+              due_in_ms: 1_500,
+              error: "boom"
+            }
           ],
           codex_totals: %{input_tokens: 4, output_tokens: 5, total_tokens: 9, seconds_running: 20},
           rate_limits: %{primary: %{remaining: 7}},
@@ -590,8 +600,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert payload.counts.retrying == 1
     assert payload.codex_totals.total_tokens == 12
     assert Enum.map(payload.workflows, & &1.workflow_name) == ["implementation", "enrichment"]
-    assert Enum.any?(payload.running, &(&1.workflow_name == "implementation"))
-    assert Enum.any?(payload.retrying, &(&1.workflow_name == "enrichment"))
+    assert Enum.any?(payload.running, &(&1.workflow_name == "implementation" and &1.project_id == 11 and &1.project_name == "Implementation"))
+    assert Enum.any?(payload.retrying, &(&1.workflow_name == "enrichment" and &1.project_id == 22 and &1.project_name == "Enrichment"))
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do
@@ -622,6 +632,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                %{
                  "issue_id" => "issue-http",
                  "issue_identifier" => "MT-HTTP",
+                 "project_id" => nil,
+                 "project_name" => nil,
                  "state" => "In Progress",
                  "worker_host" => nil,
                  "workspace_path" => nil,
@@ -638,6 +650,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                %{
                  "issue_id" => "issue-retry",
                  "issue_identifier" => "MT-RETRY",
+                 "project_id" => nil,
+                 "project_name" => nil,
                  "attempt" => 2,
                  "due_at" => state_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
                  "error" => "boom",
@@ -707,6 +721,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     unavailable_orchestrator = Module.concat(__MODULE__, :UnavailableOrchestrator)
     write_dashboard_assets!()
     start_test_endpoint(orchestrator: unavailable_orchestrator, snapshot_timeout_ms: 5)
+    write_dashboard_assets!()
 
     assert json_response(post(build_conn(), "/api/v1/state", %{}), 405) ==
              %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
@@ -848,6 +863,20 @@ defmodule SymphonyElixir.ExtensionsTest do
         updated_at: now
       })
 
+    {:ok, other_project} =
+      Store.create_project(%{
+        name: "Other",
+        linear_project_slug: "other",
+        linear_organization_slug: "marko-la",
+        linear_filter_by: "project",
+        linear_label_name: nil,
+        github_repo: "openai/other",
+        workspace_root: "/tmp/other",
+        env_vars: nil,
+        created_at: now,
+        updated_at: now
+      })
+
     {:ok, _setting} = Store.put_setting("LINEAR_API_KEY", "secret")
 
     {:ok, session} =
@@ -865,7 +894,46 @@ defmodule SymphonyElixir.ExtensionsTest do
         total_tokens: 24,
         worker_host: "worker-1",
         workspace_path: "/tmp/symphony/MT-HISTORY",
-        error: nil
+        error: nil,
+        project_id: project.id
+      })
+
+    {:ok, legacy_session} =
+      Store.create_session(%{
+        issue_id: "issue-legacy-history",
+        issue_identifier: "MT-LEGACY",
+        issue_title: "Legacy historical session",
+        session_id: "session-legacy-history",
+        status: "completed",
+        started_at: DateTime.add(now, -1, :second),
+        ended_at: DateTime.add(now, -1, :second),
+        turn_count: 1,
+        input_tokens: 3,
+        output_tokens: 4,
+        total_tokens: 7,
+        worker_host: "worker-legacy",
+        workspace_path: "/tmp/symphony/MT-LEGACY",
+        error: nil,
+        project_id: nil
+      })
+
+    {:ok, _other_session} =
+      Store.create_session(%{
+        issue_id: "issue-other-history",
+        issue_identifier: "MT-OTHER",
+        issue_title: "Other historical session",
+        session_id: "session-other-history",
+        status: "completed",
+        started_at: now,
+        ended_at: now,
+        turn_count: 1,
+        input_tokens: 5,
+        output_tokens: 7,
+        total_tokens: 12,
+        worker_host: "worker-2",
+        workspace_path: "/tmp/other/MT-OTHER",
+        error: nil,
+        project_id: other_project.id
       })
 
     {:ok, _message} =
@@ -881,6 +949,19 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert json_response(get(build_conn(), "/api/v1/projects"), 200) == %{
              "projects" => [
+               %{
+                 "id" => other_project.id,
+                 "name" => "Other",
+                 "linear_project_slug" => "other",
+                 "linear_organization_slug" => "marko-la",
+                 "linear_filter_by" => "project",
+                 "linear_label_name" => nil,
+                 "github_repo" => "openai/other",
+                 "workspace_root" => "/tmp/other",
+                 "env_vars" => nil,
+                 "created_at" => DateTime.to_iso8601(now),
+                 "updated_at" => DateTime.to_iso8601(now)
+               },
                %{
                  "id" => project.id,
                  "name" => "Symphony",
@@ -927,6 +1008,41 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "output_tokens" => 13,
                  "total_tokens" => 24,
                  "worker_host" => "worker-1",
+                 "error" => nil
+               }
+             ]
+           }
+
+    assert json_response(get(build_conn(), "/api/v1/sessions?project_id=#{project.id}&limit=5"), 200) == %{
+             "sessions" => [
+               %{
+                 "id" => session.id,
+                 "issue_identifier" => "MT-HISTORY",
+                 "issue_title" => "Historical session",
+                 "session_id" => "session-history",
+                 "status" => "completed",
+                 "started_at" => DateTime.to_iso8601(now),
+                 "ended_at" => DateTime.to_iso8601(now),
+                 "turn_count" => 2,
+                 "input_tokens" => 11,
+                 "output_tokens" => 13,
+                 "total_tokens" => 24,
+                 "worker_host" => "worker-1",
+                 "error" => nil
+               },
+               %{
+                 "id" => legacy_session.id,
+                 "issue_identifier" => "MT-LEGACY",
+                 "issue_title" => "Legacy historical session",
+                 "session_id" => "session-legacy-history",
+                 "status" => "completed",
+                 "started_at" => DateTime.to_iso8601(DateTime.add(now, -1, :second)),
+                 "ended_at" => DateTime.to_iso8601(DateTime.add(now, -1, :second)),
+                 "turn_count" => 1,
+                 "input_tokens" => 3,
+                 "output_tokens" => 4,
+                 "total_tokens" => 7,
+                 "worker_host" => "worker-legacy",
                  "error" => nil
                }
              ]

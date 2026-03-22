@@ -751,6 +751,73 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert due_in_ms > 0
   end
 
+  test "orchestrator snapshot does not expose a synthetic project for label-scoped workflows" do
+    issue_id = "issue-label-snapshot"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-LABEL",
+      title: "Label scoped snapshot",
+      state: "In Progress"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :LabelScopedSnapshotOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    retry_entry = %{
+      attempt: 2,
+      timer_ref: nil,
+      due_at_ms: System.monotonic_time(:millisecond) + 5_000,
+      identifier: issue.identifier,
+      error: "agent exited: :boom"
+    }
+
+    started_at = DateTime.utc_now()
+
+    running_entry = %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      worker_host: nil,
+      workspace_path: nil,
+      session_id: "thread-label",
+      codex_app_server_pid: nil,
+      codex_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      turn_count: 1,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      started_at: started_at
+    }
+
+    project = %SymphonyElixir.Store.Project{id: 123, name: "Implementation"}
+
+    :sys.replace_state(pid, fn state ->
+      %{
+        state
+        | configured_project_id: nil,
+          project_id: project.id,
+          project: project,
+          running: %{issue_id => running_entry},
+          retry_attempts: %{issue_id => retry_entry}
+      }
+    end)
+
+    snapshot = GenServer.call(pid, :snapshot)
+
+    assert [%{project_id: nil, project_name: nil}] = snapshot.running
+    assert [%{project_id: nil, project_name: nil}] = snapshot.retrying
+  end
+
   test "orchestrator snapshot includes poll countdown and checking status" do
     orchestrator_name = Module.concat(__MODULE__, :PollingSnapshotOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
