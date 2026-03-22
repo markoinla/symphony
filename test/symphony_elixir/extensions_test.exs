@@ -722,7 +722,14 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert json_response(get(build_conn(), "/api/v1/unknown/extra"), 404) ==
              %{"error" => %{"code" => "not_found", "message" => "Route not found"}}
 
-    assert html_response(get(build_conn(), "/unknown"), 200) =~ ~s(<div id="root"></div>)
+    index_path =
+      :symphony_elixir |> :code.priv_dir() |> Path.join("static/dashboard/index.html")
+
+    if File.exists?(index_path) do
+      assert html_response(get(build_conn(), "/unknown"), 200) =~ ~s(<div id="root"></div>)
+    else
+      assert response(get(build_conn(), "/unknown"), 404) == "Dashboard assets are not built"
+    end
     assert response(get(build_conn(), "/unknown.js"), 404) == "Not found"
 
     state_payload = json_response(get(build_conn(), "/api/v1/state"), 200)
