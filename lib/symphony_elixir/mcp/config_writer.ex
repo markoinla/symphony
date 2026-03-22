@@ -41,9 +41,14 @@ defmodule SymphonyElixir.MCP.ConfigWriter do
 
   defp find_escript_path do
     case System.find_executable("symphony") do
-      nil -> "symphony"
+      nil -> find_local_escript()
       path -> path
     end
+  end
+
+  defp find_local_escript do
+    local = Path.expand("bin/symphony")
+    if File.regular?(local), do: local, else: "symphony"
   end
 
   defp maybe_put(map, _key, nil), do: map
