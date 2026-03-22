@@ -1166,7 +1166,7 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "Comments (oldest first):"
     assert prompt =~ "comment ID: comment-workpad-1"
     assert prompt =~ "record the live workpad comment's ID before editing it"
-    assert prompt =~ "only write progress updates to that ID with `linear_update_comment`"
+    assert prompt =~ "only write progress updates to that ID via the Linear MCP comment update tool"
     assert prompt =~ "mutation CreateRelation($issueId: String!, $relatedIssueId: String!, $type: IssueRelationType!)"
     assert prompt =~ "Type values: `\"blocks\"`, `\"related\"`, `\"duplicate\"`, `\"similar\"`"
     assert prompt =~ "use `blocks` when the current issue must be"
