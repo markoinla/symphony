@@ -12,7 +12,6 @@ defmodule SymphonyElixir.AgentRunner do
     Config,
     DashboardLinks,
     Linear.Issue,
-    Linear.PlanBuilder,
     PromptBuilder,
     SessionLog,
     Tracker,
@@ -63,11 +62,9 @@ defmodule SymphonyElixir.AgentRunner do
       {:ok, workspace, created?} ->
         send_worker_runtime_info(engine_update_recipient, issue, worker_host, workspace)
         maybe_notify_workspace_ready(issue, workspace, worker_host, created?)
-        maybe_update_agent_plan(issue.id, 1, "completed")
 
         try do
           with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
-            maybe_update_agent_plan(issue.id, 2, "inProgress")
             run_engine_turns(workspace, issue, engine_update_recipient, opts, worker_host)
           end
         after
@@ -500,32 +497,11 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp maybe_emit_agent_activity(_issue_id, _message), do: :ok
 
-  defp maybe_update_agent_plan(issue_id, step_index, status) when is_binary(issue_id) do
-    if AgentSession.active?(issue_id) do
-      plan = PlanBuilder.initial_plan() |> update_plan_up_to(step_index, status)
-      AgentSession.update_plan(issue_id, plan)
-    end
-  end
-
   defp maybe_update_agent_plan(_issue_id, _step_index, _status), do: :ok
 
-  defp update_plan_up_to(plan, step_index, status) do
-    plan
-    |> Enum.with_index()
-    |> Enum.map(fn {step, idx} ->
-      cond do
-        idx < step_index -> %{step | status: "completed"}
-        idx == step_index -> %{step | status: status}
-        true -> step
-      end
-    end)
-  end
-
-  defp maybe_finalize_agent_session(%Issue{id: issue_id}, outcome)
+  defp maybe_finalize_agent_session(%Issue{id: issue_id}, _outcome)
        when is_binary(issue_id) do
     if AgentSession.active?(issue_id) do
-      plan = PlanBuilder.initial_plan() |> PlanBuilder.finalize_plan(outcome)
-      AgentSession.update_plan(issue_id, plan)
       AgentSession.stop(issue_id)
     end
   end

@@ -117,23 +117,14 @@ defmodule SymphonyElixir.AgentSession do
     state = %State{
       issue_id: issue_id,
       agent_session_id: agent_session_id,
-      plan: PlanBuilder.initial_plan(),
+      plan: [],
       dispatch_source: dispatch_source,
       last_activity_at: System.monotonic_time(:millisecond) - @min_activity_interval_ms
     }
 
     Logger.info("AgentSession started issue_id=#{issue_id} agent_session_id=#{agent_session_id}")
 
-    # Send initial plan asynchronously
-    send(self(), :send_initial_plan)
-
     {:ok, state}
-  end
-
-  @impl true
-  def handle_info(:send_initial_plan, state) do
-    do_update_plan(state)
-    {:noreply, state}
   end
 
   def handle_info({:deferred_activity, content}, state) do
