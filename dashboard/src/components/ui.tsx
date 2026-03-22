@@ -4,7 +4,7 @@ import type { ComponentProps } from 'react'
 import { cn } from '../lib/utils'
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center rounded-lg border px-3.5 py-2 text-sm font-medium transition-colors duration-150 disabled:pointer-events-none disabled:opacity-40',
+  'inline-flex items-center justify-center gap-2 rounded-lg border text-sm font-medium transition-colors duration-150 disabled:pointer-events-none disabled:opacity-40',
   {
     variants: {
       variant: {
@@ -15,9 +15,15 @@ const buttonVariants = cva(
         ghost: 'border-transparent bg-transparent text-th-text-3 hover:text-th-text-1',
         danger: 'border-red-500/30 bg-red-500/10 text-red-500 hover:bg-red-500/20',
       },
+      size: {
+        default: 'px-3.5 py-2',
+        sm: 'px-3 py-1.5 text-[13px]',
+        icon: 'h-9 w-9 p-0',
+      },
     },
     defaultVariants: {
       variant: 'primary',
+      size: 'default',
     },
   },
 )
@@ -60,7 +66,7 @@ export function Card({ className, ...props }: ComponentProps<'section'>) {
   return (
     <section
       className={cn(
-        'rounded-xl border border-th-border bg-th-surface p-6',
+        'rounded-xl border border-th-border bg-th-surface p-4 sm:p-6',
         className,
       )}
       {...props}

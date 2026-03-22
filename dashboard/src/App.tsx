@@ -14,6 +14,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
+import * as Collapsible from '@radix-ui/react-collapsible'
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 
 import {
@@ -154,49 +155,89 @@ function RootLayout() {
     select: (state) => state.location.pathname,
   })
   const { dark, toggle } = useTheme()
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   return (
     <div className="min-h-screen bg-th-bg text-th-text-2 transition-colors duration-200">
-      <div className="mx-auto flex min-h-screen max-w-[1120px] flex-col px-6 lg:px-10">
-        <header className="flex h-14 items-center justify-between border-b border-th-border">
-          <div className="flex items-center gap-8">
-            <Link to="/" className="flex items-center gap-2.5">
-              <div className="flex h-6 w-6 items-center justify-center rounded-md bg-th-accent">
-                <svg className="h-3.5 w-3.5 text-white" viewBox="0 0 16 16" fill="currentColor">
-                  <path d="M8 1l2.5 5h5L11 9.5l1.5 5.5L8 12l-4.5 3 1.5-5.5L0.5 6h5z" />
-                </svg>
-              </div>
-              <span className="text-sm font-semibold text-th-text-1">Symphony</span>
-            </Link>
+      <div className="mx-auto flex min-h-screen max-w-[1120px] flex-col px-4 sm:px-6 lg:px-10">
+        <Collapsible.Root
+          className="border-b border-th-border"
+          onOpenChange={setMobileNavOpen}
+          open={mobileNavOpen}
+        >
+          <header className="flex min-h-14 items-center justify-between gap-3 py-3 sm:py-0">
+            <div className="flex min-w-0 items-center gap-3 sm:gap-8">
+              <Link to="/" className="flex shrink-0 items-center gap-2.5">
+                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-th-accent">
+                  <svg className="h-3.5 w-3.5 text-white" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M8 1l2.5 5h5L11 9.5l1.5 5.5L8 12l-4.5 3 1.5-5.5L0.5 6h5z" />
+                  </svg>
+                </div>
+                <span className="text-sm font-semibold text-th-text-1">Symphony</span>
+              </Link>
 
-            <nav className="flex items-center gap-0.5">
-              <HeaderLink active={pathname === '/'} label="Dashboard" to="/" />
-              <HeaderLink active={pathname.startsWith('/history')} label="History" to="/history" />
-              <HeaderLink active={pathname.startsWith('/projects')} label="Projects" to="/projects" />
-              <HeaderLink active={pathname.startsWith('/settings')} label="Settings" to="/settings" />
+              <nav className="hidden min-w-0 items-center gap-0.5 sm:flex">
+                <HeaderLink active={pathname === '/'} label="Dashboard" to="/" />
+                <HeaderLink active={pathname.startsWith('/history')} label="History" to="/history" />
+                <HeaderLink active={pathname.startsWith('/projects')} label="Projects" to="/projects" />
+                <HeaderLink active={pathname.startsWith('/settings')} label="Settings" to="/settings" />
+              </nav>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+                className="text-th-text-4 hover:bg-th-muted hover:text-th-text-2"
+                onClick={toggle}
+                size="icon"
+                type="button"
+                variant="ghost"
+              >
+                {dark ? (
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="5" />
+                    <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+                  </svg>
+                ) : (
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+                  </svg>
+                )}
+              </Button>
+
+              <Collapsible.Trigger asChild>
+                <Button
+                  aria-label={mobileNavOpen ? 'Close navigation menu' : 'Open navigation menu'}
+                className="sm:hidden"
+                size="icon"
+                type="button"
+                variant="secondary"
+              >
+                  {mobileNavOpen ? (
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+                      <path d="M18 6 6 18M6 6l12 12" strokeLinecap="round" />
+                    </svg>
+                  ) : (
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+                      <path d="M4 7h16M4 12h16M4 17h16" strokeLinecap="round" />
+                    </svg>
+                  )}
+                </Button>
+              </Collapsible.Trigger>
+            </div>
+          </header>
+
+          <Collapsible.Content className="border-t border-th-border/70 pb-3 sm:hidden">
+            <nav className="grid gap-1 pt-3">
+              <HeaderLink active={pathname === '/'} label="Dashboard" mobile onNavigate={() => setMobileNavOpen(false)} to="/" />
+              <HeaderLink active={pathname.startsWith('/history')} label="History" mobile onNavigate={() => setMobileNavOpen(false)} to="/history" />
+              <HeaderLink active={pathname.startsWith('/projects')} label="Projects" mobile onNavigate={() => setMobileNavOpen(false)} to="/projects" />
+              <HeaderLink active={pathname.startsWith('/settings')} label="Settings" mobile onNavigate={() => setMobileNavOpen(false)} to="/settings" />
             </nav>
-          </div>
+          </Collapsible.Content>
+        </Collapsible.Root>
 
-          <button
-            aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-th-text-4 transition-colors hover:bg-th-muted hover:text-th-text-2"
-            onClick={toggle}
-            type="button"
-          >
-            {dark ? (
-              <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-                <circle cx="12" cy="12" r="5" />
-                <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
-              </svg>
-            ) : (
-              <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-              </svg>
-            )}
-          </button>
-        </header>
-
-        <main className="flex-1 py-10">
+        <main className="flex-1 py-6 sm:py-10">
           <Outlet />
         </main>
       </div>
@@ -207,20 +248,26 @@ function RootLayout() {
 function HeaderLink({
   active,
   label,
+  mobile = false,
+  onNavigate,
   to,
 }: {
   active: boolean
   label: string
+  mobile?: boolean
+  onNavigate?: () => void
   to: string
 }) {
   return (
     <Link
       className={cn(
         'rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors duration-100',
+        mobile && 'w-full px-3 py-2 text-left',
         active
           ? 'bg-th-muted text-th-text-1'
           : 'text-th-text-3 hover:text-th-text-1',
       )}
+      onClick={onNavigate}
       to={to}
     >
       {label}
@@ -271,7 +318,7 @@ function DashboardView() {
           </p>
         </div>
 
-        <div className="flex items-center gap-6 text-[13px] text-th-text-4">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-th-text-4">
           <span className="tabular-nums">{formatNumber(payload.codex_totals.total_tokens)} tokens</span>
           <span className="tabular-nums">{formatRuntimeFromSeconds(payload.codex_totals.seconds_running)}</span>
         </div>
@@ -387,7 +434,7 @@ function SessionView() {
 
   const currentTimeline =
     timeline?.issue_identifier === issueIdentifier ? timeline : timelineQuery.data ?? null
-  const currentFollowTail = timeline?.issue_identifier === issueIdentifier ? followTail : true
+  const currentFollowTail = followTail
   const activeIssueId = issueQuery.data?.issue_id ?? currentTimeline?.issue_id
 
   useSessionStream(
@@ -440,10 +487,9 @@ function SessionView() {
   }
 
   return (
-    <div className="flex flex-col" style={{ height: 'calc(100vh - 5rem)' }}>
-      {/* Minimal top bar */}
-      <div className="flex items-center justify-between gap-4 border-b border-th-border px-1 py-2.5">
-        <div className="flex items-center gap-2.5 min-w-0">
+    <div className="relative flex h-[calc(100vh-7.5rem)] min-h-[32rem] flex-col overflow-hidden rounded-2xl border border-th-border bg-th-surface">
+      <div className="flex flex-col gap-3 border-b border-th-border px-3 py-3 sm:px-4">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <Link
             to="/"
             className="flex items-center gap-1 text-[13px] text-th-text-4 transition-colors hover:text-th-text-1"
@@ -453,39 +499,26 @@ function SessionView() {
             </svg>
             Back
           </Link>
-          <span className="h-3.5 w-px bg-th-border" />
-          <span className="truncate text-[13px] font-medium text-th-text-1">{data.issue_identifier}</span>
-          {data.issue_title ? (
-            <span className="hidden truncate text-[13px] text-th-text-3 sm:inline">{data.issue_title}</span>
-          ) : null}
-          <span className={cn(
-            'h-2 w-2 shrink-0 rounded-full',
-            issue?.status === 'retrying' ? 'bg-amber-500' : 'bg-emerald-500',
-          )} />
+          <span className="hidden h-3.5 w-px bg-th-border sm:block" />
+          <Badge tone={issue?.status === 'retrying' ? 'retrying' : 'live'}>
+            {issue?.status === 'retrying' ? 'Retrying' : 'Live'}
+          </Badge>
           <span className="text-xs tabular-nums text-th-text-4">{runtimeForTimeline(data.sessions, now)}</span>
         </div>
 
-        {!currentFollowTail ? (
-          <button
-            onClick={() => {
-              setFollowTail(true)
-              const element = scrollRef.current
-
-              if (element) {
-                element.scrollTop = element.scrollHeight
-              }
-            }}
-            className="shrink-0 rounded-md px-2.5 py-1 text-xs font-medium text-th-text-3 transition-colors hover:bg-th-muted hover:text-th-text-1"
-            type="button"
-          >
-            Scroll to latest
-          </button>
-        ) : null}
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="text-sm font-semibold text-th-text-1">{data.issue_identifier}</span>
+            {data.issue_title ? (
+              <span className="min-w-0 truncate text-[13px] text-th-text-3">{data.issue_title}</span>
+            ) : null}
+          </div>
+        </div>
       </div>
 
       {/* Chat message stream */}
       <div
-        className="flex-1 overflow-y-auto px-4 py-6"
+        className="flex-1 overflow-y-auto px-3 py-5 sm:px-4 sm:py-6"
         onScroll={(event) => {
           const element = event.currentTarget
           const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
@@ -505,6 +538,30 @@ function SessionView() {
           ))}
         </div>
       </div>
+
+      {!currentFollowTail ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center px-4">
+          <Button
+            className="pointer-events-auto rounded-full border-th-border bg-th-surface/95 px-4 shadow-lg shadow-black/10 backdrop-blur dark:shadow-black/30"
+            onClick={() => {
+              setFollowTail(true)
+              const element = scrollRef.current
+
+              if (element) {
+                element.scrollTop = element.scrollHeight
+              }
+            }}
+            size="sm"
+            type="button"
+            variant="secondary"
+          >
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+              <path d="M12 5v14M6 13l6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Scroll to latest
+          </Button>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -515,7 +572,7 @@ function SessionBlock({ now, session }: { now: number; session: TimelineSession 
   return (
     <div>
       {/* Session divider */}
-      <div className="chat-divider my-5">
+      <div className="chat-divider my-5 text-[11px] sm:text-xs">
         {session.live ? 'Live' : 'Session'} {session.session_id} · {formatDateTime(session.started_at)}
         {session.live ? ` · ${runtimeSince(session.started_at, now)}` : ''}
       </div>
@@ -548,7 +605,7 @@ function TimelineEntryCard({ message }: { message: TimelineMessage }) {
           Thinking&hellip;
           <span className="ml-2 text-xs">{formatClock(message.timestamp) || ''}</span>
         </summary>
-        <div className="mt-2 ml-4 whitespace-pre-wrap font-mono text-sm leading-6 text-th-text-3">
+        <div className="mt-2 ml-4 whitespace-pre-wrap break-words font-mono text-sm leading-6 text-th-text-3">
           {message.content}
         </div>
       </details>
@@ -559,7 +616,7 @@ function TimelineEntryCard({ message }: { message: TimelineMessage }) {
     return (
       <div className="chat-message border-l-4 border-th-accent/40 pl-4 py-3">
         <div className="text-xs font-medium text-th-accent mb-1">Reasoning summary</div>
-        <div className="whitespace-pre-wrap text-sm leading-6 text-th-text-2">{message.content}</div>
+        <div className="whitespace-pre-wrap break-words text-sm leading-6 text-th-text-2">{message.content}</div>
       </div>
     )
   }
@@ -576,7 +633,7 @@ function TimelineEntryCard({ message }: { message: TimelineMessage }) {
     return (
       <div className="chat-message border-l-4 border-red-500/40 pl-4 py-3">
         <div className="text-xs font-medium text-red-500 mb-1">Error</div>
-        <div className="whitespace-pre-wrap text-sm leading-6 text-th-text-2">{message.content}</div>
+        <div className="whitespace-pre-wrap break-words text-sm leading-6 text-th-text-2">{message.content}</div>
       </div>
     )
   }
@@ -588,7 +645,7 @@ function TimelineEntryCard({ message }: { message: TimelineMessage }) {
         <div className="h-1.5 w-1.5 rounded-full bg-th-accent/60 shrink-0" />
         <span className="text-xs text-th-text-4">{messageLabel(message.type)} · {formatClock(message.timestamp) || 'live'}</span>
       </div>
-      <div className="whitespace-pre-wrap text-sm leading-7 text-th-text-2 pl-3.5">
+      <div className="whitespace-pre-wrap break-words pl-3.5 text-sm leading-7 text-th-text-2">
         {message.content}
       </div>
     </div>
@@ -614,7 +671,7 @@ function ToolGroup({ items }: { items: TimelineMessage[] }) {
                 <span className="text-sm text-th-text-2">{item.content}</span>
                 <Badge tone={toolTone(metadata.status)}>{String(metadata.status ?? 'unknown')}</Badge>
               </div>
-              <div className="mt-1 whitespace-pre-wrap font-mono text-xs leading-5 text-th-text-4">
+              <div className="mt-1 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-th-text-4">
                 {formatJson(metadata)}
               </div>
             </div>
@@ -760,7 +817,7 @@ function ProjectsView() {
 
   return (
     <div className="grid gap-6 xl:grid-cols-[1.2fr,0.8fr]">
-      <Card className="space-y-5">
+      <Card className="min-w-0 space-y-5">
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-th-text-1">Projects</h2>
           <p className="mt-1 text-sm text-th-text-3">
@@ -864,12 +921,13 @@ function ProjectsView() {
             />
           </Field>
 
-          <div className="flex flex-wrap gap-3">
-            <Button disabled={saveMutation.isPending} type="submit">
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+            <Button className="w-full sm:w-auto" disabled={saveMutation.isPending} type="submit">
               {editingId === null ? 'Create project' : 'Save changes'}
             </Button>
             {editingId !== null ? (
               <Button
+                className="w-full sm:w-auto"
                 onClick={() => {
                   setDraft(emptyProject())
                   setEditingId(null)
@@ -885,7 +943,7 @@ function ProjectsView() {
         </form>
       </Card>
 
-      <Card className="space-y-4">
+      <Card className="min-w-0 space-y-4">
         <div>
           <h3 className="text-base font-semibold tracking-tight text-th-text-1">Current mappings</h3>
           <p className="mt-1 text-sm text-th-text-3">Each project card represents one stored mapping.</p>
@@ -899,18 +957,19 @@ function ProjectsView() {
         <div className="space-y-2">
           {projectsQuery.data?.projects.map((project: Project) => (
             <div
-              className="rounded-lg border border-th-border bg-th-inset p-4"
+              className="overflow-hidden rounded-lg border border-th-border bg-th-inset p-4"
               key={project.id}
             >
-              <div className="flex items-start justify-between gap-3">
-                <div>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
                   <div className="text-sm font-semibold text-th-text-1">{project.name}</div>
-                  <div className="mt-1 text-xs text-th-text-3">
+                  <div className="mt-1 break-all text-xs text-th-text-3">
                     {project.github_repo ?? 'No repo configured'}
                   </div>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-col gap-2 sm:flex-row">
                   <Button
+                    className="w-full sm:w-auto"
                     onClick={() => {
                       setDraft(projectToDraft(project))
                       setEditingId(project.id)
@@ -922,6 +981,7 @@ function ProjectsView() {
                     Edit
                   </Button>
                   <Button
+                    className="w-full sm:w-auto"
                     disabled={deleteMutation.isPending}
                     onClick={() => {
                       setFeedback(null)
@@ -934,7 +994,7 @@ function ProjectsView() {
                   </Button>
                 </div>
               </div>
-              <div className="mt-3 font-mono text-xs leading-5 text-th-text-4">
+              <div className="mt-3 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-th-text-4">
                 {formatJson({
                   linear_project_slug: project.linear_project_slug,
                   linear_organization_slug: project.linear_organization_slug,
@@ -1012,15 +1072,16 @@ function LinearApiKeyCard() {
 
       {existing ? (
         <div className="rounded-lg border border-th-border bg-th-inset p-4">
-          <div className="flex items-center justify-between gap-3">
-            <code className="text-sm text-th-text-2 break-all">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <code className="min-w-0 break-all text-sm text-th-text-2">
               {showKey ? existing.value : maskedValue}
             </code>
-            <div className="flex gap-2">
-              <Button onClick={() => setShowKey(!showKey)} type="button" variant="secondary">
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+              <Button className="w-full sm:w-auto" onClick={() => setShowKey(!showKey)} type="button" variant="secondary">
                 {showKey ? 'Hide' : 'Reveal'}
               </Button>
               <Button
+                className="w-full sm:w-auto"
                 disabled={removeMutation.isPending}
                 onClick={() => {
                   setFeedback(null)
@@ -1054,7 +1115,7 @@ function LinearApiKeyCard() {
           />
         </Field>
         <div>
-          <Button disabled={saveMutation.isPending || !apiKey.trim()} type="submit">
+          <Button className="w-full sm:w-auto" disabled={saveMutation.isPending || !apiKey.trim()} type="submit">
             {existing ? 'Update key' : 'Save key'}
           </Button>
         </div>
@@ -1107,7 +1168,7 @@ function SettingsView() {
     <div className="space-y-6">
     <LinearApiKeyCard />
     <div className="grid gap-6 xl:grid-cols-[0.9fr,1.1fr]">
-      <Card className="space-y-5">
+      <Card className="min-w-0 space-y-5">
         <div>
           <h2 className="text-lg font-semibold tracking-tight text-th-text-1">Settings</h2>
           <p className="mt-1 text-sm text-th-text-3">
@@ -1146,12 +1207,13 @@ function SettingsView() {
             />
           </Field>
 
-          <div className="flex flex-wrap gap-3">
-            <Button disabled={saveMutation.isPending} type="submit">
+          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+            <Button className="w-full sm:w-auto" disabled={saveMutation.isPending} type="submit">
               {editingKey === null ? 'Save setting' : 'Update setting'}
             </Button>
             {editingKey !== null ? (
               <Button
+                className="w-full sm:w-auto"
                 onClick={() => {
                   setEditingKey(null)
                   setKeyValue('')
@@ -1168,7 +1230,7 @@ function SettingsView() {
         </form>
       </Card>
 
-      <Card className="space-y-4">
+      <Card className="min-w-0 space-y-4">
         <div>
           <h3 className="text-base font-semibold tracking-tight text-th-text-1">Stored settings</h3>
           <p className="mt-1 text-sm text-th-text-3">
@@ -1184,18 +1246,19 @@ function SettingsView() {
         <div className="space-y-2">
           {settingsQuery.data?.settings.map((setting: { key: string; value: string }) => (
             <div
-              className="rounded-lg border border-th-border bg-th-inset p-4"
+              className="overflow-hidden rounded-lg border border-th-border bg-th-inset p-4"
               key={setting.key}
             >
-              <div className="flex items-start justify-between gap-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-th-text-1">{setting.key}</div>
                   <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-th-text-3">
                     {setting.value}
                   </pre>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-col gap-2 sm:flex-row">
                   <Button
+                    className="w-full sm:w-auto"
                     onClick={() => {
                       setEditingKey(setting.key)
                       setKeyValue(setting.key)
@@ -1208,6 +1271,7 @@ function SettingsView() {
                     Edit
                   </Button>
                   <Button
+                    className="w-full sm:w-auto"
                     disabled={removeMutation.isPending}
                     onClick={() => {
                       setFeedback(null)
