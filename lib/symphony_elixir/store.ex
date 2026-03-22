@@ -187,12 +187,12 @@ defmodule SymphonyElixir.Store do
     |> Repo.insert()
   end
 
-  @spec update_session_codex_id(integer(), String.t()) ::
+  @spec update_session_engine_id(integer(), String.t()) ::
           {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t() | :not_found}
-  def update_session_codex_id(db_session_id, codex_session_id) do
+  def update_session_engine_id(db_session_id, engine_session_id) do
     case Repo.get(Session, db_session_id) do
       nil -> {:error, :not_found}
-      session -> session |> Ecto.Changeset.change(session_id: codex_session_id) |> Repo.update()
+      session -> session |> Ecto.Changeset.change(session_id: engine_session_id) |> Repo.update()
     end
   end
 
@@ -209,11 +209,11 @@ defmodule SymphonyElixir.Store do
     end
   end
 
-  @spec complete_session_by_codex_session_id(String.t(), map()) ::
+  @spec complete_session_by_engine_session_id(String.t(), map()) ::
           {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t() | :not_found}
-  def complete_session_by_codex_session_id(codex_session_id, attrs) do
+  def complete_session_by_engine_session_id(session_id, attrs) do
     case Session
-         |> where([s], s.session_id == ^codex_session_id and s.status == "running")
+         |> where([s], s.session_id == ^session_id and s.status == "running")
          |> order_by([s], desc: s.started_at)
          |> limit(1)
          |> Repo.one() do

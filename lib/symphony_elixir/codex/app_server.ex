@@ -3,6 +3,8 @@ defmodule SymphonyElixir.Codex.AppServer do
   Minimal client for the Codex app-server JSON-RPC 2.0 stream over stdio.
   """
 
+  @behaviour SymphonyElixir.Engine
+
   require Logger
   alias SymphonyElixir.{Codex.DynamicTool, Config, PathSafety, SSH}
 
@@ -36,6 +38,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
+  @impl SymphonyElixir.Engine
   @spec start_session(Path.t(), keyword()) :: {:ok, session()} | {:error, term()}
   def start_session(workspace, opts \\ []) do
     worker_host = Keyword.get(opts, :worker_host)
@@ -66,6 +69,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
+  @impl SymphonyElixir.Engine
   @spec run_turn(session(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def run_turn(
         %{
@@ -139,6 +143,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
+  @impl SymphonyElixir.Engine
   @spec stop_session(session()) :: :ok
   def stop_session(%{port: port}) when is_port(port) do
     stop_port(port)
@@ -193,6 +198,7 @@ defmodule SymphonyElixir.Codex.AppServer do
       {:error, :bash_not_found}
     else
       env = project_env_vars()
+      codex_command = namespace_wrap(Config.settings!().codex.command)
 
       port =
         Port.open(
@@ -201,7 +207,7 @@ defmodule SymphonyElixir.Codex.AppServer do
             :binary,
             :exit_status,
             :stderr_to_stdout,
-            args: [~c"-c", String.to_charlist(Config.settings!().codex.command)],
+            args: [~c"-c", String.to_charlist(codex_command)],
             cd: String.to_charlist(workspace),
             env: Enum.map(env, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end),
             line: @port_line_bytes
@@ -225,16 +231,26 @@ defmodule SymphonyElixir.Codex.AppServer do
     (env_exports ++
        [
          "cd #{shell_escape(workspace)}",
-         "exec #{Config.settings!().codex.command}"
+         "exec #{namespace_wrap(Config.settings!().codex.command)}"
        ])
     |> Enum.join(" && ")
+  end
+
+  defp namespace_wrap(command) do
+    if System.find_executable("unshare") do
+      Logger.info("PID namespace isolation enabled for Codex process")
+      "exec unshare --user --pid --fork --map-root-user -- #{command}"
+    else
+      Logger.warning("unshare not found — Codex running without PID namespace isolation")
+      command
+    end
   end
 
   defp port_metadata(port, worker_host) when is_port(port) do
     base_metadata =
       case :erlang.port_info(port, :os_pid) do
         {:os_pid, os_pid} ->
-          %{codex_app_server_pid: to_string(os_pid)}
+          %{engine_pid: to_string(os_pid)}
 
         _ ->
           %{}

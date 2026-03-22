@@ -21,6 +21,13 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixir.CLI,
           SymphonyElixir.Codex.AppServer,
           SymphonyElixir.Codex.DynamicTool,
+          SymphonyElixir.Claude.AppServer,
+          SymphonyElixir.Claude.CommandBuilder,
+          SymphonyElixir.Claude.EventTranslator,
+          SymphonyElixir.Engine,
+          SymphonyElixir.MCP.Server,
+          SymphonyElixir.MCP.LinearTools,
+          SymphonyElixir.MCP.ConfigWriter,
           SymphonyElixir.HttpServer,
           SymphonyElixir.StatusDashboard,
           SymphonyElixir.LogFile,
@@ -74,7 +81,7 @@ defmodule SymphonyElixir.MixProject do
   def application do
     [
       mod: {SymphonyElixir.Application, []},
-      extra_applications: [:logger]
+      extra_applications: [:logger, :inets, :ssl]
     ]
   end
 

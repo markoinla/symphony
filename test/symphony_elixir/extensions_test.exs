@@ -552,17 +552,17 @@ defmodule SymphonyElixir.ExtensionsTest do
               state: "In Progress",
               session_id: "thread-1",
               turn_count: 1,
-              last_codex_event: :notification,
-              last_codex_message: %{event: :notification, message: "work"},
+              last_engine_event: :notification,
+              last_engine_message: %{event: :notification, message: "work"},
               started_at: DateTime.utc_now(),
-              last_codex_timestamp: nil,
-              codex_input_tokens: 1,
-              codex_output_tokens: 2,
-              codex_total_tokens: 3
+              last_engine_timestamp: nil,
+              engine_input_tokens: 1,
+              engine_output_tokens: 2,
+              engine_total_tokens: 3
             }
           ],
           retrying: [],
-          codex_totals: %{input_tokens: 1, output_tokens: 2, total_tokens: 3, seconds_running: 10},
+          engine_totals: %{input_tokens: 1, output_tokens: 2, total_tokens: 3, seconds_running: 10},
           rate_limits: %{primary: %{remaining: 9}},
           polling: %{checking?: false, next_poll_in_ms: 1_000, poll_interval_ms: 5_000}
         }
@@ -584,7 +584,7 @@ defmodule SymphonyElixir.ExtensionsTest do
               error: "boom"
             }
           ],
-          codex_totals: %{input_tokens: 4, output_tokens: 5, total_tokens: 9, seconds_running: 20},
+          engine_totals: %{input_tokens: 4, output_tokens: 5, total_tokens: 9, seconds_running: 20},
           rate_limits: %{primary: %{remaining: 7}},
           polling: %{checking?: true, next_poll_in_ms: nil, poll_interval_ms: 10_000}
         }
@@ -598,7 +598,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert payload.counts.running == 1
     assert payload.counts.retrying == 1
-    assert payload.codex_totals.total_tokens == 12
+    assert payload.engine_totals.total_tokens == 12
     assert Enum.map(payload.workflows, & &1.workflow_name) == ["implementation", "enrichment"]
     assert Enum.any?(payload.running, &(&1.workflow_name == "implementation" and &1.project_id == 11 and &1.project_name == "Implementation"))
     assert Enum.any?(payload.retrying, &(&1.workflow_name == "enrichment" and &1.project_id == 22 and &1.project_name == "Enrichment"))
@@ -659,7 +659,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "workspace_path" => nil
                }
              ],
-             "codex_totals" => %{
+             "engine_totals" => %{
                "input_tokens" => 4,
                "output_tokens" => 8,
                "total_tokens" => 12,
@@ -746,6 +746,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     else
       assert response(get(build_conn(), "/unknown"), 404) == "Dashboard assets are not built"
     end
+
     assert response(get(build_conn(), "/unknown.js"), 404) == "Not found"
 
     state_payload = json_response(get(build_conn(), "/api/v1/state"), 200)
@@ -1209,13 +1210,13 @@ defmodule SymphonyElixir.ExtensionsTest do
           state: "In Progress",
           session_id: "thread-http",
           turn_count: 7,
-          codex_app_server_pid: nil,
-          last_codex_message: "rendered",
-          last_codex_timestamp: nil,
-          last_codex_event: :notification,
-          codex_input_tokens: 4,
-          codex_output_tokens: 8,
-          codex_total_tokens: 12,
+          engine_pid: nil,
+          last_engine_message: "rendered",
+          last_engine_timestamp: nil,
+          last_engine_event: :notification,
+          engine_input_tokens: 4,
+          engine_output_tokens: 8,
+          engine_total_tokens: 12,
           started_at: DateTime.utc_now()
         }
       ],
@@ -1228,7 +1229,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           error: "boom"
         }
       ],
-      codex_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
+      engine_totals: %{input_tokens: 4, output_tokens: 8, total_tokens: 12, seconds_running: 42.5},
       rate_limits: %{"primary" => %{"remaining" => 11}}
     }
   end

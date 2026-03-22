@@ -1,10 +1,10 @@
 defmodule SymphonyElixir.AgentRunner do
   @moduledoc """
-  Executes a single Linear issue in its workspace with Codex.
+  Executes a single Linear issue in its workspace using the configured engine backend.
   """
 
   require Logger
-  alias SymphonyElixir.Codex.AppServer
+  alias SymphonyElixir.Engine
 
   alias SymphonyElixir.{
     CommentWatch,
@@ -20,13 +20,13 @@ defmodule SymphonyElixir.AgentRunner do
   @type worker_host :: String.t() | nil
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
-  def run(issue, codex_update_recipient \\ nil, opts \\ []) do
+  def run(issue, engine_update_recipient \\ nil, opts \\ []) do
     worker_hosts =
       candidate_worker_hosts(Keyword.get(opts, :worker_host), Config.settings!().worker.ssh_hosts)
 
     Logger.info("Starting agent run for #{issue_context(issue)} worker_hosts=#{inspect(worker_hosts_for_log(worker_hosts))}")
 
-    case run_on_worker_hosts(issue, codex_update_recipient, opts, worker_hosts) do
+    case run_on_worker_hosts(issue, engine_update_recipient, opts, worker_hosts) do
       :ok ->
         :ok
 
@@ -36,33 +36,33 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp run_on_worker_hosts(issue, codex_update_recipient, opts, [worker_host | rest]) do
-    case run_on_worker_host(issue, codex_update_recipient, opts, worker_host) do
+  defp run_on_worker_hosts(issue, engine_update_recipient, opts, [worker_host | rest]) do
+    case run_on_worker_host(issue, engine_update_recipient, opts, worker_host) do
       :ok ->
         :ok
 
       {:error, reason} when rest != [] ->
         Logger.warning("Agent run failed for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)} reason=#{inspect(reason)}; trying next worker host")
-        run_on_worker_hosts(issue, codex_update_recipient, opts, rest)
+        run_on_worker_hosts(issue, engine_update_recipient, opts, rest)
 
       {:error, reason} ->
         {:error, reason}
     end
   end
 
-  defp run_on_worker_hosts(_issue, _codex_update_recipient, _opts, []), do: {:error, :no_worker_hosts_available}
+  defp run_on_worker_hosts(_issue, _engine_update_recipient, _opts, []), do: {:error, :no_worker_hosts_available}
 
-  defp run_on_worker_host(issue, codex_update_recipient, opts, worker_host) do
+  defp run_on_worker_host(issue, engine_update_recipient, opts, worker_host) do
     Logger.info("Starting worker attempt for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)}")
 
     case Workspace.create_for_issue_with_status(issue, worker_host) do
       {:ok, workspace, created?} ->
-        send_worker_runtime_info(codex_update_recipient, issue, worker_host, workspace)
+        send_worker_runtime_info(engine_update_recipient, issue, worker_host, workspace)
         maybe_notify_workspace_ready(issue, workspace, worker_host, created?)
 
         try do
           with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
-            run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host)
+            run_engine_turns(workspace, issue, engine_update_recipient, opts, worker_host)
           end
         after
           Workspace.run_after_run_hook(workspace, issue, worker_host)
@@ -73,31 +73,31 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp codex_message_handler(recipient, issue) do
+  defp engine_message_handler(recipient, issue) do
     fn message ->
-      send_codex_update(recipient, issue, message)
+      send_engine_update(recipient, issue, message)
     end
   end
 
-  defp codex_message_handler_with_log(recipient, %Issue{id: issue_id} = issue, session_id)
+  defp engine_message_handler_with_log(recipient, %Issue{id: issue_id} = issue, session_id)
        when is_binary(issue_id) and is_binary(session_id) do
     fn message ->
-      send_codex_update(recipient, issue, message)
+      send_engine_update(recipient, issue, message)
       SessionLog.append(issue_id, session_id, message)
     end
   end
 
-  defp codex_message_handler_with_log(recipient, issue, _session_id) do
-    codex_message_handler(recipient, issue)
+  defp engine_message_handler_with_log(recipient, issue, _session_id) do
+    engine_message_handler(recipient, issue)
   end
 
-  defp send_codex_update(recipient, %Issue{id: issue_id}, message)
+  defp send_engine_update(recipient, %Issue{id: issue_id}, message)
        when is_binary(issue_id) and is_pid(recipient) do
-    send(recipient, {:codex_worker_update, issue_id, message})
+    send(recipient, {:engine_worker_update, issue_id, message})
     :ok
   end
 
-  defp send_codex_update(_recipient, _issue, _message), do: :ok
+  defp send_engine_update(_recipient, _issue, _message), do: :ok
 
   defp send_worker_runtime_info(recipient, %Issue{id: issue_id}, worker_host, workspace)
        when is_binary(issue_id) and is_pid(recipient) and is_binary(workspace) do
@@ -220,23 +220,23 @@ defmodule SymphonyElixir.AgentRunner do
     List.to_string(hostname)
   end
 
-  defp run_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host) do
+  defp run_engine_turns(workspace, issue, engine_update_recipient, opts, worker_host) do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
     project_id = Keyword.get(opts, :project_id)
     comment_watch_state = opts |> Keyword.get(:comment_watch_state) |> CommentWatch.seed(issue.comments)
 
-    with {:ok, session} <- AppServer.start_session(workspace, worker_host: worker_host) do
+    with {:ok, session} <- Engine.engine_module().start_session(workspace, worker_host: worker_host) do
       session_id = session[:session_id] || "session_#{System.unique_integer([:positive])}"
       start_session_log(issue, session_id, project_id)
-      send_comment_watch_update(codex_update_recipient, issue, comment_watch_state)
+      send_comment_watch_update(engine_update_recipient, issue, comment_watch_state)
 
       try do
-        do_run_codex_turns(
+        do_run_engine_turns(
           session,
           workspace,
           issue,
-          codex_update_recipient,
+          engine_update_recipient,
           opts,
           issue_state_fetcher,
           1,
@@ -247,7 +247,7 @@ defmodule SymphonyElixir.AgentRunner do
         )
       after
         stop_session_log(issue, session_id)
-        AppServer.stop_session(session)
+        Engine.engine_module().stop_session(session)
       end
     end
   end
@@ -275,11 +275,11 @@ defmodule SymphonyElixir.AgentRunner do
   defp stop_session_log(_issue, _session_id), do: :ok
 
   # credo:disable-for-next-line
-  defp do_run_codex_turns(
+  defp do_run_engine_turns(
          app_session,
          workspace,
          issue,
-         codex_update_recipient,
+         engine_update_recipient,
          opts,
          issue_state_fetcher,
          turn_number,
@@ -291,24 +291,24 @@ defmodule SymphonyElixir.AgentRunner do
     prompt = build_turn_prompt(issue, opts, turn_number, max_turns, new_comments)
 
     with {:ok, turn_session} <-
-           AppServer.run_turn(
+           Engine.engine_module().run_turn(
              app_session,
              prompt,
              issue,
-             on_message: codex_message_handler_with_log(codex_update_recipient, issue, session_id)
+             on_message: engine_message_handler_with_log(engine_update_recipient, issue, session_id)
            ) do
       Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
 
       case continue_with_issue?(issue, issue_state_fetcher, comment_watch_state) do
         {:continue, refreshed_issue, next_comment_watch_state, unseen_comments} when turn_number < max_turns ->
           Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
-          send_comment_watch_update(codex_update_recipient, refreshed_issue, next_comment_watch_state)
+          send_comment_watch_update(engine_update_recipient, refreshed_issue, next_comment_watch_state)
 
-          do_run_codex_turns(
+          do_run_engine_turns(
             app_session,
             workspace,
             refreshed_issue,
-            codex_update_recipient,
+            engine_update_recipient,
             opts,
             issue_state_fetcher,
             turn_number + 1,
@@ -320,12 +320,12 @@ defmodule SymphonyElixir.AgentRunner do
 
         {:continue, refreshed_issue, next_comment_watch_state, _unseen_comments} ->
           Logger.info("Reached agent.max_turns for #{issue_context(refreshed_issue)} with issue still active; returning control to orchestrator")
-          send_comment_watch_update(codex_update_recipient, refreshed_issue, next_comment_watch_state)
+          send_comment_watch_update(engine_update_recipient, refreshed_issue, next_comment_watch_state)
 
           :ok
 
         {:done, refreshed_issue, next_comment_watch_state} ->
-          send_comment_watch_update(codex_update_recipient, refreshed_issue, next_comment_watch_state)
+          send_comment_watch_update(engine_update_recipient, refreshed_issue, next_comment_watch_state)
           :ok
 
         {:error, reason} ->

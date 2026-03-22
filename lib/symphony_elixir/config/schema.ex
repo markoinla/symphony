@@ -224,6 +224,43 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Claude do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:command, :string, default: "claude")
+      field(:model, :string)
+      field(:permission_mode, :string, default: "bypassPermissions")
+      field(:allowed_tools, {:array, :string}, default: [])
+      field(:disallowed_tools, {:array, :string}, default: [])
+      field(:turn_timeout_ms, :integer, default: 3_600_000)
+      field(:append_system_prompt, :string)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(
+        attrs,
+        [
+          :command,
+          :model,
+          :permission_mode,
+          :allowed_tools,
+          :disallowed_tools,
+          :turn_timeout_ms,
+          :append_system_prompt
+        ],
+        empty_values: []
+      )
+      |> validate_number(:turn_timeout_ms, greater_than: 0)
+      |> validate_inclusion(:permission_mode, ["bypassPermissions", "default"])
+    end
+  end
+
   defmodule Hooks do
     @moduledoc false
     use Ecto.Schema
@@ -287,12 +324,14 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   embedded_schema do
+    field(:engine, :string, default: "codex")
     embeds_one(:tracker, Tracker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:polling, Polling, on_replace: :update, defaults_to_struct: true)
     embeds_one(:workspace, Workspace, on_replace: :update, defaults_to_struct: true)
     embeds_one(:worker, Worker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
     embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:claude, Claude, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
@@ -378,13 +417,15 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [])
+    |> cast(attrs, [:engine])
+    |> validate_inclusion(:engine, ["codex", "claude"])
     |> cast_embed(:tracker, with: &Tracker.changeset/2)
     |> cast_embed(:polling, with: &Polling.changeset/2)
     |> cast_embed(:workspace, with: &Workspace.changeset/2)
     |> cast_embed(:worker, with: &Worker.changeset/2)
     |> cast_embed(:agent, with: &Agent.changeset/2)
     |> cast_embed(:codex, with: &Codex.changeset/2)
+    |> cast_embed(:claude, with: &Claude.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
