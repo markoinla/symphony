@@ -180,7 +180,7 @@ export type StatePayload = {
     worker_host: string | null
     workspace_path: string | null
   }>
-  codex_totals: {
+  engine_totals: {
     input_tokens: number
     output_tokens: number
     total_tokens: number

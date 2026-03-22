@@ -21,9 +21,12 @@ hooks:
     git clone --depth 1 "https://github.com/$GITHUB_REPO" .
   before_remove: |
     echo "Cleaning up workspace"
+engine: claude
 agent:
   max_concurrent_agents: 5
   max_turns: 20
+claude:
+  permission_mode: bypassPermissions
 codex:
   command: codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --config model_reasoning_summary=detailed app-server
   approval_policy: never

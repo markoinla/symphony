@@ -39,10 +39,10 @@ defmodule SymphonyElixir.SessionLog do
   end
 
   @spec append(String.t(), String.t(), map()) :: :ok
-  def append(issue_id, session_id, codex_message) do
+  def append(issue_id, session_id, engine_message) do
     case lookup(issue_id, session_id) do
       nil -> :ok
-      pid -> GenServer.cast(pid, {:append, codex_message})
+      pid -> GenServer.cast(pid, {:append, engine_message})
     end
   end
 
@@ -125,10 +125,10 @@ defmodule SymphonyElixir.SessionLog do
   end
 
   @impl true
-  def handle_cast({:append, codex_message}, state) do
-    state = maybe_sync_codex_session_id(codex_message, state)
+  def handle_cast({:append, engine_message}, state) do
+    state = maybe_sync_engine_session_id(engine_message, state)
 
-    case classify_message(codex_message) do
+    case classify_message(engine_message) do
       nil ->
         {:noreply, state}
 
@@ -136,15 +136,15 @@ defmodule SymphonyElixir.SessionLog do
         {:noreply, %{state | last_streamable: nil}}
 
       {:stream, type, content, metadata, stream_key} ->
-        handle_streamable_delta(type, content, metadata, codex_message, stream_key, state)
+        handle_streamable_delta(type, content, metadata, engine_message, stream_key, state)
 
       {:message, :tool_call, tool_name, metadata} ->
-        handle_tool_call(tool_name, metadata, codex_message, state)
+        handle_tool_call(tool_name, metadata, engine_message, state)
 
       {:message, type, content, metadata} ->
         message = %{
           id: state.next_id,
-          timestamp: Map.get(codex_message, :timestamp, DateTime.utc_now()),
+          timestamp: Map.get(engine_message, :timestamp, DateTime.utc_now()),
           type: type,
           content: content,
           metadata: metadata
@@ -189,7 +189,7 @@ defmodule SymphonyElixir.SessionLog do
          _type,
          content,
          _metadata,
-         _codex_message,
+         _engine_message,
          stream_key,
          %{last_streamable: %{stream_key: stream_key, message: last}} = state
        ) do
@@ -202,10 +202,10 @@ defmodule SymphonyElixir.SessionLog do
   end
 
   # First delta of this type — create a new message
-  defp handle_streamable_delta(type, content, metadata, codex_message, stream_key, state) do
+  defp handle_streamable_delta(type, content, metadata, engine_message, stream_key, state) do
     message = %{
       id: state.next_id,
-      timestamp: Map.get(codex_message, :timestamp, DateTime.utc_now()),
+      timestamp: Map.get(engine_message, :timestamp, DateTime.utc_now()),
       type: type,
       content: content,
       metadata: metadata
@@ -223,7 +223,7 @@ defmodule SymphonyElixir.SessionLog do
   defp handle_tool_call(
          tool_name,
          metadata,
-         _codex_message,
+         _engine_message,
          %{last_tool_call: %{content: last_name} = last} = state
        )
        when tool_name == last_name do
@@ -237,10 +237,10 @@ defmodule SymphonyElixir.SessionLog do
   end
 
   # First tool_call event — create a new message
-  defp handle_tool_call(tool_name, metadata, codex_message, state) do
+  defp handle_tool_call(tool_name, metadata, engine_message, state) do
     message = %{
       id: state.next_id,
-      timestamp: Map.get(codex_message, :timestamp, DateTime.utc_now()),
+      timestamp: Map.get(engine_message, :timestamp, DateTime.utc_now()),
       type: :tool_call,
       content: tool_name,
       metadata: metadata
@@ -354,7 +354,7 @@ defmodule SymphonyElixir.SessionLog do
   # ── Notification classification ─────────────────────────────────────
 
   defp classify_notification(_payload, method)
-       when method in ["initialize", "thread/start", "session/start"],
+       when method in ["initialize", "thread/start", "session/start", "claude/init"],
        do: nil
 
   defp classify_notification(payload, method) do
@@ -402,6 +402,28 @@ defmodule SymphonyElixir.SessionLog do
   defp classify_by_method(payload, method)
        when method in ["item/completed", "codex/event/item_completed"],
        do: classify_item_tool_call(payload, "completed")
+
+  # Claude Code events: assistant message streaming
+  defp classify_by_method(payload, "claude/assistant_message"),
+    do: wrap_streamable(:response, payload_path(payload, ["params", "content"]), payload)
+
+  # Claude Code events: thinking streaming
+  defp classify_by_method(payload, "claude/thinking"),
+    do: wrap_streamable(:thinking, payload_path(payload, ["params", "content"]), payload)
+
+  # Claude Code events: tool use notification
+  defp classify_by_method(payload, "claude/tool_use") do
+    tool_name = payload_path(payload, ["params", "name"]) || "unknown"
+    {:message, :tool_call, tool_name, %{status: "started"}}
+  end
+
+  # Claude Code events: tool result
+  defp classify_by_method(payload, "claude/tool_result") do
+    is_error = payload_path(payload, ["params", "is_error"])
+    tool_id = payload_path(payload, ["params", "tool_use_id"]) || "unknown"
+    status = if is_error, do: "failed", else: "completed"
+    {:message, :tool_call, tool_id, %{status: status}}
+  end
 
   defp classify_by_method(_payload, _method), do: nil
 
@@ -757,19 +779,19 @@ defmodule SymphonyElixir.SessionLog do
   # When the real codex session_id arrives via :session_started, update the DB
   # session so that finalize_db_session (which looks up by codex session_id)
   # can find and update it with turn_count / total_tokens.
-  defp maybe_sync_codex_session_id(
-         %{event: :session_started, session_id: codex_session_id},
+  defp maybe_sync_engine_session_id(
+         %{event: :session_started, session_id: engine_session_id},
          %{db_session_id: db_id} = state
        )
-       when is_binary(codex_session_id) and not is_nil(db_id) do
+       when is_binary(engine_session_id) and not is_nil(db_id) do
     Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-      Store.update_session_codex_id(db_id, codex_session_id)
+      Store.update_session_engine_id(db_id, engine_session_id)
     end)
 
     state
   end
 
-  defp maybe_sync_codex_session_id(_msg, state), do: state
+  defp maybe_sync_engine_session_id(_msg, state), do: state
 
   defp cap_content(content) when byte_size(content) > @max_content_bytes do
     truncated_size = @max_content_bytes - 14

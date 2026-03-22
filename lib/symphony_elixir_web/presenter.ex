@@ -146,7 +146,7 @@ defmodule SymphonyElixirWeb.Presenter do
       },
       running: Enum.map(snapshot.running, &running_entry_payload/1),
       retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
-      codex_totals: snapshot.codex_totals,
+      engine_totals: snapshot.engine_totals,
       rate_limits: snapshot.rate_limits
     }
   end
@@ -162,7 +162,7 @@ defmodule SymphonyElixirWeb.Presenter do
           },
           running: Enum.map(snapshot.running, &running_entry_payload(&1, workflow_name)),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload(&1, workflow_name)),
-          codex_totals: snapshot.codex_totals,
+          engine_totals: snapshot.engine_totals,
           rate_limits: snapshot.rate_limits,
           polling: Map.get(snapshot, :polling)
         }
@@ -176,19 +176,19 @@ defmodule SymphonyElixirWeb.Presenter do
       },
       running: Enum.flat_map(workflows, & &1.running),
       retrying: Enum.flat_map(workflows, & &1.retrying),
-      codex_totals: sum_codex_totals(workflows),
+      engine_totals: sum_engine_totals(workflows),
       rate_limits: Map.new(workflows, fn workflow -> {workflow.workflow_name, workflow.rate_limits} end),
       workflows: workflows
     }
   end
 
-  defp sum_codex_totals(workflows) do
+  defp sum_engine_totals(workflows) do
     Enum.reduce(workflows, %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0}, fn workflow, totals ->
       %{
-        input_tokens: totals.input_tokens + Map.get(workflow.codex_totals, :input_tokens, 0),
-        output_tokens: totals.output_tokens + Map.get(workflow.codex_totals, :output_tokens, 0),
-        total_tokens: totals.total_tokens + Map.get(workflow.codex_totals, :total_tokens, 0),
-        seconds_running: totals.seconds_running + Map.get(workflow.codex_totals, :seconds_running, 0)
+        input_tokens: totals.input_tokens + Map.get(workflow.engine_totals, :input_tokens, 0),
+        output_tokens: totals.output_tokens + Map.get(workflow.engine_totals, :output_tokens, 0),
+        total_tokens: totals.total_tokens + Map.get(workflow.engine_totals, :total_tokens, 0),
+        seconds_running: totals.seconds_running + Map.get(workflow.engine_totals, :seconds_running, 0)
       }
     end)
   end
@@ -276,14 +276,14 @@ defmodule SymphonyElixirWeb.Presenter do
       workspace_path: Map.get(entry, :workspace_path),
       session_id: entry.session_id,
       turn_count: Map.get(entry, :turn_count, 0),
-      last_event: entry.last_codex_event,
-      last_message: summarize_message(entry.last_codex_message),
+      last_event: entry.last_engine_event,
+      last_message: summarize_message(entry.last_engine_message),
       started_at: iso8601(entry.started_at),
-      last_event_at: iso8601(entry.last_codex_timestamp),
+      last_event_at: iso8601(entry.last_engine_timestamp),
       tokens: %{
-        input_tokens: entry.codex_input_tokens,
-        output_tokens: entry.codex_output_tokens,
-        total_tokens: entry.codex_total_tokens
+        input_tokens: entry.engine_input_tokens,
+        output_tokens: entry.engine_output_tokens,
+        total_tokens: entry.engine_total_tokens
       }
     }
     |> maybe_put_workflow_name_payload(workflow_name)
@@ -312,13 +312,13 @@ defmodule SymphonyElixirWeb.Presenter do
       turn_count: Map.get(running, :turn_count, 0),
       state: running.state,
       started_at: iso8601(running.started_at),
-      last_event: running.last_codex_event,
-      last_message: summarize_message(running.last_codex_message),
-      last_event_at: iso8601(running.last_codex_timestamp),
+      last_event: running.last_engine_event,
+      last_message: summarize_message(running.last_engine_message),
+      last_event_at: iso8601(running.last_engine_timestamp),
       tokens: %{
-        input_tokens: running.codex_input_tokens,
-        output_tokens: running.codex_output_tokens,
-        total_tokens: running.codex_total_tokens
+        input_tokens: running.engine_input_tokens,
+        output_tokens: running.engine_output_tokens,
+        total_tokens: running.engine_total_tokens
       }
     }
   end
@@ -346,16 +346,16 @@ defmodule SymphonyElixirWeb.Presenter do
   defp recent_events_payload(running) do
     [
       %{
-        at: iso8601(running.last_codex_timestamp),
-        event: running.last_codex_event,
-        message: summarize_message(running.last_codex_message)
+        at: iso8601(running.last_engine_timestamp),
+        event: running.last_engine_event,
+        message: summarize_message(running.last_engine_message)
       }
     ]
     |> Enum.reject(&is_nil(&1.at))
   end
 
   defp summarize_message(nil), do: nil
-  defp summarize_message(message), do: StatusDashboard.humanize_codex_message(message)
+  defp summarize_message(message), do: StatusDashboard.humanize_engine_message(message)
 
   defp due_at_iso8601(due_in_ms) when is_integer(due_in_ms) do
     DateTime.utc_now()

@@ -365,8 +365,8 @@ function DashboardView() {
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px] text-th-text-4">
-          <span className="tabular-nums">{formatNumber(payload.codex_totals.total_tokens)} tokens</span>
-          <span className="tabular-nums">{formatRuntimeFromSeconds(payload.codex_totals.seconds_running)}</span>
+          <span className="tabular-nums">{formatNumber(payload.engine_totals.total_tokens)} tokens</span>
+          <span className="tabular-nums">{formatRuntimeFromSeconds(payload.engine_totals.seconds_running)}</span>
         </div>
       </div>
 
