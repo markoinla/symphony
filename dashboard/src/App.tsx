@@ -1379,6 +1379,106 @@ function LinearApiKeyCard() {
   )
 }
 
+function DashboardUrlCard() {
+  const queryClient = useQueryClient()
+  const settingsQuery = useQuery({
+    queryKey: ['settings'],
+    queryFn: getSettings,
+  })
+
+  const existing = settingsQuery.data?.settings.find(
+    (s: { key: string; value: string }) => s.key === 'server.public_base_url',
+  )
+
+  const [url, setUrl] = useState('')
+  const [feedback, setFeedback] = useState<string | null>(null)
+
+  const saveMutation = useMutation({
+    mutationFn: (value: string) => upsertSetting('server.public_base_url', value),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setFeedback('Dashboard URL saved.')
+      setUrl('')
+    },
+    onError: (error: unknown) => {
+      setFeedback(formatQueryError(error))
+    },
+  })
+
+  const removeMutation = useMutation({
+    mutationFn: () => deleteSetting('server.public_base_url'),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setFeedback('Dashboard URL removed.')
+      setUrl('')
+    },
+    onError: (error: unknown) => {
+      setFeedback(formatQueryError(error))
+    },
+  })
+
+  return (
+    <Card className="min-w-0 space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold tracking-tight text-th-text-1">Dashboard URL</h2>
+        <p className="mt-1 text-sm text-th-text-3">
+          Public base URL used in session links posted to Linear issues. Include the scheme and host (e.g. <code className="text-th-text-2">http://my-server:4000</code>).
+        </p>
+      </div>
+
+      {feedback ? (
+        <div className="rounded-lg border border-th-border-muted bg-th-muted px-4 py-3 text-sm text-th-text-2">
+          {feedback}
+        </div>
+      ) : null}
+
+      {existing ? (
+        <div className="rounded-lg border border-th-border bg-th-inset p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <code className="min-w-0 break-all text-sm text-th-text-2">{existing.value}</code>
+            <Button
+              className="w-full sm:w-auto"
+              disabled={removeMutation.isPending}
+              onClick={() => {
+                setFeedback(null)
+                void removeMutation.mutateAsync()
+              }}
+              type="button"
+              variant="danger"
+            >
+              Remove
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      <form
+        className="grid gap-4"
+        onSubmit={(event) => {
+          event.preventDefault()
+          setFeedback(null)
+          void saveMutation.mutateAsync(url.trim())
+        }}
+      >
+        <Field label={existing ? 'Update URL' : 'URL'}>
+          <Input
+            onChange={(event) => setUrl(event.target.value)}
+            placeholder="http://my-server:4000"
+            required
+            type="url"
+            value={url}
+          />
+        </Field>
+        <div>
+          <Button className="w-full sm:w-auto" disabled={saveMutation.isPending || !url.trim()} type="submit">
+            {existing ? 'Update' : 'Save'}
+          </Button>
+        </div>
+      </form>
+    </Card>
+  )
+}
+
 function AgentSettingsCard({
   agentDefaults,
   error,
@@ -1594,6 +1694,7 @@ function SettingsView() {
   return (
     <div className="space-y-6">
       <LinearApiKeyCard />
+      <DashboardUrlCard />
       <AgentSettingsCard
         agentDefaults={settingsQuery.data?.agent_defaults}
         error={settingsQuery.isError ? formatQueryError(settingsQuery.error) : null}

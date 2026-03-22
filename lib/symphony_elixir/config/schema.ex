@@ -276,13 +276,12 @@ defmodule SymphonyElixir.Config.Schema do
     embedded_schema do
       field(:port, :integer)
       field(:host, :string, default: "127.0.0.1")
-      field(:public_base_url, :string)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:port, :host, :public_base_url], empty_values: [])
+      |> cast(attrs, [:port, :host], empty_values: [])
       |> validate_number(:port, greater_than_or_equal_to: 0)
     end
   end
@@ -409,12 +408,7 @@ defmodule SymphonyElixir.Config.Schema do
         turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)
     }
 
-    server = %{
-      settings.server
-      | public_base_url: resolve_optional_string_setting(settings.server.public_base_url)
-    }
-
-    %{settings | tracker: tracker, workspace: workspace, codex: codex, server: server}
+    %{settings | tracker: tracker, workspace: workspace, codex: codex}
   end
 
   defp normalize_keys(value) when is_map(value) do
@@ -466,14 +460,6 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
-  defp resolve_optional_string_setting(nil), do: nil
-
-  defp resolve_optional_string_setting(value) when is_binary(value) do
-    value
-    |> resolve_env_value(nil)
-    |> normalize_optional_string()
-  end
-
   defp resolve_env_value(value, fallback) when is_binary(value) do
     case env_reference_name(value) do
       {:ok, env_name} ->
@@ -517,10 +503,6 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   defp normalize_secret_value(_value), do: nil
-
-  defp normalize_optional_string(value) when is_binary(value) do
-    if value == "", do: nil, else: value
-  end
 
   defp default_turn_sandbox_policy(workspace) do
     %{

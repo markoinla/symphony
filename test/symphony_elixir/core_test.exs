@@ -1407,13 +1407,14 @@ defmodule SymphonyElixir.CoreTest do
 
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
+      SymphonyElixir.Store.put_setting("server.public_base_url", "https://symphony.example.com")
+
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "memory",
         tracker_picked_up_label_name: "symphony",
         workspace_root: workspace_root,
         hook_after_create: "cp #{Path.join(template_repo, "README.md")} README.md",
-        codex_command: "#{codex_binary} app-server",
-        server_public_base_url: "https://symphony.example.com"
+        codex_command: "#{codex_binary} app-server"
       )
 
       issue = %Issue{
@@ -1435,6 +1436,7 @@ defmodule SymphonyElixir.CoreTest do
       assert workspace_comment =~ "Workspace ready: `"
     after
       Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
+      SymphonyElixir.Store.delete_setting("server.public_base_url")
       File.rm_rf(test_root)
     end
   end

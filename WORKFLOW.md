@@ -32,7 +32,6 @@ codex:
     type: dangerFullAccess
 server:
   host: "0.0.0.0"
-  public_base_url: "http://zl-marko-test:4000"
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`.

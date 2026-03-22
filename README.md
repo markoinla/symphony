@@ -169,9 +169,8 @@ codex:
   and logs the reload error until the file is fixed.
 - `server.port` or CLI `--port` enables the optional Phoenix observability service, which serves
   the React dashboard SPA at `/` plus the JSON and SSE API under `/api/v1/*`.
-- `server.public_base_url` sets the external base URL used in Linear session links. It accepts a
-  literal URL such as `https://symphony.example.com` or an env-backed value such as
-  `$SYMPHONY_PUBLIC_BASE_URL`.
+- The **Dashboard URL** setting (configurable in the dashboard Settings page) sets the external
+  base URL used in Linear session links, e.g. `http://my-server:4000`.
 
 ## Web dashboard
 
