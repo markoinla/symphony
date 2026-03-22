@@ -222,7 +222,7 @@ export function getSessionTimeline(issueIdentifier: string) {
   return requestJson<MessagesPayload>(`/api/v1/${encodeURIComponent(issueIdentifier)}/messages`)
 }
 
-export function getSessions(params?: { issueIdentifier?: string; limit?: number }) {
+export function getSessions(params?: { issueIdentifier?: string; limit?: number; projectId?: number }) {
   const search = new URLSearchParams()
 
   if (params?.issueIdentifier) {
@@ -231,6 +231,10 @@ export function getSessions(params?: { issueIdentifier?: string; limit?: number 
 
   if (params?.limit) {
     search.set('limit', String(params.limit))
+  }
+
+  if (params?.projectId) {
+    search.set('project_id', String(params.projectId))
   }
 
   const query = search.toString()
