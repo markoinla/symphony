@@ -469,7 +469,16 @@ defmodule SymphonyElixir.Config.Schema do
         turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)
     }
 
-    %{settings | tracker: tracker, workspace: workspace, codex: codex}
+    linear_agent = %{
+      settings.linear_agent
+      | webhook_signing_secret:
+          resolve_secret_setting(
+            settings.linear_agent.webhook_signing_secret,
+            System.get_env("LINEAR_WEBHOOK_SECRET")
+          )
+    }
+
+    %{settings | tracker: tracker, workspace: workspace, codex: codex, linear_agent: linear_agent}
   end
 
   defp normalize_keys(value) when is_map(value) do
