@@ -547,6 +547,8 @@ defmodule SymphonyElixir.ExtensionsTest do
             %{
               issue_id: "issue-1",
               identifier: "SYM-1",
+              project_id: 11,
+              project_name: "Implementation",
               state: "In Progress",
               session_id: "thread-1",
               turn_count: 1,
@@ -572,7 +574,15 @@ defmodule SymphonyElixir.ExtensionsTest do
         snapshot: %{
           running: [],
           retrying: [
-            %{issue_id: "issue-2", identifier: "SYM-2", attempt: 2, due_in_ms: 1_500, error: "boom"}
+            %{
+              issue_id: "issue-2",
+              identifier: "SYM-2",
+              project_id: 22,
+              project_name: "Enrichment",
+              attempt: 2,
+              due_in_ms: 1_500,
+              error: "boom"
+            }
           ],
           codex_totals: %{input_tokens: 4, output_tokens: 5, total_tokens: 9, seconds_running: 20},
           rate_limits: %{primary: %{remaining: 7}},
@@ -590,8 +600,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert payload.counts.retrying == 1
     assert payload.codex_totals.total_tokens == 12
     assert Enum.map(payload.workflows, & &1.workflow_name) == ["implementation", "enrichment"]
-    assert Enum.any?(payload.running, &(&1.workflow_name == "implementation"))
-    assert Enum.any?(payload.retrying, &(&1.workflow_name == "enrichment"))
+    assert Enum.any?(payload.running, &(&1.workflow_name == "implementation" and &1.project_id == 11 and &1.project_name == "Implementation"))
+    assert Enum.any?(payload.retrying, &(&1.workflow_name == "enrichment" and &1.project_id == 22 and &1.project_name == "Enrichment"))
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do
@@ -622,6 +632,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                %{
                  "issue_id" => "issue-http",
                  "issue_identifier" => "MT-HTTP",
+                 "project_id" => nil,
+                 "project_name" => nil,
                  "state" => "In Progress",
                  "worker_host" => nil,
                  "workspace_path" => nil,
@@ -638,6 +650,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                %{
                  "issue_id" => "issue-retry",
                  "issue_identifier" => "MT-RETRY",
+                 "project_id" => nil,
+                 "project_name" => nil,
                  "attempt" => 2,
                  "due_at" => state_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
                  "error" => "boom",
