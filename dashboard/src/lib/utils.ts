@@ -76,6 +76,43 @@ export function formatClock(timestamp: string | null | undefined) {
   }).format(value)
 }
 
+export function estimateCost(inputTokens: number, outputTokens: number) {
+  // Claude Sonnet pricing: $3/MTok input, $15/MTok output
+  const inputCost = (inputTokens / 1_000_000) * 3
+  const outputCost = (outputTokens / 1_000_000) * 15
+  const total = inputCost + outputCost
+
+  if (total < 0.01) {
+    return `$${total.toFixed(4)}`
+  }
+
+  return `$${total.toFixed(2)}`
+}
+
+export function runtimeBetween(
+  startedAt: string | null | undefined,
+  endedAt: string | null | undefined,
+  now: number,
+) {
+  if (!startedAt) {
+    return '0m 0s'
+  }
+
+  const start = new Date(startedAt).getTime()
+
+  if (Number.isNaN(start)) {
+    return '0m 0s'
+  }
+
+  const end = endedAt ? new Date(endedAt).getTime() : now
+
+  if (Number.isNaN(end)) {
+    return '0m 0s'
+  }
+
+  return formatRuntimeFromSeconds((end - start) / 1000)
+}
+
 export function groupConsecutiveByType<T extends { type: string }>(items: T[], type: string) {
   type Group = { type: string; items: T[] }
   const groups: Array<T | Group> = []

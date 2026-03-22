@@ -45,11 +45,13 @@ import {
 import { useDashboardStream, useSessionStream } from './lib/streams'
 import {
   cn,
+  estimateCost,
   formatClock,
   formatDateTime,
   formatNumber,
   formatRuntimeFromSeconds,
   groupConsecutiveByType,
+  runtimeBetween,
   runtimeSince,
 } from './lib/utils'
 import { Badge, Button, Card, Input, Textarea } from './components/ui'
@@ -724,6 +726,8 @@ function SessionView() {
             ) : null}
           </div>
         </div>
+
+        <SessionUsageBar now={now} sessions={data.sessions} />
       </div>
 
       {/* Chat message stream */}
@@ -767,6 +771,42 @@ function SessionView() {
           </Button>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function SessionUsageBar({ now, sessions }: { now: number; sessions: TimelineSession[] }) {
+  const totalInput = sessions.reduce((sum, s) => sum + (s.input_tokens ?? 0), 0)
+  const totalOutput = sessions.reduce((sum, s) => sum + (s.output_tokens ?? 0), 0)
+  const totalTokens = sessions.reduce((sum, s) => sum + (s.total_tokens ?? 0), 0)
+
+  const earliestStart = sessions.reduce<string | null>((earliest, s) => {
+    if (!s.started_at) return earliest
+    if (!earliest) return s.started_at
+    return s.started_at < earliest ? s.started_at : earliest
+  }, null)
+
+  const isLive = sessions.some((s) => s.live)
+  const latestEnd = sessions.reduce<string | null>((latest, s) => {
+    if (!s.ended_at) return latest
+    if (!latest) return s.ended_at
+    return s.ended_at > latest ? s.ended_at : latest
+  }, null)
+
+  const duration = runtimeBetween(earliestStart, isLive ? null : latestEnd, now)
+  const cost = estimateCost(totalInput, totalOutput)
+
+  if (totalTokens === 0 && !earliestStart) {
+    return null
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-th-text-4">
+      <span className="tabular-nums">{formatNumber(totalOutput)} out</span>
+      <span className="tabular-nums">{formatNumber(totalInput)} in</span>
+      <span className="tabular-nums">{formatNumber(totalTokens)} tok</span>
+      <span className="tabular-nums">~{cost}</span>
+      <span className="tabular-nums">{duration}</span>
     </div>
   )
 }
