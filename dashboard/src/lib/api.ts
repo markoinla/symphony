@@ -36,6 +36,16 @@ export type Setting = {
   value: string
 }
 
+export type AgentSettingsDefaults = {
+  max_concurrent_agents: number
+  max_turns: number
+}
+
+export type SettingsPayload = {
+  settings: Setting[]
+  agent_defaults: AgentSettingsDefaults
+}
+
 export type TimelineMessage = {
   id: number | string
   timestamp: string | null
@@ -270,7 +280,7 @@ export function deleteProject(id: number) {
 }
 
 export function getSettings() {
-  return requestJson<{ settings: Setting[] }>('/api/v1/settings')
+  return requestJson<SettingsPayload>('/api/v1/settings')
 }
 
 export function upsertSetting(key: string, value: string) {

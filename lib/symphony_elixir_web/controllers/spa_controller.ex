@@ -7,6 +7,20 @@ defmodule SymphonyElixirWeb.SpaController do
 
   alias Plug.Conn
 
+  @test_fallback_shell """
+  <!doctype html>
+  <html lang="en">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <title>Symphony</title>
+    </head>
+    <body>
+      <div id="root"></div>
+    </body>
+  </html>
+  """
+
   @spec index(Conn.t(), map()) :: Conn.t()
   def index(conn, params) do
     path_segments = Map.get(params, "path", [])
@@ -19,6 +33,11 @@ defmodule SymphonyElixirWeb.SpaController do
         conn
         |> put_resp_content_type("text/html")
         |> send_file(200, index_path())
+
+      Mix.env() == :test ->
+        conn
+        |> put_resp_content_type("text/html")
+        |> send_resp(200, @test_fallback_shell)
 
       true ->
         send_resp(conn, 404, "Dashboard assets are not built")

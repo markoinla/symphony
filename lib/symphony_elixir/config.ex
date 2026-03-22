@@ -31,12 +31,28 @@ defmodule SymphonyElixir.Config do
     settings(Workflow.current_workflow_name())
   end
 
+  @spec workflow_settings() :: {:ok, Schema.t()} | {:error, term()}
+  def workflow_settings do
+    workflow_settings(Workflow.current_workflow_name())
+  end
+
   @spec settings(String.t()) :: {:ok, Schema.t()} | {:error, term()}
   def settings(workflow_name) when is_binary(workflow_name) do
     case Workflow.current(workflow_name) do
       {:ok, %{config: config}} when is_map(config) ->
         merged = deep_merge(SymphonyElixir.Settings.config_overlay(), config)
         Schema.parse(merged)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @spec workflow_settings(String.t()) :: {:ok, Schema.t()} | {:error, term()}
+  def workflow_settings(workflow_name) when is_binary(workflow_name) do
+    case Workflow.current(workflow_name) do
+      {:ok, %{config: config}} when is_map(config) ->
+        Schema.parse(config)
 
       {:error, reason} ->
         {:error, reason}
@@ -58,6 +74,17 @@ defmodule SymphonyElixir.Config do
   @spec settings!() :: Schema.t()
   def settings! do
     settings!(Workflow.current_workflow_name())
+  end
+
+  @spec default_settings() :: Schema.t()
+  def default_settings do
+    case Schema.parse(%{}) do
+      {:ok, settings} ->
+        settings
+
+      {:error, reason} ->
+        raise ArgumentError, message: format_config_error(reason)
+    end
   end
 
   @spec settings!(String.t()) :: Schema.t()

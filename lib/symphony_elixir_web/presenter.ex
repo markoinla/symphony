@@ -429,7 +429,7 @@ defmodule SymphonyElixirWeb.Presenter do
         %{key: setting.key, value: setting.value}
       end)
 
-    %{settings: settings}
+    %{settings: settings, agent_defaults: agent_defaults_payload()}
   end
 
   @spec historical_messages_payload(integer()) :: {:ok, map()} | {:error, :not_found}
@@ -479,6 +479,19 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp decode_metadata(_), do: %{}
+
+  defp agent_defaults_payload do
+    agent_config =
+      case Config.workflow_settings() do
+        {:ok, settings} -> settings.agent
+        {:error, _reason} -> Config.default_settings().agent
+      end
+
+    %{
+      max_concurrent_agents: agent_config.max_concurrent_agents,
+      max_turns: agent_config.max_turns
+    }
+  end
 
   defp atomize_metadata_keys(map) when is_map(map) do
     Map.new(map, fn {k, v} -> {String.to_existing_atom(k), v} end)
