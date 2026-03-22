@@ -15,7 +15,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import * as Collapsible from '@radix-ui/react-collapsible'
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   ApiError,
@@ -45,12 +45,15 @@ import {
 import { useDashboardStream, useSessionStream } from './lib/streams'
 import {
   cn,
+  estimateCost,
   formatClock,
+  formatCost,
   formatDateTime,
   formatNumber,
   formatRuntimeFromSeconds,
   groupConsecutiveByType,
   runtimeSince,
+  sumSessionRuntimeSeconds,
 } from './lib/utils'
 import { Badge, Button, Card, Input, Textarea } from './components/ui'
 
@@ -625,10 +628,53 @@ function SessionView() {
   const timelineQuery = useQuery({
     queryKey: ['timeline', issueIdentifier],
     queryFn: () => getSessionTimeline(issueIdentifier),
+    refetchInterval: (query) => {
+      const sseHasLive = timeline?.sessions.some((s) => s.live) ?? false
+      const fetchedHasLive = query.state.data?.sessions.some((s: TimelineSession) => s.live) ?? false
+      return sseHasLive || fetchedHasLive ? 5_000 : false
+    },
   })
 
-  const currentTimeline =
-    timeline?.issue_identifier === issueIdentifier ? timeline : timelineQuery.data ?? null
+  // Merge fresh session metadata (tokens, status) from periodic refetches
+  // with SSE-appended messages from local state.
+  const currentTimeline = useMemo(() => {
+    const local = timeline?.issue_identifier === issueIdentifier ? timeline : null
+    const fetched = timelineQuery.data ?? null
+
+    if (!local) {
+      return fetched
+    }
+
+    if (!fetched) {
+      return local
+    }
+
+    const sessions = local.sessions.map((localSession) => {
+      const fresh = fetched.sessions.find((s) => s.session_id === localSession.session_id)
+
+      if (!fresh) {
+        return localSession
+      }
+
+      return {
+        ...localSession,
+        input_tokens: fresh.input_tokens,
+        output_tokens: fresh.output_tokens,
+        total_tokens: fresh.total_tokens,
+        turn_count: fresh.turn_count,
+        status: fresh.status,
+        ended_at: fresh.ended_at,
+        live: fresh.live,
+      }
+    })
+
+    // Append sessions from fetched data that don't exist in local state
+    // (e.g., a new retry session created while the page was open)
+    const localIds = new Set(local.sessions.map((s) => s.session_id))
+    const newSessions = fetched.sessions.filter((s) => !localIds.has(s.session_id))
+
+    return { ...local, sessions: [...sessions, ...newSessions] }
+  }, [timeline, timelineQuery.data, issueIdentifier])
   const currentFollowTail = followTail
   const activeIssueId = issueQuery.data?.issue_id ?? currentTimeline?.issue_id
 
@@ -724,6 +770,8 @@ function SessionView() {
             ) : null}
           </div>
         </div>
+
+        <SessionUsageBar now={now} sessions={data.sessions} />
       </div>
 
       {/* Chat message stream */}
@@ -767,6 +815,41 @@ function SessionView() {
           </Button>
         </div>
       ) : null}
+    </div>
+  )
+}
+
+function SessionUsageBar({ now, sessions }: { now: number; sessions: TimelineSession[] }) {
+  let inputTokens = 0
+  let outputTokens = 0
+  let totalTokens = 0
+
+  for (const session of sessions) {
+    inputTokens += session.input_tokens ?? 0
+    outputTokens += session.output_tokens ?? 0
+    totalTokens += session.total_tokens ?? 0
+  }
+
+  const runtimeSeconds = sumSessionRuntimeSeconds(sessions, now)
+  const hasData = totalTokens > 0 || sessions.some((s) => s.started_at)
+
+  if (!hasData) {
+    return null
+  }
+
+  const cost = estimateCost(inputTokens, outputTokens)
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs tabular-nums text-th-text-4">
+      {totalTokens > 0 ? (
+        <>
+          <span>{formatNumber(totalTokens)} tokens</span>
+          <span>{formatNumber(inputTokens)} in</span>
+          <span>{formatNumber(outputTokens)} out</span>
+          <span>{formatCost(cost)}</span>
+        </>
+      ) : null}
+      <span>{formatRuntimeFromSeconds(runtimeSeconds)}</span>
     </div>
   )
 }
