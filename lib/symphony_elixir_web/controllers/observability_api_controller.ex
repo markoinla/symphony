@@ -36,6 +36,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
       []
       |> maybe_put_issue_identifier(params["issue_identifier"])
       |> maybe_put_limit(params["limit"])
+      |> maybe_put_project_id(params["project_id"])
 
     json(conn, Presenter.history_payload(opts))
   end
@@ -84,6 +85,15 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   end
 
   defp maybe_put_limit(opts, _limit), do: opts
+
+  defp maybe_put_project_id(opts, project_id) when is_binary(project_id) do
+    case Integer.parse(project_id) do
+      {value, ""} when value > 0 -> Keyword.put(opts, :project_id, value)
+      _ -> opts
+    end
+  end
+
+  defp maybe_put_project_id(opts, _project_id), do: opts
 
   defp orchestrator do
     Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator.default_source()

@@ -835,6 +835,20 @@ defmodule SymphonyElixir.ExtensionsTest do
         updated_at: now
       })
 
+    {:ok, other_project} =
+      Store.create_project(%{
+        name: "Other",
+        linear_project_slug: "other",
+        linear_organization_slug: "marko-la",
+        linear_filter_by: "project",
+        linear_label_name: nil,
+        github_repo: "openai/other",
+        workspace_root: "/tmp/other",
+        env_vars: nil,
+        created_at: now,
+        updated_at: now
+      })
+
     {:ok, _setting} = Store.put_setting("LINEAR_API_KEY", "secret")
 
     {:ok, session} =
@@ -852,7 +866,27 @@ defmodule SymphonyElixir.ExtensionsTest do
         total_tokens: 24,
         worker_host: "worker-1",
         workspace_path: "/tmp/symphony/MT-HISTORY",
-        error: nil
+        error: nil,
+        project_id: project.id
+      })
+
+    {:ok, _other_session} =
+      Store.create_session(%{
+        issue_id: "issue-other-history",
+        issue_identifier: "MT-OTHER",
+        issue_title: "Other historical session",
+        session_id: "session-other-history",
+        status: "completed",
+        started_at: now,
+        ended_at: now,
+        turn_count: 1,
+        input_tokens: 5,
+        output_tokens: 7,
+        total_tokens: 12,
+        worker_host: "worker-2",
+        workspace_path: "/tmp/other/MT-OTHER",
+        error: nil,
+        project_id: other_project.id
       })
 
     {:ok, _message} =
@@ -868,6 +902,19 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert json_response(get(build_conn(), "/api/v1/projects"), 200) == %{
              "projects" => [
+               %{
+                 "id" => other_project.id,
+                 "name" => "Other",
+                 "linear_project_slug" => "other",
+                 "linear_organization_slug" => "marko-la",
+                 "linear_filter_by" => "project",
+                 "linear_label_name" => nil,
+                 "github_repo" => "openai/other",
+                 "workspace_root" => "/tmp/other",
+                 "env_vars" => nil,
+                 "created_at" => DateTime.to_iso8601(now),
+                 "updated_at" => DateTime.to_iso8601(now)
+               },
                %{
                  "id" => project.id,
                  "name" => "Symphony",
@@ -899,6 +946,26 @@ defmodule SymphonyElixir.ExtensionsTest do
            }
 
     assert json_response(get(build_conn(), "/api/v1/sessions?issue_identifier=MT-HISTORY&limit=5"), 200) == %{
+             "sessions" => [
+               %{
+                 "id" => session.id,
+                 "issue_identifier" => "MT-HISTORY",
+                 "issue_title" => "Historical session",
+                 "session_id" => "session-history",
+                 "status" => "completed",
+                 "started_at" => DateTime.to_iso8601(now),
+                 "ended_at" => DateTime.to_iso8601(now),
+                 "turn_count" => 2,
+                 "input_tokens" => 11,
+                 "output_tokens" => 13,
+                 "total_tokens" => 24,
+                 "worker_host" => "worker-1",
+                 "error" => nil
+               }
+             ]
+           }
+
+    assert json_response(get(build_conn(), "/api/v1/sessions?project_id=#{project.id}&limit=5"), 200) == %{
              "sessions" => [
                %{
                  "id" => session.id,

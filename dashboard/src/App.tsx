@@ -709,9 +709,14 @@ function ToolGroup({ items }: { items: TimelineMessage[] }) {
 }
 
 function HistoryView() {
+  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null)
+  const projectsQuery = useQuery({
+    queryKey: ['projects'],
+    queryFn: getProjects,
+  })
   const sessionsQuery = useQuery({
-    queryKey: ['sessions', 'history'],
-    queryFn: () => getSessions({ limit: 100 }),
+    queryKey: ['sessions', 'history', selectedProjectId],
+    queryFn: () => getSessions({ limit: 100, projectId: selectedProjectId ?? undefined }),
   })
 
   if (sessionsQuery.isPending) {
@@ -723,6 +728,8 @@ function HistoryView() {
   }
 
   const payload = sessionsQuery.data
+  const projects = projectsQuery.data?.projects ?? []
+  const selectedProject = projects.find((project) => project.id === selectedProjectId)
 
   return (
     <div className="space-y-10">
@@ -733,6 +740,47 @@ function HistoryView() {
         </p>
       </div>
 
+      <Card className="space-y-3">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div className="space-y-1">
+            <h2 className="text-sm font-semibold tracking-tight text-th-text-1">Filter history</h2>
+            <p className="text-[13px] text-th-text-3">
+              Narrow completed sessions to a single configured project.
+            </p>
+          </div>
+
+          <div className="w-full md:max-w-xs">
+            <Field label="Project">
+              <select
+                className="w-full rounded-lg border border-th-border bg-th-inset px-3.5 py-2.5 text-sm text-th-text-1 outline-none transition focus:border-th-accent focus:ring-1 focus:ring-th-accent/30"
+                onChange={(event) => {
+                  const value = event.target.value
+                  setSelectedProjectId(value === '' ? null : Number(value))
+                }}
+                value={selectedProjectId ?? ''}
+              >
+                <option value="">All projects</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+        </div>
+
+        {projectsQuery.isPending ? (
+          <p className="text-xs text-th-text-4">Loading available projects…</p>
+        ) : null}
+
+        {projectsQuery.isError ? (
+          <p className="text-xs text-th-text-4">
+            Project list unavailable. Showing all history until project data loads again.
+          </p>
+        ) : null}
+      </Card>
+
       {payload.sessions.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-24 text-center">
           <div className="flex h-10 w-10 items-center justify-center rounded-full bg-th-muted">
@@ -740,9 +788,11 @@ function HistoryView() {
               <path d="M9 12h6M9 16h6M5 8h14M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" strokeLinecap="round" />
             </svg>
           </div>
-          <p className="mt-4 text-sm font-medium text-th-text-2">No sessions yet</p>
+          <p className="mt-4 text-sm font-medium text-th-text-2">
+            {selectedProject ? `No sessions for ${selectedProject.name} yet` : 'No sessions yet'}
+          </p>
           <p className="mt-1 text-[13px] text-th-text-4">
-            Completed sessions will appear here.
+            {selectedProject ? 'Try another project or switch back to all history.' : 'Completed sessions will appear here.'}
           </p>
         </div>
       ) : null}
