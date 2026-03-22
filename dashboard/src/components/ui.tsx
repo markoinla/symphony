@@ -4,7 +4,7 @@ import type { ComponentProps } from 'react'
 import { cn } from '../lib/utils'
 
 const buttonVariants = cva(
-  'inline-flex items-center justify-center gap-2 rounded-lg border text-sm font-medium transition-colors duration-150 disabled:pointer-events-none disabled:opacity-40',
+  'inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-lg border text-sm font-medium transition-colors duration-150 disabled:pointer-events-none disabled:opacity-40',
   {
     variants: {
       variant: {
@@ -30,10 +30,11 @@ const buttonVariants = cva(
 
 export function Button({
   className,
+  size,
   variant,
   ...props
 }: ComponentProps<'button'> & VariantProps<typeof buttonVariants>) {
-  return <button className={cn(buttonVariants({ variant }), className)} {...props} />
+  return <button className={cn(buttonVariants({ size, variant }), className)} {...props} />
 }
 
 const badgeVariants = cva(
