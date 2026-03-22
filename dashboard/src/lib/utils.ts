@@ -76,6 +76,53 @@ export function formatClock(timestamp: string | null | undefined) {
   }).format(value)
 }
 
+/**
+ * Estimate cost using Sonnet pricing: $3/MTok input, $15/MTok output.
+ */
+export function estimateCost(inputTokens: number, outputTokens: number) {
+  return (inputTokens * 3 + outputTokens * 15) / 1_000_000
+}
+
+export function formatCost(dollars: number) {
+  if (dollars < 0.01) {
+    return '<$0.01'
+  }
+
+  return `$${dollars.toFixed(2)}`
+}
+
+/**
+ * Sum individual session runtimes (in seconds), avoiding counting gaps between retries.
+ */
+export function sumSessionRuntimeSeconds(
+  sessions: Array<{ started_at: string | null; ended_at: string | null; live: boolean }>,
+  now: number,
+) {
+  let total = 0
+
+  for (const session of sessions) {
+    if (!session.started_at) {
+      continue
+    }
+
+    const start = new Date(session.started_at).getTime()
+
+    if (Number.isNaN(start)) {
+      continue
+    }
+
+    const end = session.ended_at ? new Date(session.ended_at).getTime() : session.live ? now : start
+
+    if (Number.isNaN(end)) {
+      continue
+    }
+
+    total += Math.max(end - start, 0) / 1000
+  }
+
+  return total
+}
+
 export function groupConsecutiveByType<T extends { type: string }>(items: T[], type: string) {
   type Group = { type: string; items: T[] }
   const groups: Array<T | Group> = []
