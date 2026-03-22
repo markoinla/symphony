@@ -349,7 +349,8 @@ function DashboardView() {
     if (!recentSessionsQuery.data) return []
     const cutoff = now - 24 * 60 * 60 * 1000
     return recentSessionsQuery.data.sessions.filter((session) => {
-      const ts = session.started_at ?? session.ended_at
+      if (session.status === 'running') return false
+      const ts = session.ended_at ?? session.started_at
       return ts && new Date(ts).getTime() >= cutoff
     })
   }, [recentSessionsQuery.data, now])
