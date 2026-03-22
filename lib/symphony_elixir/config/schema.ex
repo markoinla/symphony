@@ -283,6 +283,24 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule LinearAgent do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:enabled, :boolean, default: false)
+      field(:webhook_signing_secret, :string)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:enabled, :webhook_signing_secret], empty_values: [])
+    end
+  end
+
   defmodule Observability do
     @moduledoc false
     use Ecto.Schema
@@ -333,6 +351,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
     embeds_one(:claude, Claude, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:linear_agent, LinearAgent, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
   end
@@ -427,6 +446,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:codex, with: &Codex.changeset/2)
     |> cast_embed(:claude, with: &Claude.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
+    |> cast_embed(:linear_agent, with: &LinearAgent.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
   end
@@ -449,7 +469,16 @@ defmodule SymphonyElixir.Config.Schema do
         turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)
     }
 
-    %{settings | tracker: tracker, workspace: workspace, codex: codex}
+    linear_agent = %{
+      settings.linear_agent
+      | webhook_signing_secret:
+          resolve_secret_setting(
+            settings.linear_agent.webhook_signing_secret,
+            System.get_env("LINEAR_WEBHOOK_SIGNING_SECRET")
+          )
+    }
+
+    %{settings | tracker: tracker, workspace: workspace, codex: codex, linear_agent: linear_agent}
   end
 
   defp normalize_keys(value) when is_map(value) do
