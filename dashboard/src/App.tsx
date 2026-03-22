@@ -32,6 +32,7 @@ import {
   mergeTimelineMessage,
   type MessagesPayload,
   type Project,
+  type Setting,
   type SessionsPayload,
   type TimelineMessage,
   type TimelineSession,
@@ -77,6 +78,12 @@ type SessionEntry =
     }
 
 type ProjectDraft = ReturnType<typeof emptyProject>
+type AgentSettingDefinition = {
+  key: 'agent.max_concurrent_agents' | 'agent.max_turns'
+  label: string
+  description: string
+  defaultValue: number
+}
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -86,6 +93,21 @@ const queryClient = new QueryClient({
     },
   },
 })
+
+const agentSettingDefinitions: AgentSettingDefinition[] = [
+  {
+    key: 'agent.max_concurrent_agents',
+    label: 'Number of agents',
+    description: 'Limits how many issues Symphony can run at the same time.',
+    defaultValue: 10,
+  },
+  {
+    key: 'agent.max_turns',
+    label: 'Max turns',
+    description: 'Caps how many Codex turns a single issue can use before stopping.',
+    defaultValue: 20,
+  },
+]
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -1150,6 +1172,175 @@ function LinearApiKeyCard() {
   )
 }
 
+function AgentSettingsCard({
+  error,
+  isPending,
+  settings,
+}: {
+  error: string | null
+  isPending: boolean
+  settings: Setting[] | undefined
+}) {
+  const queryClient = useQueryClient()
+  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [feedback, setFeedback] = useState<string | null>(null)
+
+  const saveMutation = useMutation({
+    mutationFn: ({ key, value }: { key: string; value: string }) => {
+      const trimmed = value.trim()
+
+      if (!isPositiveInteger(trimmed)) {
+        throw new Error('Enter a whole number greater than 0.')
+      }
+
+      return upsertSetting(key, trimmed)
+    },
+    onSuccess: async (_result, variables) => {
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setDrafts((current) => ({ ...current, [variables.key]: variables.value }))
+      setFeedback(`${agentSettingLabel(variables.key)} saved.`)
+    },
+    onError: (error: unknown) => {
+      setFeedback(formatQueryError(error))
+    },
+  })
+
+  const removeMutation = useMutation({
+    mutationFn: async (key: string) => {
+      await deleteSetting(key)
+      return key
+    },
+    onSuccess: async (key) => {
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setDrafts((current) => ({
+        ...current,
+        [key]: String(agentSettingDefaultValue(key)),
+      }))
+      setFeedback(`${agentSettingLabel(key)} reset to the default value.`)
+    },
+    onError: (error: unknown) => {
+      setFeedback(formatQueryError(error))
+    },
+  })
+
+  return (
+    <Card className="min-w-0 space-y-5">
+      <div>
+        <h2 className="text-lg font-semibold tracking-tight text-th-text-1">Agent settings</h2>
+        <p className="mt-1 text-sm text-th-text-3">
+          Configure the most common orchestration limits without editing raw config keys.
+        </p>
+      </div>
+
+      {feedback ? (
+        <div className="rounded-lg border border-th-border-muted bg-th-muted px-4 py-3 text-sm text-th-text-2">
+          {feedback}
+        </div>
+      ) : null}
+
+      {isPending ? <LoadingPanel title="Loading agent settings" compact /> : null}
+      {error ? <ErrorPanel detail={error} title="Agent settings unavailable" /> : null}
+
+      <div className="space-y-4">
+        {agentSettingDefinitions.map((setting) => {
+          const persistedValue = settingValue(settings, setting.key)
+          const draftValue =
+            drafts[setting.key] ?? persistedValue ?? String(setting.defaultValue)
+          const trimmedDraft = draftValue.trim()
+          const validationMessage =
+            trimmedDraft === '' || isPositiveInteger(trimmedDraft)
+              ? null
+              : 'Enter a whole number greater than 0.'
+
+          return (
+            <div
+              className="rounded-lg border border-th-border bg-th-inset p-4"
+              key={setting.key}
+            >
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr),220px]">
+                <div className="space-y-2">
+                  <div>
+                    <h3 className="text-sm font-semibold text-th-text-1">{setting.label}</h3>
+                    <p className="mt-1 text-sm text-th-text-3">{setting.description}</p>
+                  </div>
+
+                  <p className="text-xs leading-5 text-th-text-4">
+                    {persistedValue === null
+                      ? `Currently using the default value of ${setting.defaultValue}. Save a value to override it.`
+                      : `Saved override: ${persistedValue}. Use default to remove the override and fall back to ${setting.defaultValue}.`}
+                  </p>
+
+                  {validationMessage ? (
+                    <p className="text-xs leading-5 text-red-500 dark:text-red-400">
+                      {validationMessage}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="space-y-3">
+                  <Field label={setting.label}>
+                    <Input
+                      inputMode="numeric"
+                      min={1}
+                      onChange={(event) => {
+                        const nextValue = event.target.value
+                        setDrafts((current) => ({ ...current, [setting.key]: nextValue }))
+                        setFeedback(null)
+                      }}
+                      step={1}
+                      type="number"
+                      value={draftValue}
+                    />
+                  </Field>
+
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Button
+                      className="w-full sm:w-auto"
+                      disabled={
+                        isPending ||
+                        error !== null ||
+                        saveMutation.isPending ||
+                        removeMutation.isPending ||
+                        validationMessage !== null ||
+                        trimmedDraft === ''
+                      }
+                      onClick={() => {
+                        setFeedback(null)
+                        void saveMutation.mutateAsync({ key: setting.key, value: trimmedDraft })
+                      }}
+                      type="button"
+                    >
+                      Save
+                    </Button>
+                    <Button
+                      className="w-full sm:w-auto"
+                      disabled={
+                        isPending ||
+                        error !== null ||
+                        saveMutation.isPending ||
+                        removeMutation.isPending ||
+                        persistedValue === null
+                      }
+                      onClick={() => {
+                        setFeedback(null)
+                        void removeMutation.mutateAsync(setting.key)
+                      }}
+                      type="button"
+                      variant="secondary"
+                    >
+                      Use default
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </Card>
+  )
+}
+
 function SettingsView() {
   const queryClient = useQueryClient()
   const settingsQuery = useQuery({
@@ -1192,129 +1383,134 @@ function SettingsView() {
 
   return (
     <div className="space-y-6">
-    <LinearApiKeyCard />
-    <div className="grid gap-6 xl:grid-cols-[0.9fr,1.1fr]">
-      <Card className="min-w-0 space-y-5">
-        <div>
-          <h2 className="text-lg font-semibold tracking-tight text-th-text-1">Settings</h2>
-          <p className="mt-1 text-sm text-th-text-3">
-            Manage global key-value settings used to build the workflow config overlay.
-          </p>
-        </div>
-
-        {feedback ? (
-          <div className="rounded-lg border border-th-border-muted bg-th-muted px-4 py-3 text-sm text-th-text-2">
-            {feedback}
+      <LinearApiKeyCard />
+      <AgentSettingsCard
+        error={settingsQuery.isError ? formatQueryError(settingsQuery.error) : null}
+        isPending={settingsQuery.isPending}
+        settings={settingsQuery.data?.settings}
+      />
+      <div className="grid gap-6 xl:grid-cols-[0.9fr,1.1fr]">
+        <Card className="min-w-0 space-y-5">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight text-th-text-1">Settings</h2>
+            <p className="mt-1 text-sm text-th-text-3">
+              Manage global key-value settings used to build the workflow config overlay.
+            </p>
           </div>
-        ) : null}
 
-        <form
-          className="grid gap-4"
-          onSubmit={(event) => {
-            event.preventDefault()
-            setFeedback(null)
-            void saveMutation.mutateAsync({ key: keyValue.trim(), value: settingValue })
-          }}
-        >
-          <Field label="Key">
-            <Input
-              onChange={(event) => setKeyValue(event.target.value)}
-              placeholder="workspace.root"
-              required
-              value={keyValue}
-            />
-          </Field>
-          <Field label="Value">
-            <Textarea
-              onChange={(event) => setSettingValue(event.target.value)}
-              placeholder="~/code/symphony-workspaces"
-              required
-              value={settingValue}
-            />
-          </Field>
+          {feedback ? (
+            <div className="rounded-lg border border-th-border-muted bg-th-muted px-4 py-3 text-sm text-th-text-2">
+              {feedback}
+            </div>
+          ) : null}
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-            <Button className="w-full sm:w-auto" disabled={saveMutation.isPending} type="submit">
-              {editingKey === null ? 'Save setting' : 'Update setting'}
-            </Button>
-            {editingKey !== null ? (
-              <Button
-                className="w-full sm:w-auto"
-                onClick={() => {
-                  setEditingKey(null)
-                  setKeyValue('')
-                  setSettingValue('')
-                  setFeedback(null)
-                }}
-                type="button"
-                variant="secondary"
-              >
-                Cancel edit
+          <form
+            className="grid gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              setFeedback(null)
+              void saveMutation.mutateAsync({ key: keyValue.trim(), value: settingValue })
+            }}
+          >
+            <Field label="Key">
+              <Input
+                onChange={(event) => setKeyValue(event.target.value)}
+                placeholder="workspace.root"
+                required
+                value={keyValue}
+              />
+            </Field>
+            <Field label="Value">
+              <Textarea
+                onChange={(event) => setSettingValue(event.target.value)}
+                placeholder="~/code/symphony-workspaces"
+                required
+                value={settingValue}
+              />
+            </Field>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
+              <Button className="w-full sm:w-auto" disabled={saveMutation.isPending} type="submit">
+                {editingKey === null ? 'Save setting' : 'Update setting'}
               </Button>
-            ) : null}
+              {editingKey !== null ? (
+                <Button
+                  className="w-full sm:w-auto"
+                  onClick={() => {
+                    setEditingKey(null)
+                    setKeyValue('')
+                    setSettingValue('')
+                    setFeedback(null)
+                  }}
+                  type="button"
+                  variant="secondary"
+                >
+                  Cancel edit
+                </Button>
+              ) : null}
+            </div>
+          </form>
+        </Card>
+
+        <Card className="min-w-0 space-y-4">
+          <div>
+            <h3 className="text-base font-semibold tracking-tight text-th-text-1">Stored settings</h3>
+            <p className="mt-1 text-sm text-th-text-3">
+              Click edit to reuse an existing key without retyping it.
+            </p>
           </div>
-        </form>
-      </Card>
 
-      <Card className="min-w-0 space-y-4">
-        <div>
-          <h3 className="text-base font-semibold tracking-tight text-th-text-1">Stored settings</h3>
-          <p className="mt-1 text-sm text-th-text-3">
-            Click edit to reuse an existing key without retyping it.
-          </p>
-        </div>
+          {settingsQuery.isPending ? <LoadingPanel title="Loading settings" compact /> : null}
+          {settingsQuery.isError ? (
+            <ErrorPanel detail={formatQueryError(settingsQuery.error)} title="Settings unavailable" />
+          ) : null}
 
-        {settingsQuery.isPending ? <LoadingPanel title="Loading settings" compact /> : null}
-        {settingsQuery.isError ? (
-          <ErrorPanel detail={formatQueryError(settingsQuery.error)} title="Settings unavailable" />
-        ) : null}
-
-        <div className="space-y-2">
-          {settingsQuery.data?.settings.map((setting: { key: string; value: string }) => (
-            <div
-              className="overflow-hidden rounded-lg border border-th-border bg-th-inset p-4"
-              key={setting.key}
-            >
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold text-th-text-1">{setting.key}</div>
-                  <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-th-text-3">
-                    {setting.value}
-                  </pre>
-                </div>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Button
-                    className="w-full sm:w-auto"
-                    onClick={() => {
-                      setEditingKey(setting.key)
-                      setKeyValue(setting.key)
-                      setSettingValue(setting.value)
-                      setFeedback(null)
-                    }}
-                    type="button"
-                    variant="secondary"
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    className="w-full sm:w-auto"
-                    disabled={removeMutation.isPending}
-                    onClick={() => {
-                      setFeedback(null)
-                      void removeMutation.mutateAsync(setting.key)
-                    }}
-                    type="button"
-                    variant="danger"
-                  >
-                    Delete
-                  </Button>
+          <div className="space-y-2">
+            {settingsQuery.data?.settings.map((setting: { key: string; value: string }) => (
+              <div
+                className="overflow-hidden rounded-lg border border-th-border bg-th-inset p-4"
+                key={setting.key}
+              >
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold text-th-text-1">{setting.key}</div>
+                    <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-th-text-3">
+                      {setting.value}
+                    </pre>
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Button
+                      className="w-full sm:w-auto"
+                      onClick={() => {
+                        setEditingKey(setting.key)
+                        setKeyValue(setting.key)
+                        setSettingValue(setting.value)
+                        setFeedback(null)
+                      }}
+                      type="button"
+                      variant="secondary"
+                    >
+                      Edit
+                    </Button>
+                    <Button
+                      className="w-full sm:w-auto"
+                      disabled={removeMutation.isPending}
+                      onClick={() => {
+                        setFeedback(null)
+                        void removeMutation.mutateAsync(setting.key)
+                      }}
+                      type="button"
+                      variant="danger"
+                    >
+                      Delete
+                    </Button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
-      </Card>
-    </div>
+            ))}
+          </div>
+        </Card>
+      </div>
     </div>
   )
 }
@@ -1360,6 +1556,26 @@ function ErrorPanel({ detail, title }: { detail: string; title: string }) {
       <p className="mt-1.5 whitespace-pre-wrap break-words text-[13px] leading-5 text-red-500/70 dark:text-red-400/60">{detail}</p>
     </div>
   )
+}
+
+function settingValue(settings: Setting[] | undefined, key: string) {
+  return settings?.find((setting) => setting.key === key)?.value ?? null
+}
+
+function agentSettingLabel(key: string) {
+  return (
+    agentSettingDefinitions.find((setting) => setting.key === key)?.label ?? key
+  )
+}
+
+function agentSettingDefaultValue(key: string) {
+  return (
+    agentSettingDefinitions.find((setting) => setting.key === key)?.defaultValue ?? 1
+  )
+}
+
+function isPositiveInteger(value: string) {
+  return /^[1-9]\d*$/.test(value)
 }
 
 function useNow(intervalMs = 1_000) {
