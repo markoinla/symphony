@@ -15,10 +15,13 @@ hooks:
   timeout_ms: 300000
   after_create: |
     git clone --depth 1 "https://github.com/$GITHUB_REPO" .
+engine: claude
 agent:
   max_concurrent_agents: 10
   max_turns: 5
   max_continuations: 0
+claude:
+  permission_mode: bypassPermissions
 codex:
   command: codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --config model_reasoning_summary=detailed app-server
   approval_policy: never
