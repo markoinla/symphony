@@ -822,6 +822,11 @@ defmodule SymphonyElixir.ExtensionsTest do
   test "projects, settings, and history endpoints serve spa data contracts" do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
+    write_workflow_file!(Workflow.workflow_file_path(),
+      max_concurrent_agents: 5,
+      max_turns: 22
+    )
+
     {:ok, project} =
       Store.create_project(%{
         name: "Symphony",
@@ -896,6 +901,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert project_id == project.id
 
     assert json_response(get(build_conn(), "/api/v1/settings"), 200) == %{
+             "agent_defaults" => %{"max_concurrent_agents" => 5, "max_turns" => 22},
              "settings" => [%{"key" => "LINEAR_API_KEY", "value" => "secret"}]
            }
 

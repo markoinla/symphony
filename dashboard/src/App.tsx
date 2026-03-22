@@ -30,6 +30,7 @@ import {
   getSettings,
   getState,
   mergeTimelineMessage,
+  type AgentSettingsDefaults,
   type MessagesPayload,
   type Project,
   type Setting,
@@ -82,7 +83,7 @@ type AgentSettingDefinition = {
   key: 'agent.max_concurrent_agents' | 'agent.max_turns'
   label: string
   description: string
-  defaultValue: number
+  defaultValueKey: keyof AgentSettingsDefaults
 }
 
 const queryClient = new QueryClient({
@@ -99,15 +100,20 @@ const agentSettingDefinitions: AgentSettingDefinition[] = [
     key: 'agent.max_concurrent_agents',
     label: 'Number of agents',
     description: 'Limits how many issues Symphony can run at the same time.',
-    defaultValue: 10,
+    defaultValueKey: 'max_concurrent_agents',
   },
   {
     key: 'agent.max_turns',
     label: 'Max turns',
     description: 'Caps how many Codex turns a single issue can use before stopping.',
-    defaultValue: 20,
+    defaultValueKey: 'max_turns',
   },
 ]
+
+const fallbackAgentSettings: AgentSettingsDefaults = {
+  max_concurrent_agents: 10,
+  max_turns: 20,
+}
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -1173,17 +1179,25 @@ function LinearApiKeyCard() {
 }
 
 function AgentSettingsCard({
+  agentDefaults,
   error,
   isPending,
   settings,
 }: {
+  agentDefaults: AgentSettingsDefaults | undefined
   error: string | null
   isPending: boolean
   settings: Setting[] | undefined
 }) {
   const queryClient = useQueryClient()
-  const [drafts, setDrafts] = useState<Record<string, string>>({})
+  const [drafts, setDrafts] = useState<Record<string, string>>(() =>
+    buildAgentSettingDrafts(settings, agentDefaults),
+  )
   const [feedback, setFeedback] = useState<string | null>(null)
+
+  useEffect(() => {
+    setDrafts(buildAgentSettingDrafts(settings, agentDefaults))
+  }, [agentDefaults, settings])
 
   const saveMutation = useMutation({
     mutationFn: ({ key, value }: { key: string; value: string }) => {
@@ -1197,7 +1211,6 @@ function AgentSettingsCard({
     },
     onSuccess: async (_result, variables) => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      setDrafts((current) => ({ ...current, [variables.key]: variables.value }))
       setFeedback(`${agentSettingLabel(variables.key)} saved.`)
     },
     onError: (error: unknown) => {
@@ -1212,10 +1225,6 @@ function AgentSettingsCard({
     },
     onSuccess: async (key) => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      setDrafts((current) => ({
-        ...current,
-        [key]: String(agentSettingDefaultValue(key)),
-      }))
       setFeedback(`${agentSettingLabel(key)} reset to the default value.`)
     },
     onError: (error: unknown) => {
@@ -1244,8 +1253,8 @@ function AgentSettingsCard({
       <div className="space-y-4">
         {agentSettingDefinitions.map((setting) => {
           const persistedValue = settingValue(settings, setting.key)
-          const draftValue =
-            drafts[setting.key] ?? persistedValue ?? String(setting.defaultValue)
+          const defaultValue = agentSettingDefaultValue(setting.key, agentDefaults)
+          const draftValue = drafts[setting.key] ?? String(defaultValue)
           const trimmedDraft = draftValue.trim()
           const validationMessage =
             trimmedDraft === '' || isPositiveInteger(trimmedDraft)
@@ -1266,8 +1275,8 @@ function AgentSettingsCard({
 
                   <p className="text-xs leading-5 text-th-text-4">
                     {persistedValue === null
-                      ? `Currently using the default value of ${setting.defaultValue}. Save a value to override it.`
-                      : `Saved override: ${persistedValue}. Use default to remove the override and fall back to ${setting.defaultValue}.`}
+                      ? `Currently using the default value of ${defaultValue}. Save a value to override it.`
+                      : `Saved override: ${persistedValue}. Use default to remove the override and fall back to ${defaultValue}.`}
                   </p>
 
                   {validationMessage ? (
@@ -1385,6 +1394,7 @@ function SettingsView() {
     <div className="space-y-6">
       <LinearApiKeyCard />
       <AgentSettingsCard
+        agentDefaults={settingsQuery.data?.agent_defaults}
         error={settingsQuery.isError ? formatQueryError(settingsQuery.error) : null}
         isPending={settingsQuery.isPending}
         settings={settingsQuery.data?.settings}
@@ -1568,9 +1578,25 @@ function agentSettingLabel(key: string) {
   )
 }
 
-function agentSettingDefaultValue(key: string) {
-  return (
-    agentSettingDefinitions.find((setting) => setting.key === key)?.defaultValue ?? 1
+function agentSettingDefaultValue(key: string, agentDefaults?: AgentSettingsDefaults) {
+  const definition = agentSettingDefinitions.find((setting) => setting.key === key)
+
+  if (!definition) {
+    return 1
+  }
+
+  return (agentDefaults ?? fallbackAgentSettings)[definition.defaultValueKey]
+}
+
+function buildAgentSettingDrafts(
+  settings: Setting[] | undefined,
+  agentDefaults: AgentSettingsDefaults | undefined,
+) {
+  return Object.fromEntries(
+    agentSettingDefinitions.map((setting) => [
+      setting.key,
+      settingValue(settings, setting.key) ?? String(agentSettingDefaultValue(setting.key, agentDefaults)),
+    ]),
   )
 }
 
