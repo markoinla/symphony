@@ -3,8 +3,8 @@ defmodule SymphonyElixir.Claude.CommandBuilder do
   Builds the Claude Code CLI command string from config.
   """
 
-  @spec build(map(), Path.t()) :: String.t()
-  def build(claude_config, mcp_config_path) do
+  @spec build(map(), Path.t(), String.t()) :: String.t()
+  def build(claude_config, mcp_config_path, prompt) do
     parts =
       [
         claude_config.command || "claude",
@@ -23,7 +23,10 @@ defmodule SymphonyElixir.Claude.CommandBuilder do
       |> maybe_append_list("--allowed-tools", claude_config.allowed_tools)
       |> maybe_append_list("--disallowed-tools", claude_config.disallowed_tools)
 
-    Enum.join(parts, " ")
+    claude_cmd = Enum.join(parts, " ")
+
+    # Pipe the prompt via stdin using a heredoc so it gets EOF after the prompt
+    "cat <<'SYMPHONY_PROMPT_EOF' | #{claude_cmd}\n#{prompt}\nSYMPHONY_PROMPT_EOF"
   end
 
   defp maybe_append(parts, _flag, nil), do: parts

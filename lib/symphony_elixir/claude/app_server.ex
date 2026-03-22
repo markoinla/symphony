@@ -48,11 +48,9 @@ defmodule SymphonyElixir.Claude.AppServer do
     timeout_ms = claude_config.turn_timeout_ms
 
     with {:ok, mcp_config_path} <- write_mcp_config(workspace),
-         command <- CommandBuilder.build(claude_config, mcp_config_path),
+         command <- CommandBuilder.build(claude_config, mcp_config_path, prompt),
          {:ok, port} <- start_port(command, workspace, session.worker_host) do
       try do
-        send_prompt(port, prompt)
-        close_stdin(port)
         await_completion(port, on_message, timeout_ms)
       after
         safe_close_port(port)
@@ -87,26 +85,6 @@ defmodule SymphonyElixir.Claude.AppServer do
 
   defp start_port(_command, _workspace, worker_host) do
     {:error, {:ssh_not_supported, "Claude engine does not yet support SSH worker hosts: #{worker_host}"}}
-  end
-
-  defp send_prompt(port, prompt) do
-    message =
-      Jason.encode!(%{
-        "type" => "user",
-        "message" => %{
-          "role" => "user",
-          "content" => prompt
-        }
-      })
-
-    Port.command(port, message <> "\n")
-  end
-
-  defp close_stdin(port) do
-    Port.command(port, "")
-  rescue
-    # Port may already be closed
-    ArgumentError -> :ok
   end
 
   defp safe_close_port(port) do
