@@ -155,17 +155,23 @@ function RootLayout() {
     select: (state) => state.location.pathname,
   })
   const { dark, toggle } = useTheme()
-  const [mobileNavOpen, setMobileNavOpen] = useState(false)
+  const [mobileNavState, setMobileNavState] = useState({
+    open: false,
+    path: pathname,
+  })
+  const mobileNavOpen = mobileNavState.path === pathname && mobileNavState.open
 
   return (
     <div className="min-h-screen bg-th-bg text-th-text-2 transition-colors duration-200">
-      <div className="mx-auto flex min-h-screen max-w-[1120px] flex-col px-4 sm:px-6 lg:px-10">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1120px] flex-col px-4 sm:px-6 lg:px-10">
         <Collapsible.Root
           className="border-b border-th-border"
-          onOpenChange={setMobileNavOpen}
+          onOpenChange={(open) => {
+            setMobileNavState({ open, path: pathname })
+          }}
           open={mobileNavOpen}
         >
-          <header className="flex min-h-14 items-center justify-between gap-3 py-3 sm:py-0">
+          <header className="flex min-h-14 items-center justify-between gap-3 py-3 md:py-0">
             <div className="flex min-w-0 items-center gap-3 sm:gap-8">
               <Link to="/" className="flex shrink-0 items-center gap-2.5">
                 <div className="flex h-6 w-6 items-center justify-center rounded-md bg-th-accent">
@@ -176,7 +182,7 @@ function RootLayout() {
                 <span className="text-sm font-semibold text-th-text-1">Symphony</span>
               </Link>
 
-              <nav className="hidden min-w-0 items-center gap-0.5 sm:flex">
+              <nav className="hidden min-w-0 items-center gap-0.5 md:flex">
                 <HeaderLink active={pathname === '/'} label="Dashboard" to="/" />
                 <HeaderLink active={pathname.startsWith('/history')} label="History" to="/history" />
                 <HeaderLink active={pathname.startsWith('/projects')} label="Projects" to="/projects" />
@@ -208,11 +214,11 @@ function RootLayout() {
               <Collapsible.Trigger asChild>
                 <Button
                   aria-label={mobileNavOpen ? 'Close navigation menu' : 'Open navigation menu'}
-                className="sm:hidden"
-                size="icon"
-                type="button"
-                variant="secondary"
-              >
+                  className="md:hidden"
+                  size="icon"
+                  type="button"
+                  variant="secondary"
+                >
                   {mobileNavOpen ? (
                     <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
                       <path d="M18 6 6 18M6 6l12 12" strokeLinecap="round" />
@@ -227,12 +233,12 @@ function RootLayout() {
             </div>
           </header>
 
-          <Collapsible.Content className="border-t border-th-border/70 pb-3 sm:hidden">
+          <Collapsible.Content className="border-t border-th-border/70 pb-3 md:hidden">
             <nav className="grid gap-1 pt-3">
-              <HeaderLink active={pathname === '/'} label="Dashboard" mobile onNavigate={() => setMobileNavOpen(false)} to="/" />
-              <HeaderLink active={pathname.startsWith('/history')} label="History" mobile onNavigate={() => setMobileNavOpen(false)} to="/history" />
-              <HeaderLink active={pathname.startsWith('/projects')} label="Projects" mobile onNavigate={() => setMobileNavOpen(false)} to="/projects" />
-              <HeaderLink active={pathname.startsWith('/settings')} label="Settings" mobile onNavigate={() => setMobileNavOpen(false)} to="/settings" />
+              <HeaderLink active={pathname === '/'} label="Dashboard" mobile onNavigate={() => setMobileNavState((current) => ({ ...current, open: false }))} to="/" />
+              <HeaderLink active={pathname.startsWith('/history')} label="History" mobile onNavigate={() => setMobileNavState((current) => ({ ...current, open: false }))} to="/history" />
+              <HeaderLink active={pathname.startsWith('/projects')} label="Projects" mobile onNavigate={() => setMobileNavState((current) => ({ ...current, open: false }))} to="/projects" />
+              <HeaderLink active={pathname.startsWith('/settings')} label="Settings" mobile onNavigate={() => setMobileNavState((current) => ({ ...current, open: false }))} to="/settings" />
             </nav>
           </Collapsible.Content>
         </Collapsible.Root>
@@ -421,6 +427,16 @@ function SessionView() {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [followTail, setFollowTail] = useState(true)
   const [timeline, setTimeline] = useState<MessagesPayload | null>(null)
+  const syncFollowTail = useCallback(() => {
+    const element = scrollRef.current
+
+    if (!element) {
+      return
+    }
+
+    const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
+    setFollowTail(distanceFromBottom < 96)
+  }, [])
 
   const issueQuery = useQuery({
     queryKey: ['issue', issueIdentifier],
@@ -458,6 +474,21 @@ function SessionView() {
   )
 
   useEffect(() => {
+    const element = scrollRef.current
+
+    if (!element) {
+      return
+    }
+
+    syncFollowTail()
+    element.addEventListener('scroll', syncFollowTail, { passive: true })
+
+    return () => {
+      element.removeEventListener('scroll', syncFollowTail)
+    }
+  }, [currentTimeline, syncFollowTail])
+
+  useEffect(() => {
     if (!currentFollowTail) {
       return
     }
@@ -487,7 +518,7 @@ function SessionView() {
   }
 
   return (
-    <div className="relative flex h-[calc(100vh-7.5rem)] min-h-[32rem] flex-col overflow-hidden rounded-2xl border border-th-border bg-th-surface">
+    <div className="relative flex h-[calc(100dvh-7.5rem)] min-h-[32rem] flex-col overflow-hidden rounded-2xl border border-th-border bg-th-surface">
       <div className="flex flex-col gap-3 border-b border-th-border px-3 py-3 sm:px-4">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <Link
@@ -510,7 +541,7 @@ function SessionView() {
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="text-sm font-semibold text-th-text-1">{data.issue_identifier}</span>
             {data.issue_title ? (
-              <span className="min-w-0 truncate text-[13px] text-th-text-3">{data.issue_title}</span>
+              <span className="min-w-0 break-words text-[13px] text-th-text-3 sm:truncate">{data.issue_title}</span>
             ) : null}
           </div>
         </div>
@@ -518,12 +549,7 @@ function SessionView() {
 
       {/* Chat message stream */}
       <div
-        className="flex-1 overflow-y-auto px-3 py-5 sm:px-4 sm:py-6"
-        onScroll={(event) => {
-          const element = event.currentTarget
-          const distanceFromBottom = element.scrollHeight - element.scrollTop - element.clientHeight
-          setFollowTail(distanceFromBottom < 96)
-        }}
+        className="flex-1 overflow-y-auto px-3 pb-24 pt-5 sm:px-4 sm:py-6"
         ref={scrollRef}
       >
         <div className="mx-auto max-w-3xl space-y-1">
@@ -540,7 +566,7 @@ function SessionView() {
       </div>
 
       {!currentFollowTail ? (
-        <div className="pointer-events-none absolute inset-x-0 bottom-4 z-10 flex justify-center px-4">
+        <div className="pointer-events-none fixed inset-x-0 bottom-4 z-20 flex justify-center px-4 sm:bottom-6">
           <Button
             className="pointer-events-auto rounded-full border-th-border bg-th-surface/95 px-4 shadow-lg shadow-black/10 backdrop-blur dark:shadow-black/30"
             onClick={() => {
@@ -548,7 +574,7 @@ function SessionView() {
               const element = scrollRef.current
 
               if (element) {
-                element.scrollTop = element.scrollHeight
+                element.scrollTo({ top: element.scrollHeight, behavior: 'smooth' })
               }
             }}
             size="sm"
@@ -668,7 +694,7 @@ function ToolGroup({ items }: { items: TimelineMessage[] }) {
           return (
             <div key={String(item.id)} className="rounded-md bg-th-muted/50 px-3 py-2">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-sm text-th-text-2">{item.content}</span>
+                <span className="break-words text-sm text-th-text-2">{item.content}</span>
                 <Badge tone={toolTone(metadata.status)}>{String(metadata.status ?? 'unknown')}</Badge>
               </div>
               <div className="mt-1 whitespace-pre-wrap break-words font-mono text-xs leading-5 text-th-text-4">
@@ -1056,7 +1082,7 @@ function LinearApiKeyCard() {
     : null
 
   return (
-    <Card className="space-y-4">
+    <Card className="min-w-0 space-y-4">
       <div>
         <h2 className="text-lg font-semibold tracking-tight text-th-text-1">Linear API Key</h2>
         <p className="mt-1 text-sm text-th-text-3">
@@ -1311,7 +1337,7 @@ function NotFoundView() {
 
 function Field({ children, label }: { children: ReactNode; label: string }) {
   return (
-    <label className="grid gap-1.5 text-sm font-medium text-th-text-2">
+    <label className="grid min-w-0 gap-1.5 text-sm font-medium text-th-text-2">
       <span>{label}</span>
       {children}
     </label>
@@ -1331,7 +1357,7 @@ function ErrorPanel({ detail, title }: { detail: string; title: string }) {
   return (
     <div className="rounded-lg border border-red-500/15 bg-red-500/5 px-5 py-4">
       <p className="text-sm font-medium text-red-500 dark:text-red-400">{title}</p>
-      <p className="mt-1.5 whitespace-pre-wrap text-[13px] leading-5 text-red-500/70 dark:text-red-400/60">{detail}</p>
+      <p className="mt-1.5 whitespace-pre-wrap break-words text-[13px] leading-5 text-red-500/70 dark:text-red-400/60">{detail}</p>
     </div>
   )
 }
