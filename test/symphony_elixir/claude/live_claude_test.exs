@@ -89,12 +89,12 @@ defmodule SymphonyElixir.Claude.LiveClaudeTest do
           get_in(event, [:message, "method"]) == "claude/assistant_message"
         end)
 
-      assert length(text_events) > 0, "Expected at least one assistant text message"
+      assert text_events != [], "Expected at least one assistant text message"
 
       response_text =
-        text_events
-        |> Enum.map(fn event -> get_in(event, [:message, "params", "content"]) || "" end)
-        |> Enum.join()
+        Enum.map_join(text_events, fn event ->
+          get_in(event, [:message, "params", "content"]) || ""
+        end)
 
       assert response_text =~ "SYMPHONY_TEST_OK",
              "Expected response to contain SYMPHONY_TEST_OK, got: #{String.slice(response_text, 0, 200)}"
@@ -142,7 +142,7 @@ defmodule SymphonyElixir.Claude.LiveClaudeTest do
           get_in(event, [:message, "method"]) == "claude/tool_use"
         end)
 
-      assert length(tool_notifications) > 0, "Expected Claude to use at least one tool, events: #{inspect(event_types)}"
+      assert tool_notifications != [], "Expected Claude to use at least one tool, events: #{inspect(event_types)}"
 
       # Should also have tool_call_completed events (from user message with tool_result)
       assert :tool_call_completed in event_types
