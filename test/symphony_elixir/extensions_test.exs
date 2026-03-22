@@ -705,6 +705,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
   test "phoenix observability api preserves 405, 404, and unavailable behavior" do
     unavailable_orchestrator = Module.concat(__MODULE__, :UnavailableOrchestrator)
+    write_dashboard_assets!()
     start_test_endpoint(orchestrator: unavailable_orchestrator, snapshot_timeout_ms: 5)
 
     assert json_response(post(build_conn(), "/api/v1/state", %{}), 405) ==
@@ -870,6 +871,25 @@ defmodule SymphonyElixir.ExtensionsTest do
         project_id: project.id
       })
 
+    {:ok, legacy_session} =
+      Store.create_session(%{
+        issue_id: "issue-legacy-history",
+        issue_identifier: "MT-LEGACY",
+        issue_title: "Legacy historical session",
+        session_id: "session-legacy-history",
+        status: "completed",
+        started_at: DateTime.add(now, -1, :second),
+        ended_at: DateTime.add(now, -1, :second),
+        turn_count: 1,
+        input_tokens: 3,
+        output_tokens: 4,
+        total_tokens: 7,
+        worker_host: "worker-legacy",
+        workspace_path: "/tmp/symphony/MT-LEGACY",
+        error: nil,
+        project_id: nil
+      })
+
     {:ok, _other_session} =
       Store.create_session(%{
         issue_id: "issue-other-history",
@@ -980,6 +1000,21 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "output_tokens" => 13,
                  "total_tokens" => 24,
                  "worker_host" => "worker-1",
+                 "error" => nil
+               },
+               %{
+                 "id" => legacy_session.id,
+                 "issue_identifier" => "MT-LEGACY",
+                 "issue_title" => "Legacy historical session",
+                 "session_id" => "session-legacy-history",
+                 "status" => "completed",
+                 "started_at" => DateTime.to_iso8601(DateTime.add(now, -1, :second)),
+                 "ended_at" => DateTime.to_iso8601(DateTime.add(now, -1, :second)),
+                 "turn_count" => 1,
+                 "input_tokens" => 3,
+                 "output_tokens" => 4,
+                 "total_tokens" => 7,
+                 "worker_host" => "worker-legacy",
                  "error" => nil
                }
              ]
