@@ -3,7 +3,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   Executes client-side tool calls requested by Codex app-server turns.
   """
 
-  alias SymphonyElixir.{Linear.Client, Linear.Comment, Tracker}
+  alias SymphonyElixir.{AgentSession, Linear.Client, Linear.Comment, Linear.PlanBuilder, Tracker}
 
   @linear_graphql_tool "linear_graphql"
   @linear_create_comment_tool "linear_create_comment"
@@ -124,6 +124,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
 
     with {:ok, issue_id, body} <- normalize_issue_comment_arguments(arguments, :create),
          {:ok, comment_id} <- create_comment.(issue_id, Comment.tag_agent_reply(body)) do
+      maybe_sync_workpad_plan(body, issue_id)
       graphql_response(%{"commentId" => comment_id, "issueId" => issue_id, "success" => true})
     else
       {:error, reason} ->
@@ -134,8 +135,11 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   defp execute_linear_update_comment(arguments, opts) do
     update_comment = Keyword.get(opts, :tracker_update_comment, &Tracker.update_comment/2)
 
+    issue_id = Keyword.get(opts, :issue_id)
+
     with {:ok, comment_id, body} <- normalize_issue_comment_arguments(arguments, :update),
          :ok <- update_comment.(comment_id, body) do
+      if issue_id, do: maybe_sync_workpad_plan(body, issue_id)
       graphql_response(%{"commentId" => comment_id, "success" => true})
     else
       {:error, reason} ->
@@ -369,4 +373,13 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   defp supported_tool_names do
     Enum.map(tool_specs(), & &1["name"])
   end
+
+  defp maybe_sync_workpad_plan(body, issue_id) when is_binary(body) and is_binary(issue_id) do
+    case PlanBuilder.parse_workpad_plan(body) do
+      [] -> :ok
+      steps -> AgentSession.update_plan(issue_id, steps)
+    end
+  end
+
+  defp maybe_sync_workpad_plan(_body, _issue_id), do: :ok
 end

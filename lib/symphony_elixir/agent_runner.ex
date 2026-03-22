@@ -12,6 +12,7 @@ defmodule SymphonyElixir.AgentRunner do
     Config,
     DashboardLinks,
     Linear.Issue,
+    Linear.PlanBuilder,
     PromptBuilder,
     SessionLog,
     Tracker,
@@ -88,6 +89,7 @@ defmodule SymphonyElixir.AgentRunner do
       send_engine_update(recipient, issue, message)
       SessionLog.append(issue_id, session_id, message)
       maybe_emit_agent_activity(issue_id, message)
+      maybe_sync_workpad_plan(issue_id, message)
     end
   end
 
@@ -497,7 +499,33 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp maybe_emit_agent_activity(_issue_id, _message), do: :ok
 
-  defp maybe_update_agent_plan(_issue_id, _step_index, _status), do: :ok
+  # Sync workpad plan to Linear agent session when the agent creates/updates a comment
+  # containing a ### Plan checklist.
+  defp maybe_sync_workpad_plan(issue_id, %{event: :notification} = msg) when is_binary(issue_id) do
+    method = get_in(msg, [:message, "method"])
+
+    body =
+      case method do
+        "claude/tool_use" ->
+          name = get_in(msg, [:message, "params", "name"]) || ""
+
+          if String.contains?(name, "comment") do
+            get_in(msg, [:message, "params", "input", "body"])
+          end
+
+        _ ->
+          nil
+      end
+
+    if is_binary(body) and String.contains?(body, "### Plan") do
+      case PlanBuilder.parse_workpad_plan(body) do
+        [] -> :ok
+        steps -> AgentSession.update_plan(issue_id, steps)
+      end
+    end
+  end
+
+  defp maybe_sync_workpad_plan(_issue_id, _message), do: :ok
 
   defp maybe_finalize_agent_session(%Issue{id: issue_id}, _outcome)
        when is_binary(issue_id) do

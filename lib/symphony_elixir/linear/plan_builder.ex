@@ -41,4 +41,64 @@ defmodule SymphonyElixir.Linear.PlanBuilder do
       end
     end)
   end
+
+  @doc """
+  Parses a workpad comment body and extracts the `### Plan` checklist
+  into Linear Agent plan steps.
+
+  Returns a list of plan steps or an empty list if no plan section is found.
+  """
+  @spec parse_workpad_plan(String.t()) :: [plan_step()]
+  def parse_workpad_plan(body) when is_binary(body) do
+    case extract_plan_section(body) do
+      nil -> []
+      section -> parse_checklist(section)
+    end
+  end
+
+  def parse_workpad_plan(_), do: []
+
+  defp extract_plan_section(body) do
+    case Regex.run(~r/### Plan\s*\n(.*?)(?=\n###|\z)/s, body) do
+      [_, section] -> String.trim(section)
+      _ -> nil
+    end
+  end
+
+  defp parse_checklist(section) do
+    lines =
+      section
+      |> String.split("\n")
+      |> Enum.map(&parse_checklist_line/1)
+      |> Enum.reject(&is_nil/1)
+
+    assign_statuses(lines)
+  end
+
+  defp parse_checklist_line(line) do
+    case Regex.run(~r/^\s*- \[([ xX])\]\s+(.+)$/, line) do
+      [_, check, content] ->
+        checked = check != " "
+        %{content: String.trim(content), checked: checked}
+
+      _ ->
+        nil
+    end
+  end
+
+  defp assign_statuses(items) do
+    {steps, _found_first_unchecked} =
+      Enum.map_reduce(items, false, fn item, found_first_unchecked ->
+        status =
+          cond do
+            item.checked -> "completed"
+            not found_first_unchecked -> "inProgress"
+            true -> "pending"
+          end
+
+        {%{content: item.content, status: status}, found_first_unchecked or not item.checked}
+      end)
+
+    steps
+  end
 end

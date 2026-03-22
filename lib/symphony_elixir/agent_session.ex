@@ -9,7 +9,7 @@ defmodule SymphonyElixir.AgentSession do
   use GenServer
   require Logger
 
-  alias SymphonyElixir.Linear.{ActivityMapper, AgentAPI, PlanBuilder}
+  alias SymphonyElixir.Linear.{ActivityMapper, AgentAPI}
 
   @registry SymphonyElixir.AgentSessionRegistry
   @min_activity_interval_ms 500
@@ -127,6 +127,7 @@ defmodule SymphonyElixir.AgentSession do
     {:ok, state}
   end
 
+  @impl true
   def handle_info({:deferred_activity, content}, state) do
     now = System.monotonic_time(:millisecond)
     do_emit_activity(state.agent_session_id, content)
