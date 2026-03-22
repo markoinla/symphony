@@ -335,9 +335,24 @@ function DashboardView() {
   useDashboardStream(
     () => {
       void queryClient.invalidateQueries({ queryKey: ['state'] })
+      void queryClient.invalidateQueries({ queryKey: ['sessions', 'recent'] })
     },
     true,
   )
+
+  const recentSessionsQuery = useQuery({
+    queryKey: ['sessions', 'recent'],
+    queryFn: () => getSessions({ limit: 50 }),
+  })
+
+  const recentSessions = useMemo(() => {
+    if (!recentSessionsQuery.data) return []
+    const cutoff = now - 24 * 60 * 60 * 1000
+    return recentSessionsQuery.data.sessions.filter((session) => {
+      const ts = session.started_at ?? session.ended_at
+      return ts && new Date(ts).getTime() >= cutoff
+    })
+  }, [recentSessionsQuery.data, now])
 
   if (stateQuery.isPending) {
     return <LoadingPanel title="Loading dashboard" />
@@ -401,6 +416,49 @@ function DashboardView() {
           ))}
         </div>
       ) : null}
+
+      {/* Recent sessions (last 24h) */}
+      <div className="space-y-5">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold tracking-[-0.01em] text-th-text-1">
+              Recent sessions
+            </h2>
+            <p className="mt-1 text-[13px] text-th-text-3">
+              Completed in the last 24 hours.
+            </p>
+          </div>
+
+          <Link
+            className="text-[13px] font-medium text-th-accent transition-colors hover:text-th-text-1"
+            to="/history"
+          >
+            View all history &rarr;
+          </Link>
+        </div>
+
+        {recentSessionsQuery.isPending ? (
+          <div className="py-8 text-center text-sm text-th-text-4">Loading recent sessions…</div>
+        ) : recentSessions.length === 0 ? (
+          <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-th-border py-12 text-center">
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-th-muted">
+              <svg className="h-5 w-5 text-th-text-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                <path d="M9 12h6M9 16h6M5 8h14M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z" strokeLinecap="round" />
+              </svg>
+            </div>
+            <p className="mt-4 text-sm font-medium text-th-text-2">No recent sessions</p>
+            <p className="mt-1 text-[13px] text-th-text-4">
+              Sessions from the last 24 hours will appear here.
+            </p>
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {recentSessions.map((session, index) => (
+              <HistoryCard key={session.id} index={index} session={session} />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
