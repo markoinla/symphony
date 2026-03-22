@@ -64,7 +64,10 @@ Comments (oldest first):
 
 ## Prerequisites
 
-The agent must be able to talk to Linear, either via a configured Linear MCP server or injected `linear_graphql` tool. If neither is available, stop immediately.
+A Linear MCP server is available in every agent session. Use its tools for all Linear
+operations (querying issues, creating/updating comments, managing labels, changing
+issue state). If the tools are not immediately visible, use `ToolSearch` to discover
+them. If no Linear tools are found, stop immediately.
 
 ## Instructions
 
@@ -156,7 +159,7 @@ After posting the triage comment and updating the issue state, stop. Do not take
 
 ## Linear GraphQL reference
 
-Use these exact queries and mutations with the `linear_graphql` tool.
+Use these exact queries and mutations with the Linear MCP tools.
 
 ### Resolve state ID (required before updating state)
 

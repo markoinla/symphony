@@ -62,6 +62,13 @@ Comments (oldest first):
 ---
 {% endif %}
 
+## Prerequisite: Linear MCP tools are available
+
+A Linear MCP server is available in every agent session. Use its tools for all Linear
+operations (querying issues, creating/updating comments, managing labels, changing
+issue state). If the tools are not immediately visible, use `ToolSearch` to discover
+them. If no Linear tools are found, stop immediately.
+
 ## Instructions
 
 This is an unattended enrichment session. You must NOT modify any code or create branches/PRs. Your only outputs are Linear comments and label updates.
@@ -119,7 +126,7 @@ After posting the enrichment comment, swap the `enriching` label to `enriched`:
 2. Find the label ID for "enriched" (create it if it doesn't exist on the team).
 3. Update the issue's labels: remove "enriching", add "enriched", keep all other labels.
 
-Use the `issueUpdate` mutation with the full `labelIds` array (Linear replaces all labels on update, so include every label you want to keep).
+Use the `issueUpdate` mutation with the full `labelIds` array (Linear replaces all labels on update, so include every label you want to keep). Execute these via the Linear MCP tools.
 
 ```graphql
 mutation AddLabel($issueId: String!, $labelIds: [String!]!) {

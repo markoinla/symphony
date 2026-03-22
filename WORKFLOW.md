@@ -107,9 +107,12 @@ Instructions:
 
 Work only in the provided repository copy. Do not touch any other path.
 
-## Prerequisite: Linear MCP or `linear_graphql` tool is available
+## Prerequisite: Linear MCP tools are available
 
-The agent should be able to talk to Linear, either via a configured Linear MCP server or injected `linear_graphql` tool. If none are present, stop and ask the user to configure Linear.
+A Linear MCP server is available in every agent session. Use its tools for all Linear
+operations (querying issues, creating/updating comments, managing labels, changing
+issue state). If the tools are not immediately visible, use `ToolSearch` to discover
+them. If no Linear tools are found, stop and ask the user to check the configuration.
 
 ## Playwright MCP for browser testing
 
@@ -123,7 +126,9 @@ If the project provides test credentials (e.g. in `.env.local` or a `CLAUDE.md` 
 
 ## Linear GraphQL reference
 
-Use these exact queries and mutations with the `linear_graphql` tool. Do not guess field names — copy from this reference. All ID parameters are opaque strings (UUIDs), not human-readable identifiers.
+Use these exact queries and mutations with the Linear MCP tools. For creating and
+updating comments, prefer the dedicated comment tools over raw GraphQL when available.
+Do not guess field names — copy from this reference. All ID parameters are opaque strings (UUIDs), not human-readable identifiers.
 
 ### Fetch issue by ID
 
@@ -407,13 +412,13 @@ For video, use the same flow with `contentType: "video/webm"` (or mp4). Playwrig
 ## Step 1: Start/continue execution (Todo or In Progress)
 
 1.  Find or create a single persistent scratchpad comment for the issue:
-    - If `issue.live_workpad_comment_id` is present, treat that exact comment ID as the live workpad and update it in place with `linear_update_comment`.
+    - If `issue.live_workpad_comment_id` is present, treat that exact comment ID as the live workpad and update it in place via the Linear MCP comment update tool.
     - Search existing comments for a marker header: `## Codex Workpad`.
     - Ignore resolved comments while searching; only active/unresolved comments are eligible to be reused as the live workpad.
     - If found, reuse that comment; do not create a new workpad comment.
     - The existing Linear comments listed above include each `comment ID`; record the live workpad comment's ID before editing it.
     - If not found, create one workpad comment and use it for all updates.
-    - Persist the workpad comment ID and only write progress updates to that ID with `linear_update_comment`.
+    - Persist the workpad comment ID and only write progress updates to that ID via the Linear MCP comment update tool.
 2.  If arriving from `Todo`, do not delay on additional status transitions: the issue should already be `In Progress` before this step begins.
 3.  Immediately reconcile the workpad before new edits:
     - Check off items that are already done.

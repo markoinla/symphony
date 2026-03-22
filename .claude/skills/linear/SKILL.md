@@ -12,8 +12,11 @@ transitioning states, and attaching PRs.
 
 ## Available Tools
 
-Claude Code has Linear MCP tools available (prefixed `mcp__claude_ai_Linear__`
-or `mcp__linear-server__`). Use these for common operations:
+Linear MCP tools may be deferred — if they are not immediately visible, use
+`ToolSearch` to discover and load them before use. Do NOT conclude that MCP tools
+are unavailable without searching first.
+
+Use the available Linear MCP tools for common operations:
 
 - `get_issue` / `list_issues` — query issues
 - `save_issue` — create or update issues
