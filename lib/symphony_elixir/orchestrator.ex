@@ -48,6 +48,7 @@ defmodule SymphonyElixir.Orchestrator do
             poll_check_in_progress: boolean() | nil,
             tick_timer_ref: reference() | nil,
             tick_token: reference() | nil,
+            configured_project_id: integer() | nil,
             project_id: integer() | nil,
             project: Project.t() | nil,
             running: %{optional(String.t()) => map()},
@@ -66,6 +67,7 @@ defmodule SymphonyElixir.Orchestrator do
       :poll_check_in_progress,
       :tick_timer_ref,
       :tick_token,
+      :configured_project_id,
       :project_id,
       :project,
       running: %{},
@@ -119,9 +121,10 @@ defmodule SymphonyElixir.Orchestrator do
   @impl true
   def init(opts) do
     workflow_name = Keyword.get(opts, :workflow_name, Workflow.default_workflow_name())
+    configured_project_id = Keyword.get(opts, :project_id)
     :ok = Workflow.put_current_workflow_name(workflow_name)
 
-    project = resolve_project(Keyword.get(opts, :project_id))
+    project = resolve_project(configured_project_id)
     :ok = Settings.put_current_project(project)
 
     now_ms = System.monotonic_time(:millisecond)
@@ -135,6 +138,7 @@ defmodule SymphonyElixir.Orchestrator do
       poll_check_in_progress: false,
       tick_timer_ref: nil,
       tick_token: nil,
+      configured_project_id: configured_project_id,
       project_id: if(project, do: project.id),
       project: project,
       codex_totals: @empty_codex_totals,
@@ -1309,6 +1313,12 @@ defmodule SymphonyElixir.Orchestrator do
     if project_id, do: "#{workflow_name}:#{project_id}", else: workflow_name
   end
 
+  defp snapshot_project_context(%State{configured_project_id: nil}), do: {nil, nil}
+
+  defp snapshot_project_context(%State{configured_project_id: configured_project_id, project: project}) do
+    {configured_project_id, project && project.name}
+  end
+
   defp available_slots(%State{} = state) do
     max(
       (state.max_concurrent_agents || Config.settings!(state.workflow_name).agent.max_concurrent_agents) -
@@ -1353,7 +1363,7 @@ defmodule SymphonyElixir.Orchestrator do
     state = refresh_runtime_config(state)
     now = DateTime.utc_now()
     now_ms = System.monotonic_time(:millisecond)
-    project_name = state.project && state.project.name
+    {snapshot_project_id, snapshot_project_name} = snapshot_project_context(state)
 
     running =
       state.running
@@ -1361,8 +1371,8 @@ defmodule SymphonyElixir.Orchestrator do
         %{
           issue_id: issue_id,
           identifier: metadata.identifier,
-          project_id: state.project_id,
-          project_name: project_name,
+          project_id: snapshot_project_id,
+          project_name: snapshot_project_name,
           state: metadata.issue.state,
           worker_host: Map.get(metadata, :worker_host),
           workspace_path: Map.get(metadata, :workspace_path),
@@ -1385,8 +1395,8 @@ defmodule SymphonyElixir.Orchestrator do
       |> Enum.map(fn {issue_id, %{attempt: attempt, due_at_ms: due_at_ms} = retry} ->
         %{
           issue_id: issue_id,
-          project_id: state.project_id,
-          project_name: project_name,
+          project_id: snapshot_project_id,
+          project_name: snapshot_project_name,
           attempt: attempt,
           due_in_ms: max(0, due_at_ms - now_ms),
           identifier: Map.get(retry, :identifier),
