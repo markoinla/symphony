@@ -37,6 +37,7 @@ defmodule SymphonyElixir.AgentSessionTest do
       assert Process.alive?(pid)
 
       GenServer.stop(pid)
+      :timer.sleep(10)
       refute AgentSession.active?(issue_id)
     end
   end

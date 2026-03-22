@@ -46,13 +46,15 @@ defmodule SymphonyElixir.AgentSession do
     GenServer.start_link(__MODULE__, opts, name: via(issue_id))
   end
 
-  @spec active?(String.t()) :: boolean()
+  @spec active?(String.t() | nil) :: boolean()
   def active?(issue_id) when is_binary(issue_id) do
     case Registry.lookup(@registry, issue_id) do
       [{_pid, _value}] -> true
       [] -> false
     end
   end
+
+  def active?(_issue_id), do: false
 
   @spec emit_activity(String.t(), map()) :: :ok
   def emit_activity(issue_id, engine_event) when is_binary(issue_id) and is_map(engine_event) do
