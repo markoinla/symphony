@@ -30,6 +30,7 @@ defmodule SymphonyElixir.Application do
         {Phoenix.PubSub, name: SymphonyElixir.PubSub},
         {Registry, keys: :unique, name: SymphonyElixir.SessionLogRegistry},
         {Registry, keys: :unique, name: SymphonyElixir.OrchestratorRegistry},
+        {Registry, keys: :unique, name: SymphonyElixir.AgentSessionRegistry},
         SymphonyElixir.Repo,
         SymphonyElixir.Store.Migrator,
         {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
