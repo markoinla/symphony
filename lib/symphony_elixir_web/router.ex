@@ -9,6 +9,11 @@ defmodule SymphonyElixirWeb.Router do
     plug(:accepts, ["json"])
   end
 
+  scope "/api/v1/webhooks", SymphonyElixirWeb do
+    pipe_through(:api)
+    post("/linear", WebhookController, :linear)
+  end
+
   scope "/api/v1", SymphonyElixirWeb do
     get("/stream/dashboard", StreamController, :dashboard)
     get("/stream/session/:issue_id", StreamController, :session)
