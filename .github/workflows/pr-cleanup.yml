@@ -1,0 +1,298 @@
+name: PR Cleanup Batch
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+  pull_request:
+    types: [closed]
+
+env:
+  CLEANUP_BRANCH: cleanup/batch
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Build the cleanup branch from all Human Review PRs
+  # ---------------------------------------------------------------------------
+  build-batch:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+      LINEAR_PROJECT_SLUG: ${{ vars.LINEAR_PROJECT_SLUG }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Query Linear for Human Review issues
+        id: linear
+        run: |
+          if [ -z "$LINEAR_API_KEY" ]; then
+            echo "::error::LINEAR_API_KEY secret is not set"
+            exit 1
+          fi
+          if [ -z "$LINEAR_PROJECT_SLUG" ]; then
+            echo "::error::LINEAR_PROJECT_SLUG variable is not set"
+            exit 1
+          fi
+
+          QUERY='query($slug: String!) {
+            issues(
+              filter: {
+                project: { slugId: { eq: $slug } }
+                state: { name: { eq: "Human Review" } }
+              }
+              first: 50
+            ) {
+              nodes { id identifier title }
+            }
+          }'
+
+          RESPONSE=$(curl -s -X POST https://api.linear.app/graphql \
+            -H "Authorization: $LINEAR_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg q "$QUERY" --arg slug "$LINEAR_PROJECT_SLUG" \
+                  '{query: $q, variables: {slug: $slug}}')")
+
+          if echo "$RESPONSE" | jq -e '.errors' > /dev/null 2>&1; then
+            echo "::error::Linear API error: $(echo "$RESPONSE" | jq -c '.errors')"
+            exit 1
+          fi
+
+          echo "$RESPONSE" | jq -r '
+            .data.issues.nodes[] | [.identifier, .id, .title] | @tsv
+          ' > /tmp/hr_issues.tsv
+
+          COUNT=$(wc -l < /tmp/hr_issues.tsv | tr -d ' ')
+          echo "Found $COUNT issue(s) in Human Review"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "has_issues=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_issues=true" >> "$GITHUB_OUTPUT"
+            cat /tmp/hr_issues.tsv
+          fi
+
+      - name: Match issues to open PRs
+        if: steps.linear.outputs.has_issues == 'true'
+        id: match
+        run: |
+          gh pr list --label symphony --state open \
+            --json number,headRefName,title > /tmp/agent_prs.json
+
+          : > /tmp/matched.tsv
+          while IFS=$'\t' read -r identifier issue_id title; do
+            PR_LINE=$(jq -r --arg id "$identifier" '
+              .[] | select(.title | contains($id))
+              | [(.number | tostring), .headRefName] | @tsv
+            ' /tmp/agent_prs.json | head -1)
+
+            if [ -n "$PR_LINE" ]; then
+              printf '%s\t%s\t%s\n' "$identifier" "$issue_id" "$PR_LINE" >> /tmp/matched.tsv
+            else
+              echo "No open PR found for $identifier — skipping"
+            fi
+          done < /tmp/hr_issues.tsv
+
+          COUNT=$(wc -l < /tmp/matched.tsv | tr -d ' ')
+          echo "Matched $COUNT issue(s) to PRs"
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "has_matches=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_matches=true" >> "$GITHUB_OUTPUT"
+            cat /tmp/matched.tsv
+          fi
+
+      - name: Build cleanup branch
+        if: steps.match.outputs.has_matches == 'true'
+        id: build
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin
+
+          git checkout -B "$CLEANUP_BRANCH" origin/main
+
+          : > /tmp/included.tsv
+          : > /tmp/skipped.tsv
+
+          while IFS=$'\t' read -r identifier issue_id pr_number branch; do
+            echo "Merging $identifier (PR #${pr_number}, branch: ${branch})..."
+
+            if git merge --no-edit "origin/${branch}" 2>/dev/null; then
+              printf '%s\t%s\t%s\t%s\n' \
+                "$identifier" "$issue_id" "$pr_number" "$branch" >> /tmp/included.tsv
+              echo "  Merged successfully"
+            else
+              git merge --abort
+              printf '%s\t%s\t%s\t%s\n' \
+                "$identifier" "$issue_id" "$pr_number" "$branch" >> /tmp/skipped.tsv
+              echo "  Conflict — skipping"
+            fi
+          done < /tmp/matched.tsv
+
+          INCLUDED_COUNT=$(wc -l < /tmp/included.tsv | tr -d ' ')
+          if [ "$INCLUDED_COUNT" -eq 0 ]; then
+            echo "No branches merged successfully"
+            echo "has_included=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "has_included=true" >> "$GITHUB_OUTPUT"
+          git push --force origin "$CLEANUP_BRANCH"
+
+      - name: Create or update cleanup PR
+        if: steps.build.outputs.has_included == 'true'
+        run: |
+          # Build the PR body into a temp file to avoid quoting issues
+          {
+            echo "## Batch Cleanup"
+            echo ""
+            echo "| Issue | Title | PR |"
+            echo "|-------|-------|-----|"
+
+            while IFS=$'\t' read -r identifier issue_id pr_number branch; do
+              issue_title=$(grep "^${identifier}	" /tmp/hr_issues.tsv | cut -f3)
+              echo "| ${identifier} | ${issue_title} | #${pr_number} |"
+            done < /tmp/included.tsv
+
+            if [ -s /tmp/skipped.tsv ]; then
+              echo ""
+              echo "### Skipped (merge conflicts)"
+              echo ""
+              while IFS=$'\t' read -r identifier _ pr_number _; do
+                echo "- ${identifier} (#${pr_number})"
+              done < /tmp/skipped.tsv
+            fi
+
+            # Machine-readable metadata for post-merge cleanup
+            ISSUE_IDS=""
+            PR_NUMBERS=""
+            while IFS=$'\t' read -r _ issue_id pr_number _; do
+              ISSUE_IDS="${ISSUE_IDS}${issue_id},"
+              PR_NUMBERS="${PR_NUMBERS}${pr_number},"
+            done < /tmp/included.tsv
+
+            echo ""
+            echo "<!-- batch-prs:${PR_NUMBERS%,} -->"
+            echo "<!-- batch-issue-ids:${ISSUE_IDS%,} -->"
+          } > /tmp/pr_body.md
+
+          # Build title from included issue identifiers
+          TITLE_PARTS=""
+          while IFS=$'\t' read -r identifier _ _ _; do
+            TITLE_PARTS="${TITLE_PARTS}${identifier} "
+          done < /tmp/included.tsv
+          PR_TITLE="Batch cleanup: ${TITLE_PARTS% }"
+
+          # Create or update
+          EXISTING_PR=$(gh pr list --head "$CLEANUP_BRANCH" --state open \
+            --json number -q '.[0].number')
+
+          if [ -n "$EXISTING_PR" ]; then
+            gh pr edit "$EXISTING_PR" \
+              --title "$PR_TITLE" \
+              --body-file /tmp/pr_body.md
+            echo "Updated PR #${EXISTING_PR}"
+          else
+            gh pr create \
+              --base main \
+              --head "$CLEANUP_BRANCH" \
+              --title "$PR_TITLE" \
+              --body-file /tmp/pr_body.md
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Post-merge cleanup — close individual PRs, move issues to Done
+  # ---------------------------------------------------------------------------
+  post-merge-cleanup:
+    if: |
+      github.event_name == 'pull_request'
+      && github.event.pull_request.merged == true
+      && github.event.pull_request.head.ref == 'cleanup/batch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+    steps:
+      - name: Close individual PRs and move issues to Done
+        run: |
+          PR_BODY=$(gh pr view "${{ github.event.pull_request.number }}" \
+            --json body -q '.body')
+
+          # Extract metadata from HTML comments (no spaces around values)
+          BATCH_PRS=$(echo "$PR_BODY" | grep -oP '<!-- batch-prs:\K[^ ]+(?= -->)')
+          BATCH_ISSUE_IDS=$(echo "$PR_BODY" | grep -oP '<!-- batch-issue-ids:\K[^ ]+(?= -->)')
+
+          # --- Close individual GitHub PRs ---
+          if [ -n "$BATCH_PRS" ]; then
+            IFS=',' read -ra PR_NUMS <<< "$BATCH_PRS"
+            for pr in "${PR_NUMS[@]}"; do
+              [ -z "$pr" ] && continue
+              echo "Closing PR #${pr}..."
+              gh pr close "$pr" \
+                --comment "Landed via batch cleanup PR #${{ github.event.pull_request.number }}" \
+                --delete-branch || true
+            done
+          fi
+
+          # --- Move Linear issues to Done ---
+          if [ -z "$BATCH_ISSUE_IDS" ]; then
+            echo "No batch-issue-ids metadata found — skipping Linear updates"
+            exit 0
+          fi
+
+          IFS=',' read -ra ISSUE_IDS <<< "$BATCH_ISSUE_IDS"
+          for issue_id in "${ISSUE_IDS[@]}"; do
+            [ -z "$issue_id" ] && continue
+            echo "Moving issue $issue_id to Done..."
+
+            # Resolve the Done state UUID for this issue's team
+            RESOLVE_QUERY='query($id: String!) {
+              issue(id: $id) {
+                identifier
+                team {
+                  states(filter: { name: { eq: "Done" } }, first: 1) {
+                    nodes { id }
+                  }
+                }
+              }
+            }'
+
+            RESOLVE_RESP=$(curl -s -X POST https://api.linear.app/graphql \
+              -H "Authorization: $LINEAR_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n --arg q "$RESOLVE_QUERY" --arg id "$issue_id" \
+                    '{query: $q, variables: {id: $id}}')")
+
+            STATE_ID=$(echo "$RESOLVE_RESP" | jq -r \
+              '.data.issue.team.states.nodes[0].id // empty')
+            IDENT=$(echo "$RESOLVE_RESP" | jq -r '.data.issue.identifier // empty')
+
+            if [ -z "$STATE_ID" ]; then
+              echo "  Could not resolve Done state for $issue_id — skipping"
+              continue
+            fi
+
+            MUTATION='mutation($id: String!, $stateId: String!) {
+              issueUpdate(id: $id, input: { stateId: $stateId }) { success }
+            }'
+
+            curl -s -X POST https://api.linear.app/graphql \
+              -H "Authorization: $LINEAR_API_KEY" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n --arg q "$MUTATION" --arg id "$issue_id" --arg sid "$STATE_ID" \
+                    '{query: $q, variables: {id: $id, stateId: $sid}}')" \
+              > /dev/null
+
+            echo "  Moved $IDENT to Done"
+          done
