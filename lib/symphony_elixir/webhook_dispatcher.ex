@@ -8,7 +8,7 @@ defmodule SymphonyElixir.WebhookDispatcher do
 
   require Logger
 
-  alias SymphonyElixir.{AgentSession, Config, Store}
+  alias SymphonyElixir.{AgentSession, Config, Settings, Store}
   alias SymphonyElixir.Linear.{AgentAPI, Client}
 
   @spec dispatch_created(map()) :: :ok | {:error, term()}
@@ -107,6 +107,7 @@ defmodule SymphonyElixir.WebhookDispatcher do
   defp spawn_agent_runner(issue) do
     Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
       try do
+        resolve_and_set_project()
         SymphonyElixir.AgentRunner.run(issue, nil, max_turns: Config.settings!().agent.max_turns)
       rescue
         e ->
@@ -157,22 +158,38 @@ defmodule SymphonyElixir.WebhookDispatcher do
     end
   end
 
+  defp resolve_and_set_project do
+    case Store.list_projects() do
+      [%Store.Project{} = project | _] ->
+        Settings.put_current_project(project)
+
+      _ ->
+        Logger.warning("No project found for webhook-dispatched run")
+        :ok
+    end
+  end
+
   defp extract_issue_id(payload) do
-    case get_in(payload, ["data", "issueId"]) || get_in(payload, ["issueId"]) do
+    case get_in(payload, ["agentSession", "issueId"]) ||
+           get_in(payload, ["data", "issueId"]) ||
+           get_in(payload, ["issueId"]) do
       id when is_binary(id) -> {:ok, id}
       _ -> {:error, :missing_issue_id}
     end
   end
 
   defp extract_agent_session_id(payload) do
-    case get_in(payload, ["data", "id"]) || get_in(payload, ["agentSessionId"]) do
+    case get_in(payload, ["agentSession", "id"]) ||
+           get_in(payload, ["data", "id"]) ||
+           get_in(payload, ["agentSessionId"]) do
       id when is_binary(id) -> {:ok, id}
       _ -> {:error, :missing_agent_session_id}
     end
   end
 
   defp extract_prompt_message(payload) do
-    case get_in(payload, ["data", "agentActivity", "body"]) ||
+    case get_in(payload, ["agentSession", "comment", "body"]) ||
+           get_in(payload, ["data", "agentActivity", "body"]) ||
            get_in(payload, ["agentActivity", "body"]) do
       body when is_binary(body) -> {:ok, body}
       _ -> {:error, :missing_prompt_message}

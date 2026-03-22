@@ -59,8 +59,11 @@ defmodule SymphonyElixir.AgentSession do
   @spec emit_activity(String.t(), map()) :: :ok
   def emit_activity(issue_id, engine_event) when is_binary(issue_id) and is_map(engine_event) do
     case ActivityMapper.map_event(engine_event) do
-      nil -> :ok
-      content -> safe_cast(issue_id, {:emit_activity, content})
+      nil ->
+        :ok
+
+      content ->
+        safe_cast(issue_id, {:emit_activity, content})
     end
   end
 
@@ -115,7 +118,8 @@ defmodule SymphonyElixir.AgentSession do
       issue_id: issue_id,
       agent_session_id: agent_session_id,
       plan: PlanBuilder.initial_plan(),
-      dispatch_source: dispatch_source
+      dispatch_source: dispatch_source,
+      last_activity_at: System.monotonic_time(:millisecond) - @min_activity_interval_ms
     }
 
     Logger.info("AgentSession started issue_id=#{issue_id} agent_session_id=#{agent_session_id}")
