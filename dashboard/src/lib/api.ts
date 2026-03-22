@@ -140,6 +140,8 @@ export type StatePayload = {
   running: Array<{
     issue_id: string
     issue_identifier: string
+    project_id: number | null
+    project_name: string | null
     workflow_name?: string
     state: string
     worker_host: string | null
@@ -159,6 +161,8 @@ export type StatePayload = {
   retrying: Array<{
     issue_id: string
     issue_identifier: string
+    project_id: number | null
+    project_name: string | null
     workflow_name?: string
     attempt: number
     due_at: string | null
