@@ -425,6 +425,10 @@ defmodule SymphonyElixirWeb.Presenter do
     linear_oauth.refresh_token
     linear_oauth.client_secret
     linear_oauth.state
+    github_oauth.access_token
+    github_oauth.refresh_token
+    github_oauth.client_secret
+    github_oauth.state
   )
 
   @spec settings_payload() :: map()
