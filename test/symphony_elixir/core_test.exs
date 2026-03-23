@@ -1410,7 +1410,7 @@ defmodule SymphonyElixir.CoreTest do
 
       Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
 
-      SymphonyElixir.Store.put_setting("server.public_base_url", "https://symphony.example.com")
+      System.put_env("SYMPHONY_PUBLIC_BASE_URL", "https://symphony.example.com")
 
       write_workflow_file!(Workflow.workflow_file_path(),
         tracker_kind: "memory",
@@ -1439,7 +1439,7 @@ defmodule SymphonyElixir.CoreTest do
       assert workspace_comment =~ "Workspace ready: `"
     after
       Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
-      SymphonyElixir.Store.delete_setting("server.public_base_url")
+      System.delete_env("SYMPHONY_PUBLIC_BASE_URL")
       File.rm_rf(test_root)
     end
   end

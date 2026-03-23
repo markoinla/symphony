@@ -7,7 +7,6 @@ import {
   Github,
   Key,
   Link2,
-  Globe,
   Settings,
   Sliders,
   Trash2,
@@ -132,7 +131,7 @@ export function SettingsView() {
             <LinearApiKeySection />
             <LinearOAuthSection />
             <GitHubOAuthSection />
-            <DashboardUrlSection />
+
           </div>
         </TabsContent>
 
@@ -641,90 +640,6 @@ function GitHubOAuthSection() {
   )
 }
 
-function DashboardUrlSection() {
-  const queryClient = useQueryClient()
-  const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
-  const existing = settingsQuery.data?.settings.find((s) => s.key === 'server.public_base_url')
-
-  const [url, setUrl] = useState('')
-  const [feedback, setFeedback] = useState<string | null>(null)
-
-  const saveMutation = useMutation({
-    mutationFn: (value: string) => upsertSetting('server.public_base_url', value),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      setFeedback('Dashboard URL saved.')
-      setUrl('')
-    },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
-  })
-
-  const removeMutation = useMutation({
-    mutationFn: () => deleteSetting('server.public_base_url'),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      setFeedback('Dashboard URL removed.')
-      setUrl('')
-    },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
-  })
-
-  return (
-    <Card className="space-y-4">
-      <CardHeader>
-        <div className="flex items-center gap-2">
-          <Globe className="h-4 w-4 text-th-text-3" />
-          <CardTitle>Dashboard URL</CardTitle>
-          {existing ? <Badge tone="running">Set</Badge> : null}
-        </div>
-        <CardDescription>
-          Public base URL used in session links posted to Linear issues. Include the scheme and host.
-          Alternatively, set the <code className="text-xs">SYMPHONY_PUBLIC_BASE_URL</code> environment variable. The database setting takes precedence.
-        </CardDescription>
-      </CardHeader>
-
-      {feedback ? <FeedbackBanner message={feedback} /> : null}
-
-      {existing ? (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-th-border bg-th-inset px-4 py-3">
-          <code className="min-w-0 break-all text-sm text-th-text-2">{existing.value}</code>
-          <Button
-            aria-label="Remove URL"
-            disabled={removeMutation.isPending}
-            onClick={() => { setFeedback(null); void removeMutation.mutateAsync() }}
-            size="icon"
-            type="button"
-            variant="ghost"
-          >
-            <Trash2 className="h-4 w-4 text-th-danger" />
-          </Button>
-        </div>
-      ) : null}
-
-      <form
-        className="flex gap-3"
-        onSubmit={(event) => {
-          event.preventDefault()
-          setFeedback(null)
-          void saveMutation.mutateAsync(url.trim())
-        }}
-      >
-        <Input
-          className="flex-1"
-          onChange={(event) => setUrl(event.target.value)}
-          placeholder="http://my-server:4000"
-          required
-          type="url"
-          value={url}
-        />
-        <Button disabled={saveMutation.isPending || !url.trim()} type="submit" variant="secondary">
-          {existing ? 'Update' : 'Save'}
-        </Button>
-      </form>
-    </Card>
-  )
-}
-
 function AgentSettingsSection() {
   const queryClient = useQueryClient()
   const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
@@ -907,7 +822,6 @@ function AdvancedSettingsSection() {
     'github_oauth.client_id',
     'github_oauth.client_secret',
     'github_oauth.expires_at',
-    'server.public_base_url',
     'agent.max_concurrent_agents',
     'agent.max_turns',
   ])
