@@ -299,6 +299,7 @@ export function deleteSetting(key: string) {
 export type OAuthStatus = {
   status: 'connected' | 'expired' | 'disconnected'
   expires_at: string | null
+  credentials_source: 'env' | 'store' | 'none'
 }
 
 export function getOAuthStatus() {

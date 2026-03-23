@@ -18,10 +18,11 @@ defmodule SymphonyElixir.Linear.OAuth do
   @refresh_buffer_seconds 300
 
   @type status :: :connected | :expired | :disconnected
+  @type credentials_source :: :env | :store | :none
 
   @spec authorize_url(String.t(), String.t()) :: {:ok, String.t()} | {:error, :missing_client_id}
   def authorize_url(state, redirect_uri) when is_binary(state) and is_binary(redirect_uri) do
-    case Store.get_setting("linear_oauth.client_id") do
+    case get_client_id() do
       nil ->
         {:error, :missing_client_id}
 
@@ -42,8 +43,8 @@ defmodule SymphonyElixir.Linear.OAuth do
 
   @spec exchange_code(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
   def exchange_code(code, redirect_uri) when is_binary(code) and is_binary(redirect_uri) do
-    client_id = Store.get_setting("linear_oauth.client_id")
-    client_secret = Store.get_setting("linear_oauth.client_secret")
+    client_id = get_client_id()
+    client_secret = get_client_secret()
 
     if is_nil(client_id) or is_nil(client_secret) do
       {:error, :missing_credentials}
@@ -75,8 +76,8 @@ defmodule SymphonyElixir.Linear.OAuth do
   @spec refresh_token() :: {:ok, map()} | {:error, term()}
   def refresh_token do
     refresh_token = Store.get_setting("linear_oauth.refresh_token")
-    client_id = Store.get_setting("linear_oauth.client_id")
-    client_secret = Store.get_setting("linear_oauth.client_secret")
+    client_id = get_client_id()
+    client_secret = get_client_secret()
 
     if is_nil(refresh_token) or is_nil(client_id) do
       {:error, :missing_refresh_token}
@@ -102,6 +103,15 @@ defmodule SymphonyElixir.Linear.OAuth do
           Logger.error("Linear OAuth token refresh request failed: #{inspect(reason)}")
           {:error, {:token_refresh_request, reason}}
       end
+    end
+  end
+
+  @spec credentials_source() :: credentials_source()
+  def credentials_source do
+    cond do
+      Store.get_setting("linear_oauth.client_id") != nil -> :store
+      has_env_credentials?() -> :env
+      true -> :none
     end
   end
 
@@ -232,6 +242,20 @@ defmodule SymphonyElixir.Linear.OAuth do
       linear_oauth.state
     )
     |> Enum.each(&Store.delete_setting/1)
+  end
+
+  defp has_env_credentials? do
+    env_id = System.get_env("LINEAR_OAUTH_CLIENT_ID")
+    env_secret = System.get_env("LINEAR_OAUTH_CLIENT_SECRET")
+    is_binary(env_id) and env_id != "" and is_binary(env_secret) and env_secret != ""
+  end
+
+  defp get_client_id do
+    Store.get_setting("linear_oauth.client_id") || System.get_env("LINEAR_OAUTH_CLIENT_ID")
+  end
+
+  defp get_client_secret do
+    Store.get_setting("linear_oauth.client_secret") || System.get_env("LINEAR_OAUTH_CLIENT_SECRET")
   end
 
   defp maybe_put_secret(body, nil), do: body
