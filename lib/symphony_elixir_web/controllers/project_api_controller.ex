@@ -7,7 +7,7 @@ defmodule SymphonyElixirWeb.ProjectApiController do
 
   alias Plug.Conn
   alias SymphonyElixir.{Settings, Store}
-  alias SymphonyElixirWeb.Presenter
+  alias SymphonyElixirWeb.{ObservabilityPubSub, Presenter}
 
   @spec index(Conn.t(), map()) :: Conn.t()
   def index(conn, _params) do
@@ -29,6 +29,8 @@ defmodule SymphonyElixirWeb.ProjectApiController do
   def create(conn, params) do
     case Store.create_project(project_attrs(params)) do
       {:ok, project} ->
+        ObservabilityPubSub.broadcast_projects_changed()
+
         conn
         |> put_status(:created)
         |> json(%{project: project_payload(project)})
@@ -44,6 +46,7 @@ defmodule SymphonyElixirWeb.ProjectApiController do
       {project_id, ""} ->
         case Store.update_project(project_id, project_attrs(params)) do
           {:ok, project} ->
+            ObservabilityPubSub.broadcast_projects_changed()
             json(conn, %{project: project_payload(project)})
 
           {:error, :not_found} ->
@@ -62,6 +65,7 @@ defmodule SymphonyElixirWeb.ProjectApiController do
   def delete(conn, %{"id" => id}) do
     with {project_id, ""} <- Integer.parse(id),
          {:ok, _project} <- Store.delete_project(project_id) do
+      ObservabilityPubSub.broadcast_projects_changed()
       send_resp(conn, 204, "")
     else
       :error -> error_response(conn, 404, "project_not_found", "Project not found")
