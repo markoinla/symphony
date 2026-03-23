@@ -16,6 +16,7 @@ import {
   Clock,
   FolderKanban,
   Settings,
+  Bot,
   LogOut,
   Sun,
   Moon,
@@ -40,6 +41,7 @@ import {
   historyRoute,
   projectsRoute,
   settingsRoute,
+  agentsRoute,
   loginRoute,
 } from './router'
 
@@ -48,6 +50,7 @@ import { SessionView } from './pages/session'
 import { HistoryView } from './pages/history'
 import { ProjectsView } from './pages/projects'
 import { SettingsView } from './pages/settings'
+import { AgentsView } from './pages/agents'
 import { LoginView } from './pages/login'
 
 const queryClient = new QueryClient({
@@ -76,6 +79,7 @@ sessionRoute.update({ component: SessionView })
 historyRoute.update({ component: HistoryView })
 projectsRoute.update({ component: ProjectsView })
 settingsRoute.update({ component: SettingsView })
+agentsRoute.update({ component: AgentsView })
 loginRoute.update({ component: LoginView })
 
 export default function App() {
@@ -91,6 +95,7 @@ const navItems = [
   { to: '/history' as const, label: 'History', icon: Clock, match: (p: string) => p.startsWith('/history') },
   { to: '/projects' as const, label: 'Projects', icon: FolderKanban, match: (p: string) => p.startsWith('/projects') },
   { to: '/settings' as const, label: 'Settings', icon: Settings, match: (p: string) => p.startsWith('/settings') },
+  { to: '/agents' as const, label: 'Agents', icon: Bot, match: (p: string) => p.startsWith('/agents') },
 ]
 
 function RootLayout() {

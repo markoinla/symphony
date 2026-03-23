@@ -35,6 +35,11 @@ export const settingsRoute = createRoute({
   path: '/settings',
 })
 
+export const agentsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/agents',
+})
+
 export const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
@@ -46,6 +51,7 @@ export const routeTree = rootRoute.addChildren([
   historyRoute,
   projectsRoute,
   settingsRoute,
+  agentsRoute,
   loginRoute,
 ])
 
