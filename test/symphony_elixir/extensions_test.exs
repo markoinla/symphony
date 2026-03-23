@@ -786,21 +786,21 @@ defmodule SymphonyElixir.ExtensionsTest do
              "GET",
              "/api/v1/stream/dashboard",
              "127.0.0.1"
-           ).pipe_through == []
+           ).pipe_through == [:authenticated_stream]
 
     assert Phoenix.Router.route_info(
              SymphonyElixirWeb.Router,
              "GET",
              "/api/v1/stream/session/issue-1",
              "127.0.0.1"
-           ).pipe_through == []
+           ).pipe_through == [:authenticated_stream]
 
     assert Phoenix.Router.route_info(
              SymphonyElixirWeb.Router,
              "GET",
              "/api/v1/state",
              "127.0.0.1"
-           ).pipe_through == [:api]
+           ).pipe_through == [:authenticated_api]
   end
 
   test "dashboard serves the built spa shell and assets" do

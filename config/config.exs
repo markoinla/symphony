@@ -13,7 +13,7 @@ config :symphony_elixir, SymphonyElixirWeb.Endpoint,
   ],
   pubsub_server: SymphonyElixir.PubSub,
   secret_key_base: String.duplicate("s", 64),
-  check_origin: false,
+  check_origin: ["https://symphony.marko.la"],
   server: false
 
 import_config "#{config_env()}.exs"

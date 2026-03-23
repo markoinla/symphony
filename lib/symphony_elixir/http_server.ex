@@ -83,6 +83,9 @@ defmodule SymphonyElixir.HttpServer do
   defp normalize_host(host), do: to_string(host)
 
   defp secret_key_base do
-    Base.encode64(:crypto.strong_rand_bytes(@secret_key_bytes), padding: false)
+    case System.get_env("SYMPHONY_SECRET_KEY_BASE") do
+      value when is_binary(value) and byte_size(value) >= 64 -> value
+      _ -> Base.encode64(:crypto.strong_rand_bytes(@secret_key_bytes), padding: false)
+    end
   end
 end

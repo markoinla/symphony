@@ -23,5 +23,13 @@ defmodule SymphonyElixirWeb.Endpoint do
 
   plug(Plug.MethodOverride)
   plug(Plug.Head)
+
+  plug(Plug.Session,
+    store: :cookie,
+    key: "_symphony_session",
+    signing_salt: "symphony_auth",
+    same_site: "Lax"
+  )
+
   plug(SymphonyElixirWeb.Router)
 end
