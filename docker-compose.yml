@@ -14,11 +14,8 @@ services:
     ports:
       - "4000:4000"
     volumes:
-      # Mount host home directory (read-only for auth, git, ssh)
-      - ${HOST_HOME}:${HOST_HOME}:ro
-
-      # Writable overlay for DB (over the ro home mount)
-      - symphony-data:${HOST_HOME}/.symphony
+      # Mount host home directory (auth, git, ssh, claude config)
+      - ${HOST_HOME}:${HOST_HOME}
 
       # Writable workspace directory
       - /tmp/symphony_workspaces:/tmp/symphony_workspaces
@@ -36,5 +33,3 @@ services:
       start_period: 10s
       retries: 3
 
-volumes:
-  symphony-data:
