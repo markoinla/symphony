@@ -3,7 +3,7 @@ defmodule SymphonyElixirWeb.Presenter do
   Shared projections for the observability API and dashboard.
   """
 
-  alias SymphonyElixir.{Config, Orchestrator, SessionLog, StatusDashboard, Store}
+  alias SymphonyElixir.{Config, Orchestrator, SessionLog, StatusDashboard, Store, WorkflowStore}
 
   @spec state_payload(GenServer.name() | [{String.t(), GenServer.name()}], timeout()) :: map()
   def state_payload(orchestrator, snapshot_timeout_ms) do
@@ -147,7 +147,8 @@ defmodule SymphonyElixirWeb.Presenter do
       running: Enum.map(snapshot.running, &running_entry_payload/1),
       retrying: Enum.map(snapshot.retrying, &retry_entry_payload/1),
       engine_totals: snapshot.engine_totals,
-      rate_limits: snapshot.rate_limits
+      rate_limits: snapshot.rate_limits,
+      loaded_workflows: loaded_workflows_payload()
     }
   end
 
@@ -178,8 +179,23 @@ defmodule SymphonyElixirWeb.Presenter do
       retrying: Enum.flat_map(workflows, & &1.retrying),
       engine_totals: sum_engine_totals(workflows),
       rate_limits: Map.new(workflows, fn workflow -> {workflow.workflow_name, workflow.rate_limits} end),
-      workflows: workflows
+      workflows: workflows,
+      loaded_workflows: loaded_workflows_payload()
     }
+  end
+
+  defp loaded_workflows_payload do
+    WorkflowStore.workflow_names()
+    |> Enum.map(fn name ->
+      %{name: name, display_name: workflow_display_name(name)}
+    end)
+  end
+
+  defp workflow_display_name(name) when is_binary(name) do
+    name
+    |> String.replace(~r/[_-]/, " ")
+    |> String.split()
+    |> Enum.map_join(" ", &String.capitalize/1)
   end
 
   defp sum_engine_totals(workflows) do

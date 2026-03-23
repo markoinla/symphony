@@ -141,12 +141,18 @@ export type IssuePayload = {
   }>
 }
 
+export type LoadedWorkflow = {
+  name: string
+  display_name: string
+}
+
 export type StatePayload = {
   generated_at: string
   counts: {
     running: number
     retrying: number
   }
+  loaded_workflows?: LoadedWorkflow[]
   running: Array<{
     issue_id: string
     issue_identifier: string
