@@ -98,6 +98,28 @@ defmodule SymphonyElixir.AgentSession do
     end
   end
 
+  @spec complete(String.t(), :completed | :failed) :: :ok
+  def complete(issue_id, outcome)
+      when is_binary(issue_id) and outcome in [:completed, :failed] do
+    case Registry.lookup(@registry, issue_id) do
+      [{pid, _value}] ->
+        agent_session_id = GenServer.call(pid, :get_agent_session_id)
+
+        case AgentAPI.complete_session(agent_session_id, outcome) do
+          :ok ->
+            Logger.info("AgentSession completed issue_id=#{issue_id} outcome=#{outcome}")
+
+          {:error, reason} ->
+            Logger.warning("Failed to complete agent session in Linear issue_id=#{issue_id} outcome=#{outcome}: #{inspect(reason)}")
+        end
+
+        GenServer.stop(pid, :normal)
+
+      [] ->
+        :ok
+    end
+  end
+
   @spec stop(String.t()) :: :ok
   def stop(issue_id) when is_binary(issue_id) do
     case Registry.lookup(@registry, issue_id) do

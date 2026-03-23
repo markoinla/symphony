@@ -118,6 +118,46 @@ defmodule SymphonyElixir.AgentSessionTest do
     end
   end
 
+  describe "complete/2" do
+    test "sends stop signal and stops the GenServer on :completed" do
+      issue_id = "test-issue-#{System.unique_integer([:positive])}"
+      Application.put_env(:symphony_elixir, :linear_client_module, __MODULE__.StubClient)
+
+      {:ok, _pid} =
+        AgentSession.start_link(
+          issue_id: issue_id,
+          agent_session_id: "agent-sess-complete"
+        )
+
+      assert AgentSession.active?(issue_id)
+      AgentSession.complete(issue_id, :completed)
+
+      :timer.sleep(10)
+      refute AgentSession.active?(issue_id)
+    end
+
+    test "sends stop signal and stops the GenServer on :failed" do
+      issue_id = "test-issue-#{System.unique_integer([:positive])}"
+      Application.put_env(:symphony_elixir, :linear_client_module, __MODULE__.StubClient)
+
+      {:ok, _pid} =
+        AgentSession.start_link(
+          issue_id: issue_id,
+          agent_session_id: "agent-sess-fail"
+        )
+
+      assert AgentSession.active?(issue_id)
+      AgentSession.complete(issue_id, :failed)
+
+      :timer.sleep(10)
+      refute AgentSession.active?(issue_id)
+    end
+
+    test "complete on nonexistent session is a no-op" do
+      assert AgentSession.complete("nonexistent", :completed) == :ok
+    end
+  end
+
   describe "safe_cast behavior" do
     test "emit_activity on nonexistent session is a no-op" do
       assert AgentSession.emit_activity("nonexistent", %{event: :session_started}) == :ok
@@ -130,8 +170,17 @@ defmodule SymphonyElixir.AgentSessionTest do
 
   # Stub client that returns success for any GraphQL call
   defmodule StubClient do
-    def graphql(_query, _variables) do
-      {:ok, %{"data" => %{"agentSessionUpdate" => %{"success" => true}}}}
+    def graphql(query, _variables) do
+      cond do
+        String.contains?(query, "agentActivityCreate") ->
+          {:ok, %{"data" => %{"agentActivityCreate" => %{"success" => true}}}}
+
+        String.contains?(query, "agentSessionUpdate") ->
+          {:ok, %{"data" => %{"agentSessionUpdate" => %{"success" => true}}}}
+
+        true ->
+          {:ok, %{"data" => %{}}}
+      end
     end
   end
 end

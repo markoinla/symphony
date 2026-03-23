@@ -527,10 +527,10 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp maybe_sync_workpad_plan(_issue_id, _message), do: :ok
 
-  defp maybe_finalize_agent_session(%Issue{id: issue_id}, _outcome)
+  defp maybe_finalize_agent_session(%Issue{id: issue_id}, outcome)
        when is_binary(issue_id) do
     if AgentSession.active?(issue_id) do
-      AgentSession.stop(issue_id)
+      AgentSession.complete(issue_id, outcome)
     end
   end
 
