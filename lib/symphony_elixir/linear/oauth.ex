@@ -110,7 +110,7 @@ defmodule SymphonyElixir.Linear.OAuth do
   def credentials_source do
     cond do
       Store.get_setting("linear_oauth.client_id") != nil -> :store
-      System.get_env("LINEAR_OAUTH_CLIENT_ID") != nil -> :env
+      has_env_credentials?() -> :env
       true -> :none
     end
   end
@@ -242,6 +242,12 @@ defmodule SymphonyElixir.Linear.OAuth do
       linear_oauth.state
     )
     |> Enum.each(&Store.delete_setting/1)
+  end
+
+  defp has_env_credentials? do
+    env_id = System.get_env("LINEAR_OAUTH_CLIENT_ID")
+    env_secret = System.get_env("LINEAR_OAUTH_CLIENT_SECRET")
+    is_binary(env_id) and env_id != "" and is_binary(env_secret) and env_secret != ""
   end
 
   defp get_client_id do

@@ -12,7 +12,14 @@ defmodule SymphonyElixir.Linear.OAuthTest do
     System.delete_env("LINEAR_OAUTH_CLIENT_ID")
     System.delete_env("LINEAR_OAUTH_CLIENT_SECRET")
 
+    prev_store_client_id = Store.get_setting("linear_oauth.client_id")
+    prev_store_client_secret = Store.get_setting("linear_oauth.client_secret")
+    Store.delete_setting("linear_oauth.client_id")
+    Store.delete_setting("linear_oauth.client_secret")
+
     on_exit(fn ->
+      if prev_store_client_id, do: Store.put_setting("linear_oauth.client_id", prev_store_client_id)
+      if prev_store_client_secret, do: Store.put_setting("linear_oauth.client_secret", prev_store_client_secret)
       if prev_client_id, do: System.put_env("LINEAR_OAUTH_CLIENT_ID", prev_client_id)
       if prev_client_secret, do: System.put_env("LINEAR_OAUTH_CLIENT_SECRET", prev_client_secret)
 
@@ -28,10 +35,24 @@ defmodule SymphonyElixir.Linear.OAuthTest do
       assert :none == OAuth.credentials_source()
     end
 
-    test "returns :env when only env vars are set" do
+    test "returns :env when both env vars are set" do
       System.put_env("LINEAR_OAUTH_CLIENT_ID", "env-client-id")
+      System.put_env("LINEAR_OAUTH_CLIENT_SECRET", "env-client-secret")
 
       assert :env == OAuth.credentials_source()
+    end
+
+    test "returns :none when only client_id env var is set (incomplete pair)" do
+      System.put_env("LINEAR_OAUTH_CLIENT_ID", "env-client-id")
+
+      assert :none == OAuth.credentials_source()
+    end
+
+    test "returns :none when env vars are empty strings" do
+      System.put_env("LINEAR_OAUTH_CLIENT_ID", "")
+      System.put_env("LINEAR_OAUTH_CLIENT_SECRET", "")
+
+      assert :none == OAuth.credentials_source()
     end
 
     test "returns :store when settings store has credentials" do
