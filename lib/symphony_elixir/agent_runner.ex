@@ -19,6 +19,8 @@ defmodule SymphonyElixir.AgentRunner do
     Workspace
   }
 
+  @pr_url_regex ~r"https://github\.com/[^/]+/[^/]+/pull/\d+"
+
   @type worker_host :: String.t() | nil
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
@@ -95,6 +97,7 @@ defmodule SymphonyElixir.AgentRunner do
       SessionLog.append(issue_id, session_id, message)
       maybe_emit_agent_activity(issue_id, message)
       maybe_sync_workpad_plan(issue_id, message)
+      maybe_set_pr_external_url(issue_id, message)
     end
   end
 
@@ -362,6 +365,15 @@ defmodule SymphonyElixir.AgentRunner do
     build_turn_prompt(issue, opts, turn_number, max_turns, new_comments)
   end
 
+  @doc false
+  @spec extract_pr_url_for_test(String.t()) :: String.t() | nil
+  def extract_pr_url_for_test(content) when is_binary(content) do
+    case Regex.run(@pr_url_regex, content) do
+      [pr_url | _] -> pr_url
+      nil -> nil
+    end
+  end
+
   defp build_turn_prompt(issue, opts, 1, _max_turns, _new_comments), do: PromptBuilder.build_prompt(issue, opts)
 
   defp build_turn_prompt(_issue, _opts, turn_number, max_turns, new_comments) do
@@ -531,6 +543,48 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp maybe_sync_workpad_plan(_issue_id, _message), do: :ok
+
+  # Detect GitHub PR URLs in engine messages and add them as external URLs
+  # on the Linear agent session. Checks both tool results (`:tool_call_completed`)
+  # and tool use notifications (`:notification` with `claude/tool_use`).
+  defp maybe_set_pr_external_url(issue_id, %{event: :tool_call_completed} = msg) when is_binary(issue_id) do
+    content = get_in(msg, [:message, "params", "content"]) || ""
+    maybe_extract_and_set_pr_url(issue_id, content)
+  end
+
+  defp maybe_set_pr_external_url(issue_id, %{event: :notification} = msg) when is_binary(issue_id) do
+    method = get_in(msg, [:message, "method"])
+
+    content =
+      case method do
+        "claude/tool_use" ->
+          # Check tool input body (e.g., comment creation with PR URL)
+          get_in(msg, [:message, "params", "input", "body"]) || ""
+
+        "claude/assistant_message" ->
+          get_in(msg, [:message, "params", "content"]) || ""
+
+        _ ->
+          ""
+      end
+
+    maybe_extract_and_set_pr_url(issue_id, content)
+  end
+
+  defp maybe_set_pr_external_url(_issue_id, _message), do: :ok
+
+  defp maybe_extract_and_set_pr_url(issue_id, content) when is_binary(content) do
+    case Regex.run(@pr_url_regex, content) do
+      [pr_url | _] ->
+        Logger.info("Detected PR URL for issue_id=#{issue_id} pr_url=#{pr_url}")
+        AgentSession.set_external_urls(issue_id, [%{url: pr_url}])
+
+      nil ->
+        :ok
+    end
+  end
+
+  defp maybe_extract_and_set_pr_url(_issue_id, _content), do: :ok
 
   defp maybe_finalize_agent_session(%Issue{id: issue_id}, outcome)
        when is_binary(issue_id) do
