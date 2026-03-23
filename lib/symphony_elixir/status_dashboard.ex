@@ -2161,6 +2161,13 @@ defmodule SymphonyElixir.StatusDashboard do
   defp truncate(value, _max), do: value
 
   defp dashboard_enabled? do
+    case System.get_env("SYMPHONY_DASHBOARD") do
+      val when val in ["0", "false"] -> false
+      _ -> default_dashboard_enabled?()
+    end
+  end
+
+  defp default_dashboard_enabled? do
     if Code.ensure_loaded?(Mix) and function_exported?(Mix, :env, 0) do
       try do
         Mix.env() != :test
