@@ -237,12 +237,37 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp namespace_wrap(command) do
-    if System.find_executable("unshare") do
+    if unshare_available?() do
       Logger.info("PID namespace isolation enabled for Codex process")
       "exec unshare --user --pid --fork --map-root-user -- #{command}"
     else
-      Logger.warning("unshare not found — Codex running without PID namespace isolation")
+      Logger.warning("unshare not available — Codex running without PID namespace isolation")
       command
+    end
+  end
+
+  defp unshare_available? do
+    case :persistent_term.get({__MODULE__, :unshare_available}, :not_checked) do
+      :not_checked ->
+        result = check_unshare()
+        :persistent_term.put({__MODULE__, :unshare_available}, result)
+        result
+
+      cached ->
+        cached
+    end
+  end
+
+  defp check_unshare do
+    case System.find_executable("unshare") do
+      nil ->
+        false
+
+      _path ->
+        match?(
+          {_, 0},
+          System.cmd("unshare", ["--user", "--pid", "--fork", "--map-root-user", "--", "true"], stderr_to_stdout: true)
+        )
     end
   end
 
