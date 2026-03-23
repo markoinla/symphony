@@ -22,6 +22,7 @@ defmodule SymphonyElixir.Orchestrator do
   }
 
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixirWeb.ObservabilityPubSub
   @registry SymphonyElixir.OrchestratorRegistry
 
   @continuation_retry_delay_ms 1_000
@@ -128,6 +129,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     project = resolve_project(configured_project_id)
     :ok = Settings.put_current_project(project)
+    ObservabilityPubSub.subscribe_settings()
 
     now_ms = System.monotonic_time(:millisecond)
     config = Config.settings!(workflow_name)
@@ -337,6 +339,11 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   def handle_info({:retry_issue, _issue_id}, state), do: {:noreply, state}
+
+  def handle_info(:settings_changed, state) do
+    Logger.info("Settings changed, refreshing runtime config for #{state.workflow_name}")
+    {:noreply, refresh_runtime_config(state)}
+  end
 
   def handle_info(msg, state) do
     Logger.debug("Orchestrator ignored message: #{inspect(msg)}")

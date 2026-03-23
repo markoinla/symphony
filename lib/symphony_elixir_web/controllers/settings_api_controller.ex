@@ -7,7 +7,7 @@ defmodule SymphonyElixirWeb.SettingsApiController do
 
   alias Plug.Conn
   alias SymphonyElixir.Store
-  alias SymphonyElixirWeb.Presenter
+  alias SymphonyElixirWeb.{ObservabilityPubSub, Presenter}
 
   @spec index(Conn.t(), map()) :: Conn.t()
   def index(conn, _params) do
@@ -21,6 +21,7 @@ defmodule SymphonyElixirWeb.SettingsApiController do
     if is_binary(value) do
       case Store.put_setting(key, value) do
         {:ok, setting} ->
+          ObservabilityPubSub.broadcast_settings_changed()
           json(conn, %{setting: %{key: setting.key, value: setting.value}})
 
         {:error, changeset} ->
@@ -34,8 +35,12 @@ defmodule SymphonyElixirWeb.SettingsApiController do
   @spec delete(Conn.t(), map()) :: Conn.t()
   def delete(conn, %{"key" => key}) do
     case Store.delete_setting(key) do
-      {:ok, _setting} -> send_resp(conn, 204, "")
-      {:error, :not_found} -> error_response(conn, 404, "setting_not_found", "Setting not found")
+      {:ok, _setting} ->
+        ObservabilityPubSub.broadcast_settings_changed()
+        send_resp(conn, 204, "")
+
+      {:error, :not_found} ->
+        error_response(conn, 404, "setting_not_found", "Setting not found")
     end
   end
 
