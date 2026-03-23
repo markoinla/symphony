@@ -24,6 +24,7 @@ services:
       - /tmp/symphony_workspaces:/tmp/symphony_workspaces
     environment:
       - HOME=${HOST_HOME}
+      - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${HOST_HOME}/.local/bin
     env_file:
       - .env
     working_dir: /app
