@@ -296,6 +296,25 @@ export function deleteSetting(key: string) {
   })
 }
 
+export type OAuthStatus = {
+  status: 'connected' | 'expired' | 'disconnected'
+  expires_at: string | null
+}
+
+export function getOAuthStatus() {
+  return requestJson<OAuthStatus>('/api/v1/oauth/linear/status')
+}
+
+export function getOAuthAuthorizeUrl() {
+  return requestJson<{ authorize_url: string }>('/api/v1/oauth/linear/authorize')
+}
+
+export function revokeOAuth() {
+  return requestJson<{ status: string }>('/api/v1/oauth/linear/revoke', {
+    method: 'POST',
+  })
+}
+
 export function mergeTimelineMessage(payload: MessagesPayload, incoming: TimelineMessage) {
   const sessions = [...payload.sessions]
   const activeIndex = sessions.findIndex((session) => session.live)

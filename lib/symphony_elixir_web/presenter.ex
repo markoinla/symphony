@@ -420,10 +420,18 @@ defmodule SymphonyElixirWeb.Presenter do
     end
   end
 
+  @hidden_setting_keys ~w(
+    linear_oauth.access_token
+    linear_oauth.refresh_token
+    linear_oauth.client_secret
+    linear_oauth.state
+  )
+
   @spec settings_payload() :: map()
   def settings_payload do
     settings =
       Store.list_settings()
+      |> Enum.reject(fn setting -> setting.key in @hidden_setting_keys end)
       |> Enum.sort_by(& &1.key)
       |> Enum.map(fn setting ->
         %{key: setting.key, value: setting.value}

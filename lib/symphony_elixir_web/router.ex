@@ -21,6 +21,11 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/stream/session/:issue_id", ObservabilityApiController, :method_not_allowed)
   end
 
+  # OAuth callback is a browser redirect, not a JSON API endpoint
+  scope "/api/v1/oauth", SymphonyElixirWeb do
+    get("/linear/callback", OAuthController, :callback)
+  end
+
   scope "/api/v1", SymphonyElixirWeb do
     pipe_through(:api)
 
@@ -35,6 +40,9 @@ defmodule SymphonyElixirWeb.Router do
     get("/settings", SettingsApiController, :index)
     put("/settings/:key", SettingsApiController, :upsert)
     delete("/settings/:key", SettingsApiController, :delete)
+    get("/oauth/linear/authorize", OAuthController, :authorize)
+    get("/oauth/linear/status", OAuthController, :status)
+    post("/oauth/linear/revoke", OAuthController, :revoke)
 
     match(:*, "/state", ObservabilityApiController, :method_not_allowed)
     match(:*, "/refresh", ObservabilityApiController, :method_not_allowed)
