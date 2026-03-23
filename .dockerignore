@@ -14,6 +14,7 @@ docs/
 !ENRICHMENT.md
 !TRIAGE.md
 !MENTION.md
+!REVIEW.md
 .env
 .env.*
 log/
