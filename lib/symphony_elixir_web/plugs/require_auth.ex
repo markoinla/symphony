@@ -51,10 +51,7 @@ defmodule SymphonyElixirWeb.Plugs.RequireAuth do
   end
 
   defp api_request?(conn) do
-    case get_req_header(conn, "accept") do
-      [accept | _] -> String.contains?(accept, "application/json")
-      _ -> false
-    end
+    String.starts_with?(conn.request_path, "/api/")
   end
 
   @spec auth_configured?() :: boolean()
