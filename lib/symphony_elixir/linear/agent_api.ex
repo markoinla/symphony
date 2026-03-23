@@ -9,6 +9,7 @@ defmodule SymphonyElixir.Linear.AgentAPI do
   require Logger
 
   alias SymphonyElixir.Config
+  alias SymphonyElixir.Linear.OAuth
 
   @create_session_mutation """
   mutation SymphonyCreateAgentSession($input: AgentSessionCreateOnIssue!) {
@@ -116,9 +117,7 @@ defmodule SymphonyElixir.Linear.AgentAPI do
             {:ok, body}
 
           {:ok, response} ->
-            Logger.error(
-              "Linear Agent API request failed status=#{response.status} body=#{inspect(response.body)}"
-            )
+            Logger.error("Linear Agent API request failed status=#{response.status} body=#{inspect(response.body)}")
 
             {:error, {:linear_api_status, response.status}}
 
@@ -130,6 +129,6 @@ defmodule SymphonyElixir.Linear.AgentAPI do
   end
 
   defp oauth_token do
-    System.get_env("LINEAR_OAUTH_TOKEN")
+    OAuth.current_access_token()
   end
 end

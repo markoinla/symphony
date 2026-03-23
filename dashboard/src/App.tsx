@@ -27,9 +27,12 @@ import {
   getProjects,
   getSessionTimeline,
   getSessions,
+  getOAuthAuthorizeUrl,
+  getOAuthStatus,
   getSettings,
   getState,
   mergeTimelineMessage,
+  revokeOAuth,
   type AgentSettingsDefaults,
   type MessagesPayload,
   type Project,
@@ -1521,6 +1524,225 @@ function LinearApiKeyCard() {
   )
 }
 
+function LinearOAuthCard() {
+  const queryClient = useQueryClient()
+
+  const statusQuery = useQuery({
+    queryKey: ['oauth-status'],
+    queryFn: getOAuthStatus,
+    refetchInterval: 60_000,
+  })
+
+  const settingsQuery = useQuery({
+    queryKey: ['settings'],
+    queryFn: getSettings,
+  })
+
+  const existingClientId = settingsQuery.data?.settings.find((s) => s.key === 'linear_oauth.client_id')
+  const existingExpiresAt = settingsQuery.data?.settings.find((s) => s.key === 'linear_oauth.expires_at')
+
+  const [clientId, setClientId] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
+
+  const oauthStatus = statusQuery.data?.status ?? 'disconnected'
+
+  // Read OAuth redirect result from URL params (once, on initial render)
+  const initialFeedback = useMemo(() => {
+    const params = new URLSearchParams(window.location.search)
+    const oauthResult = params.get('oauth')
+
+    if (oauthResult) {
+      window.history.replaceState({}, '', window.location.pathname)
+
+      if (oauthResult === 'success') {
+        return 'Successfully connected to Linear.'
+      }
+
+      const message = params.get('message') || 'Unknown error'
+      return `OAuth authorization failed: ${message}`
+    }
+
+    return null
+  }, [])
+
+  const [feedback, setFeedback] = useState<string | null>(initialFeedback)
+
+  // Invalidate queries after OAuth redirect
+  useEffect(() => {
+    if (initialFeedback?.startsWith('Successfully')) {
+      void queryClient.invalidateQueries({ queryKey: ['oauth-status'] })
+      void queryClient.invalidateQueries({ queryKey: ['settings'] })
+    }
+  }, [initialFeedback, queryClient])
+
+  const saveCredentialsMutation = useMutation({
+    mutationFn: async ({ id, secret }: { id: string; secret: string }) => {
+      await upsertSetting('linear_oauth.client_id', id)
+      await upsertSetting('linear_oauth.client_secret', secret)
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setFeedback('OAuth app credentials saved.')
+      setClientId('')
+      setClientSecret('')
+    },
+    onError: (error: unknown) => {
+      setFeedback(formatQueryError(error))
+    },
+  })
+
+  const connectMutation = useMutation({
+    mutationFn: getOAuthAuthorizeUrl,
+    onSuccess: (data) => {
+      window.location.href = data.authorize_url
+    },
+    onError: (error: unknown) => {
+      setFeedback(formatQueryError(error))
+    },
+  })
+
+  const disconnectMutation = useMutation({
+    mutationFn: revokeOAuth,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['oauth-status'] })
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setFeedback('Disconnected from Linear.')
+    },
+    onError: (error: unknown) => {
+      setFeedback(formatQueryError(error))
+    },
+  })
+
+  const statusBadge =
+    oauthStatus === 'connected' ? (
+      <Badge tone="running">Connected</Badge>
+    ) : oauthStatus === 'expired' ? (
+      <Badge tone="retrying">Token expired</Badge>
+    ) : null
+
+  return (
+    <Card className="min-w-0 space-y-4">
+      <div>
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-semibold tracking-tight text-th-text-1">Linear OAuth App</h2>
+          {statusBadge}
+        </div>
+        <p className="mt-1 text-sm text-th-text-3">
+          Connect Symphony to Linear using OAuth so agent activities are attributed to the app. Configure
+          your Linear OAuth app credentials, then authorize access.
+        </p>
+      </div>
+
+      {feedback ? (
+        <div className="rounded-lg border border-th-border-muted bg-th-muted px-4 py-3 text-sm text-th-text-2">
+          {feedback}
+        </div>
+      ) : null}
+
+      {oauthStatus === 'connected' || oauthStatus === 'expired' ? (
+        <div className="rounded-lg border border-th-border bg-th-inset p-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="space-y-1 text-sm text-th-text-2">
+              {existingClientId ? (
+                <div>
+                  App ID: <code>{existingClientId.value}</code>
+                </div>
+              ) : null}
+              {existingExpiresAt ? (
+                <div>Token expires: {formatDateTime(existingExpiresAt.value)}</div>
+              ) : (
+                <div>Token: via environment variable</div>
+              )}
+            </div>
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+              {oauthStatus === 'expired' ? (
+                <Button
+                  className="w-full sm:w-auto"
+                  disabled={connectMutation.isPending}
+                  onClick={() => {
+                    setFeedback(null)
+                    void connectMutation.mutateAsync()
+                  }}
+                  type="button"
+                >
+                  Reconnect
+                </Button>
+              ) : null}
+              <Button
+                className="w-full sm:w-auto"
+                disabled={disconnectMutation.isPending}
+                onClick={() => {
+                  setFeedback(null)
+                  void disconnectMutation.mutateAsync()
+                }}
+                type="button"
+                variant="danger"
+              >
+                Disconnect
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          <form
+            className="grid gap-4"
+            onSubmit={(event) => {
+              event.preventDefault()
+              setFeedback(null)
+              void saveCredentialsMutation.mutateAsync({
+                id: clientId.trim(),
+                secret: clientSecret.trim(),
+              })
+            }}
+          >
+            <Field label="OAuth App ID (Client ID)">
+              <Input
+                onChange={(event) => setClientId(event.target.value)}
+                placeholder={existingClientId?.value || 'Your Linear app client ID'}
+                value={clientId}
+              />
+            </Field>
+            <Field label="OAuth App Secret (Client Secret)">
+              <Input
+                onChange={(event) => setClientSecret(event.target.value)}
+                placeholder="lin_oauth_..."
+                type="password"
+                value={clientSecret}
+              />
+            </Field>
+            <div>
+              <Button
+                className="w-full sm:w-auto"
+                disabled={saveCredentialsMutation.isPending || (!clientId.trim() && !clientSecret.trim())}
+                type="submit"
+              >
+                {existingClientId ? 'Update credentials' : 'Save credentials'}
+              </Button>
+            </div>
+          </form>
+
+          {existingClientId ? (
+            <div>
+              <Button
+                className="w-full sm:w-auto"
+                disabled={connectMutation.isPending}
+                onClick={() => {
+                  setFeedback(null)
+                  void connectMutation.mutateAsync()
+                }}
+                type="button"
+              >
+                Connect to Linear
+              </Button>
+            </div>
+          ) : null}
+        </>
+      )}
+    </Card>
+  )
+}
+
 function DashboardUrlCard() {
   const queryClient = useQueryClient()
   const settingsQuery = useQuery({
@@ -1836,6 +2058,7 @@ function SettingsView() {
   return (
     <div className="space-y-6">
       <LinearApiKeyCard />
+      <LinearOAuthCard />
       <DashboardUrlCard />
       <AgentSettingsCard
         agentDefaults={settingsQuery.data?.agent_defaults}
