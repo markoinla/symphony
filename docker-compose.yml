@@ -17,8 +17,8 @@ services:
       # Mount host home directory (auth, git, ssh, claude config)
       - ${HOST_HOME}:${HOST_HOME}
 
-      # Persistent DB directory (uses Dokploy's ../files convention)
-      - ../files/symphony-data:${HOST_HOME}/.symphony
+      # Persistent DB directory (named volume survives redeployments)
+      - symphony-data:${HOST_HOME}/.symphony
 
       # Writable workspace directory
       - /tmp/symphony_workspaces:/tmp/symphony_workspaces
@@ -35,5 +35,8 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
+
+volumes:
+  symphony-data:
 
 
