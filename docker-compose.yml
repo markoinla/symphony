@@ -28,6 +28,7 @@ services:
 
       # Git access
       - ${GH_BIN:-/usr/bin/gh}:/usr/bin/gh:ro
+      - ${GH_CONFIG:-~/.config/gh}:/root/.config/gh:ro
       - ${GIT_CONFIG:-~/.gitconfig}:/root/.gitconfig:ro
       - ${SSH_DIR:-~/.ssh}:/root/.ssh:ro
     env_file:
