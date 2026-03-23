@@ -18,6 +18,8 @@ defmodule SymphonyElixir.Linear.Issue do
     live_workpad_comment_id: nil,
     workpad_comment_count: 0,
     blocked_by: [],
+    parent_issue: nil,
+    child_issues: [],
     labels: [],
     comments: [],
     assigned_to_worker: true,
@@ -26,6 +28,13 @@ defmodule SymphonyElixir.Linear.Issue do
   ]
 
   @type comment :: Comment.t()
+
+  @type issue_ref :: %{
+          id: String.t(),
+          identifier: String.t() | nil,
+          title: String.t() | nil,
+          state: String.t() | nil
+        }
 
   @type t :: %__MODULE__{
           id: String.t() | nil,
@@ -39,6 +48,9 @@ defmodule SymphonyElixir.Linear.Issue do
           assignee_id: String.t() | nil,
           live_workpad_comment_id: String.t() | nil,
           workpad_comment_count: non_neg_integer(),
+          blocked_by: [issue_ref()],
+          parent_issue: issue_ref() | nil,
+          child_issues: [issue_ref()],
           labels: [String.t()],
           comments: [comment()],
           assigned_to_worker: boolean(),

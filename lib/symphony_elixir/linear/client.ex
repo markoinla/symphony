@@ -58,6 +58,24 @@ defmodule SymphonyElixir.Linear.Client do
         }
         createdAt
         updatedAt
+        parent {
+          id
+          identifier
+          title
+          state {
+            name
+          }
+        }
+        children {
+          nodes {
+            id
+            identifier
+            title
+            state {
+              name
+            }
+          }
+        }
       }
       pageInfo {
         hasNextPage
@@ -114,6 +132,24 @@ defmodule SymphonyElixir.Linear.Client do
         }
         createdAt
         updatedAt
+        parent {
+          id
+          identifier
+          title
+          state {
+            name
+          }
+        }
+        children {
+          nodes {
+            id
+            identifier
+            title
+            state {
+              name
+            }
+          }
+        }
       }
       pageInfo {
         hasNextPage
@@ -170,6 +206,24 @@ defmodule SymphonyElixir.Linear.Client do
         }
         createdAt
         updatedAt
+        parent {
+          id
+          identifier
+          title
+          state {
+            name
+          }
+        }
+        children {
+          nodes {
+            id
+            identifier
+            title
+            state {
+              name
+            }
+          }
+        }
       }
     }
   }
@@ -647,6 +701,8 @@ defmodule SymphonyElixir.Linear.Client do
       live_workpad_comment_id: live_workpad_comment && live_workpad_comment.id,
       workpad_comment_count: Comment.workpad_comment_count(comments),
       blocked_by: extract_blockers(issue),
+      parent_issue: extract_parent(issue),
+      child_issues: extract_children(issue),
       labels: extract_labels(issue),
       comments: comments,
       assigned_to_worker: assigned_to_worker?(assignee, assignee_filter),
@@ -816,6 +872,30 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   defp extract_blockers(_), do: []
+
+  defp extract_parent(%{"parent" => %{"id" => id} = parent}) when is_binary(id) do
+    %{
+      id: id,
+      identifier: parent["identifier"],
+      title: parent["title"],
+      state: get_in(parent, ["state", "name"])
+    }
+  end
+
+  defp extract_parent(_), do: nil
+
+  defp extract_children(%{"children" => %{"nodes" => children}}) when is_list(children) do
+    Enum.map(children, fn child ->
+      %{
+        id: child["id"],
+        identifier: child["identifier"],
+        title: child["title"],
+        state: get_in(child, ["state", "name"])
+      }
+    end)
+  end
+
+  defp extract_children(_), do: []
 
   defp parse_datetime(nil), do: nil
 

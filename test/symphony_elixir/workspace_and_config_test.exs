@@ -355,6 +355,80 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert issue.assigned_to_worker
   end
 
+  test "linear client normalizes parent issue from GraphQL response" do
+    raw_issue = %{
+      "id" => "child-1",
+      "identifier" => "MT-10",
+      "title" => "Child task",
+      "state" => %{"name" => "Todo"},
+      "parent" => %{
+        "id" => "parent-1",
+        "identifier" => "MT-5",
+        "title" => "Parent epic",
+        "state" => %{"name" => "In Progress"}
+      }
+    }
+
+    issue = Client.normalize_issue_for_test(raw_issue)
+
+    assert issue.parent_issue == %{
+             id: "parent-1",
+             identifier: "MT-5",
+             title: "Parent epic",
+             state: "In Progress"
+           }
+
+    assert issue.child_issues == []
+  end
+
+  test "linear client normalizes child issues from GraphQL response" do
+    raw_issue = %{
+      "id" => "parent-1",
+      "identifier" => "MT-5",
+      "title" => "Parent epic",
+      "state" => %{"name" => "In Progress"},
+      "children" => %{
+        "nodes" => [
+          %{
+            "id" => "child-1",
+            "identifier" => "MT-10",
+            "title" => "Child task A",
+            "state" => %{"name" => "Todo"}
+          },
+          %{
+            "id" => "child-2",
+            "identifier" => "MT-11",
+            "title" => "Child task B",
+            "state" => %{"name" => "Done"}
+          }
+        ]
+      }
+    }
+
+    issue = Client.normalize_issue_for_test(raw_issue)
+
+    assert issue.child_issues == [
+             %{id: "child-1", identifier: "MT-10", title: "Child task A", state: "Todo"},
+             %{id: "child-2", identifier: "MT-11", title: "Child task B", state: "Done"}
+           ]
+
+    assert issue.parent_issue == nil
+  end
+
+  test "linear client defaults parent and children when absent" do
+    raw_issue = %{
+      "id" => "standalone-1",
+      "identifier" => "MT-20",
+      "title" => "Standalone issue",
+      "state" => %{"name" => "Todo"}
+    }
+
+    issue = Client.normalize_issue_for_test(raw_issue)
+
+    assert issue.parent_issue == nil
+    assert issue.child_issues == []
+  end
+
   test "linear client marks explicitly unassigned issues as not routed to worker" do
     raw_issue = %{
       "id" => "issue-99",
@@ -630,6 +704,58 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       title: "Ready work",
       state: "Todo",
       blocked_by: [%{id: "blocker-2", identifier: "MT-1004", state: "Closed"}]
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "todo parent issue with children is not dispatch-eligible" do
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      completed: %{},
+      running: %{},
+      claimed: MapSet.new(),
+      engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "parent-dispatch-1",
+      identifier: "MT-2001",
+      title: "Parent with children",
+      state: "Todo",
+      child_issues: [
+        %{id: "child-1", identifier: "MT-2002", title: "Sub A", state: "Todo"},
+        %{id: "child-2", identifier: "MT-2003", title: "Sub B", state: "Backlog"}
+      ]
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state)
+  end
+
+  test "staged parent issue with children remains dispatch-eligible for triage" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: ["Staged"],
+      tracker_terminal_states: ["Done", "Closed"]
+    )
+
+    state = %Orchestrator.State{
+      max_concurrent_agents: 3,
+      completed: %{},
+      running: %{},
+      claimed: MapSet.new(),
+      engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: "parent-staged-1",
+      identifier: "MT-2004",
+      title: "Parent in staging",
+      state: "Staged",
+      child_issues: [
+        %{id: "child-3", identifier: "MT-2005", title: "Sub C", state: "Backlog"}
+      ]
     }
 
     assert Orchestrator.should_dispatch_issue_for_test(issue, state)

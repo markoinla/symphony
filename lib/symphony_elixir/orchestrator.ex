@@ -714,7 +714,7 @@ defmodule SymphonyElixir.Orchestrator do
          db_claims
        ) do
     candidate_issue?(issue, active_states, terminal_states) and
-      !todo_issue_blocked_by_non_terminal?(issue, terminal_states) and
+      !todo_issue_dispatch_blocked?(issue, terminal_states) and
       !MapSet.member?(claimed, issue.id) and
       !Enum.member?(db_claims, issue.id) and
       !Map.has_key?(running, issue.id) and
@@ -781,6 +781,11 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp issue_routable_to_worker?(_issue), do: true
 
+  defp todo_issue_dispatch_blocked?(issue, terminal_states) do
+    todo_issue_blocked_by_non_terminal?(issue, terminal_states) or
+      todo_parent_issue_with_children?(issue)
+  end
+
   defp todo_issue_blocked_by_non_terminal?(
          %Issue{state: issue_state, blocked_by: blockers},
          terminal_states
@@ -797,6 +802,13 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp todo_issue_blocked_by_non_terminal?(_issue, _terminal_states), do: false
+
+  defp todo_parent_issue_with_children?(%Issue{state: issue_state, child_issues: children})
+       when is_binary(issue_state) and is_list(children) and children != [] do
+    normalize_issue_state(issue_state) == "todo"
+  end
+
+  defp todo_parent_issue_with_children?(_issue), do: false
 
   defp terminal_issue_state?(state_name, terminal_states) when is_binary(state_name) do
     MapSet.member?(terminal_states, normalize_issue_state(state_name))
