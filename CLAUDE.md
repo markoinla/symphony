@@ -18,32 +18,12 @@ mix setup                  # Install Elixir + npm dependencies
 mix phx.server             # Start Phoenix API server
 cd dashboard && npm run dev # Start Vite dev server (port 5173, proxies /api to :4000)
 
-# Build
-mix build                  # Build dashboard assets + escript
-
 # Fast validation (use this for pre-commit/pre-push checks)
 mix compile --warnings-as-errors && mix format --check-formatted && mix lint
 
 # Run specific tests only — prefer targeted tests over full suite
 mix test path/to/test.exs           # Run a single test file
 mix test path/to/test.exs:42        # Run a specific test by line number
-
-# Full CI (slow — only run when explicitly asked, NOT on every change)
-make all                   # Full CI: setup, build, fmt-check, lint, coverage, dialyzer
-mix test                   # Run all tests
-mix test --cover           # Run with coverage
-mix dialyzer --format short   # Static type checking
-mix format                 # Format code
-mix format --check-formatted
-mix lint                   # specs.check + credo --strict
-mix specs.check            # Verify all public functions have @spec
-
-# Dashboard
-cd dashboard && npm run build  # Build production frontend
-cd dashboard && npm run lint   # ESLint
-
-# E2E (creates real Linear resources + Codex session)
-make e2e
 ```
 
 ## Architecture

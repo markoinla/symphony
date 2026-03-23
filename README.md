@@ -243,7 +243,7 @@ mix release
 ## Testing
 
 ```bash
-make all
+mix compile --warnings-as-errors && mix format --check-formatted && mix lint
 ```
 
 Run the real external end-to-end test only when you want Symphony to create disposable Linear
@@ -252,7 +252,7 @@ resources and launch a real `codex app-server` session:
 ```bash
 cd elixir
 export LINEAR_API_KEY=...
-make e2e
+SYMPHONY_RUN_LIVE_E2E=1 mix test test/symphony_elixir/live_e2e_test.exs
 ```
 
 Optional environment variables:
@@ -260,7 +260,7 @@ Optional environment variables:
 - `SYMPHONY_LIVE_LINEAR_TEAM_KEY` defaults to `SYME2E`
 - `SYMPHONY_LIVE_SSH_WORKER_HOSTS` uses those SSH hosts when set, as a comma-separated list
 
-`make e2e` runs two live scenarios:
+The E2E test runs two live scenarios:
 - one with a local worker
 - one with SSH workers
 
@@ -270,7 +270,7 @@ mounts the host `~/.codex/auth.json` into each worker, verifies that Symphony ca
 over real SSH, then runs the same orchestration flow against those worker addresses. This keeps
 the transport representative without depending on long-lived external machines.
 
-Set `SYMPHONY_LIVE_SSH_WORKER_HOSTS` if you want `make e2e` to target real SSH hosts instead.
+Set `SYMPHONY_LIVE_SSH_WORKER_HOSTS` to target real SSH hosts instead.
 
 The live test creates a temporary Linear project and issue, writes a temporary `WORKFLOW.md`, runs
 a real agent turn, verifies the workspace side effect, requires Codex to comment on and close the

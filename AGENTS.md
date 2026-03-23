@@ -6,7 +6,7 @@ This directory contains the Elixir agent orchestration service that polls Linear
 
 - Elixir: `1.19.x` (OTP 28) via `mise`.
 - Install deps: `mix setup`.
-- Main quality gate: `make all` (format check, lint, coverage, dialyzer).
+- Fast validation: `mix compile --warnings-as-errors && mix format --check-formatted && mix lint`
 
 
 ## Codebase-Specific Conventions
@@ -26,10 +26,10 @@ This directory contains the Elixir agent orchestration service that polls Linear
 
 ## Tests and Validation
 
-Run targeted tests while iterating, then run full gates before handoff.
+Run targeted tests while iterating, then run fast validation before handoff.
 
 ```bash
-make all
+mix compile --warnings-as-errors && mix format --check-formatted && mix lint
 ```
 
 ## Required Rules

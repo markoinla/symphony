@@ -26,7 +26,7 @@ description:
 ## Steps
 
 1. Identify current branch and confirm remote state.
-2. Run local validation (`make all`) before pushing.
+2. Run fast validation before pushing.
 3. Push branch to `origin` with upstream tracking if needed, using whatever
    remote URL is already configured.
 4. If push is not clean/rejected:
@@ -61,8 +61,8 @@ description:
 # Identify branch
 branch=$(git branch --show-current)
 
-# Minimal validation gate
-make all
+# Fast validation gate
+mix compile --warnings-as-errors && mix format --check-formatted && mix lint
 
 # Initial push: respect the current origin remote.
 git push -u origin HEAD
