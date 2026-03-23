@@ -121,7 +121,7 @@ defmodule SymphonyElixir.WebhookDispatcher do
           Logger.error("Webhook-dispatched agent run failed for #{issue.id}: #{Exception.message(e)}")
       after
         Store.release_issue_claim(issue.id)
-        AgentSession.stop(issue.id)
+        AgentSession.complete(issue.id, :failed)
       end
     end)
   end
