@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Linear.Client do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, Linear.Comment, Linear.Issue}
+  alias SymphonyElixir.{Config, Linear.Auth, Linear.Comment, Linear.Issue}
 
   @issue_page_size 50
   @max_error_body_log_bytes 1_000
@@ -204,7 +204,7 @@ defmodule SymphonyElixir.Linear.Client do
       project_slug = tracker.project_slug
 
       cond do
-        is_nil(tracker.api_key) ->
+        not Auth.has_auth?() ->
           {:error, :missing_linear_api_token}
 
         is_nil(project_slug) ->
@@ -369,7 +369,10 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   defp validate_tracker_api_key(%{api_key: api_key}) when is_binary(api_key), do: :ok
-  defp validate_tracker_api_key(_tracker), do: {:error, :missing_linear_api_token}
+
+  defp validate_tracker_api_key(_tracker) do
+    if Auth.has_oauth_token?(), do: :ok, else: {:error, :missing_linear_api_token}
+  end
 
   defp do_fetch_by_states(project_slug, state_names, assignee_filter) do
     do_fetch_by_states_page(project_slug, state_names, assignee_filter, nil, [])
@@ -566,16 +569,12 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   defp graphql_headers do
-    case Config.settings!().tracker.api_key do
-      nil ->
-        {:error, :missing_linear_api_token}
+    case Auth.resolve_auth_header() do
+      {:ok, auth_header} ->
+        {:ok, [auth_header, {"Content-Type", "application/json"}]}
 
-      token ->
-        {:ok,
-         [
-           {"Authorization", token},
-           {"Content-Type", "application/json"}
-         ]}
+      {:error, _} ->
+        {:error, :missing_linear_api_token}
     end
   end
 

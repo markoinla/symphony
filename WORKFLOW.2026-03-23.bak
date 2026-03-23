@@ -42,13 +42,14 @@ linear_agent:
 
 You are working on a Linear ticket `{{ issue.identifier }}`.
 
-{% if attempt %}
-Continuation context:
+Your job this turn is to complete **exactly one unit of work** — one plan item, one phase task, or one planning pass — then stop. Another turn will pick up the next item. Do not attempt to finish the entire ticket in one turn.
 
-- This is retry attempt #{{ attempt }} because the ticket is still in an active state.
-- Resume from the current workspace state instead of restarting from scratch.
-- Do not repeat already-completed investigation or validation unless needed for new code changes.
-- Do not end the turn while the issue remains in an active state unless you are blocked by missing required permissions/secrets.
+{% if attempt %}
+Continuation context (turn #{{ attempt }}):
+
+- **Read the workpad first.** The workpad is the source of truth for what has been done. Do not re-derive state from code or git history when the workpad is current.
+- Identify the next unchecked plan item or phase task. That single item is your entire scope this turn.
+- Do not repeat already-completed work unless needed for new code changes.
   {% endif %}
 
 Issue context:
@@ -105,8 +106,9 @@ Use the context files and package manifests to determine the correct setup. If m
 Instructions:
 
 1. This is an unattended orchestration session. Never ask a human to perform follow-up actions.
-2. Only stop early for a true blocker (missing required auth/permissions/secrets). If blocked, record it in the workpad and move the issue according to workflow.
-3. Final message must report completed actions and blockers only. Do not include "next steps for user".
+2. Each turn completes **one unit of work** then stops. The orchestrator will invoke the next turn automatically. Do not attempt to complete the entire ticket in a single turn.
+3. Only stop without completing your one item for a true blocker (missing required auth/permissions/secrets). If blocked, record it in the workpad and move the issue according to workflow.
+4. Final message must report what was completed this turn. Do not include "next steps for user".
 
 Work only in the provided repository copy. Do not touch any other path.
 
@@ -116,6 +118,16 @@ A Linear MCP server is available in every agent session. Use its tools for all L
 operations (querying issues, creating/updating comments, managing labels, changing
 issue state). If the tools are not immediately visible, use `ToolSearch` to discover
 them. If no Linear tools are found, stop and ask the user to check the configuration.
+
+## Playwright MCP for browser testing
+
+A Playwright MCP server is available globally. Use its tools (`browser_navigate`, `browser_screenshot`, `browser_click`, `browser_type`, etc.) for any browser-based validation — do not write Playwright scripts manually. The MCP runs headless by default. Use it to:
+
+- Reproduce UI bugs by navigating to the relevant page and taking a screenshot.
+- Validate UI changes after implementation.
+- Capture screenshot evidence for the workpad (see "Uploading media to Linear comments" below).
+
+If the project provides test credentials (e.g. in `.env.local` or a `CLAUDE.md` file), use them for authentication during validation.
 
 ## Linear GraphQL reference
 
@@ -288,10 +300,66 @@ query FindLabel($teamId: String!, $labelName: String!) {
 - All mutations return `{ success }` — check this field.
 - If you get `Unknown field` errors, you are using a field name that does not exist. Do not retry with variations — consult this reference.
 
+### Uploading media to Linear comments
+
+When you need to attach screenshots or video to a Linear comment (e.g., for validation evidence), take the screenshot using the Playwright MCP `browser_screenshot` tool, then upload it to Linear using the `fileUpload` mutation to get a presigned upload URL, upload the file, and reference the returned asset URL in markdown.
+
+**Step 1: Request upload URL**
+
+```graphql
+mutation FileUpload($contentType: String!, $filename: String!, $size: Int!) {
+  fileUpload(contentType: $contentType, filename: $filename, size: $size) {
+    success
+    uploadFile {
+      uploadUrl
+      assetUrl
+      headers {
+        key
+        value
+      }
+    }
+  }
+}
+```
+
+Variables example: `{"contentType": "image/png", "filename": "screenshot.png", "size": 102400}`
+
+Get the file size with: `stat -c%s screenshot.png`
+
+**Step 2: Upload the file with curl**
+
+Extract `uploadUrl`, `assetUrl`, and `headers` from the response, then PUT the file:
+
+```bash
+curl -X PUT "<uploadUrl>" \
+  -H "Content-Type: image/png" \
+  -H "Cache-Control: public, max-age=31536000" \
+  -H "<key1>: <value1>" \
+  -H "<key2>: <value2>" \
+  --data-binary @screenshot.png
+```
+
+Include **all** headers returned by the mutation — missing headers cause 403 errors.
+
+**Step 3: Reference in markdown**
+
+Use the `assetUrl` in the comment body:
+
+```markdown
+![screenshot](<assetUrl>)
+```
+
+For video, use the same flow with `contentType: "video/webm"` (or mp4). Playwright records video as webm by default.
+
+**Do not** base64-encode images inline — they are too large and will hit API size limits.
+
 ## Default posture
 
+- **One plan item per turn, then stop.** Each turn picks one unchecked item, implements it, validates it, commits it, updates the workpad, and stops. The next turn handles the next item. This protects context and enables longer, higher-quality sessions.
+- **Workpad is durable state; context window is ephemeral.** The workpad must be read at the start of every turn and updated at the end. Never rely on in-context memory of prior turns.
+- **Completing one item IS completing the turn.** Do not treat stopping as premature — the orchestrator will invoke another turn automatically. Your job is done when the workpad is updated.
 - Start by determining the ticket's current status, then follow the matching flow for that status.
-- Start every task by opening the tracking workpad comment and bringing it up to date before doing new implementation work.
+- Start every turn by opening the tracking workpad comment and bringing it up to date before doing new implementation work.
 - Spend extra effort up front on planning and verification design before implementation.
 - Reproduce first: always confirm the current behavior/issue signal before changing code so the fix target is explicit.
 - Keep ticket metadata current (state, checklist, acceptance criteria, links).
@@ -315,6 +383,34 @@ query FindLabel($teamId: String!, $labelName: String!) {
 - `push`: keep remote branch current and publish updates.
 - `pull`: keep branch updated with latest `origin/main` before handoff.
 - `land`: when ticket reaches `Merging`, explicitly open and follow `.codex/skills/land/SKILL.md`, which includes the `land` loop.
+
+## Turn Protocol
+
+Each turn you are invoked for exactly one unit of work. Complete it, update the workpad, and stop. The orchestrator will call you again for the next item — you do not need to continue.
+
+### Turn skeleton
+
+1. **Orient** — Read the workpad comment. Identify the current state of the plan. Do not re-derive state from code or git history when the workpad is current.
+2. **Pick** — Select the single highest-priority unchecked plan item. If no plan items remain, pick the next phase task (validation rollup, PR creation, feedback sweep). That item is your entire scope.
+3. **Execute** — Implement that one item. Stay focused; do not expand scope into adjacent items.
+4. **Verify** — Run a targeted check that proves the item works (test, typecheck, lint, or manual verification). Do not run the full suite unless the change is cross-cutting.
+5. **Commit** — Commit the change with a clear message referencing the plan item.
+6. **Update workpad** — Check off the completed item, add notes, update `Patterns` if a reusable learning was discovered. Save the workpad comment.
+7. **Stop** — You are done. Do not pick up the next item. The orchestrator handles continuation.
+
+### Why one item per turn
+
+- Each turn is a fresh invocation with a clean context window.
+- The workpad is the durable state; your context window is ephemeral and will not carry over.
+- Small commits are easier to review and revert.
+- Validation per-item catches regressions early instead of accumulating breakage.
+- If a turn fails or is interrupted, only one item needs recovery.
+
+### Exceptions to single-item turns
+
+- **Trivially coupled items** (e.g., rename + update all imports) may be combined if the total diff is small and self-contained.
+- **Planning turn** (Step 1) has its own structure: read issue, create/update workpad, build plan, stop.
+- **PR turn** and **feedback sweep turn** are inherently different from implementation turns and follow their own structure in Step 2 phases.
 
 ## Status map
 
@@ -349,7 +445,9 @@ query FindLabel($teamId: String!, $labelName: String!) {
    - only then begin analysis/planning/implementation work.
 6. Add a short comment if state and issue content are inconsistent, then proceed with the safest flow.
 
-## Step 1: Start/continue execution (Todo or In Progress)
+## Step 1: Planning turn (Todo or In Progress)
+
+This turn's job is to produce a solid plan and a current workpad. That is the complete deliverable — do not start implementation.
 
 1.  Find or create a single persistent scratchpad comment for the issue:
     - If `issue.live_workpad_comment_id` is present, treat that exact comment ID as the live workpad and update it in place via the Linear MCP comment update tool.
@@ -361,10 +459,12 @@ query FindLabel($teamId: String!, $labelName: String!) {
     - Persist the workpad comment ID and only write progress updates to that ID via the Linear MCP comment update tool.
 2.  If arriving from `Todo`, do not delay on additional status transitions: the issue should already be `In Progress` before this step begins.
 3.  Immediately reconcile the workpad before new edits:
-    - Check off items that are already done.
+    - Check off items that are already done (for continuation turns).
     - Expand/fix the plan so it is comprehensive for current scope.
     - Ensure `Acceptance Criteria` and `Validation` are current and still make sense for the task.
-4.  Start work by writing/updating a hierarchical plan in the workpad comment.
+4.  Write/update a hierarchical plan in the workpad comment. **Each plan item should be a single turn's worth of work** — small enough to implement, validate, and commit in one turn.
+    - If a plan item feels like it would take multiple files or multiple logical changes, decompose it into child items.
+    - Aim for plan items that produce a single commit each.
 5.  Ensure the workpad includes a compact environment stamp at the top as a code fence line:
     - Format: `<host>:<abs-workdir>@<short-sha>`
     - Example: `devbox-01:/home/dev-user/code/symphony-workspaces/MT-32@7bdde33bc`
@@ -374,13 +474,14 @@ query FindLabel($teamId: String!, $labelName: String!) {
     - If changes touch app files or app behavior, add explicit app-specific flow checks to `Acceptance Criteria` in the workpad (for example: launch path, changed interaction path, and expected result path).
     - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` and `Validation` sections as required checkboxes (no optional downgrade).
 7.  Run a principal-style self-review of the plan and refine it in the comment.
-8.  For bug-fix tickets only: before implementing, capture a concrete reproduction signal and record it in the workpad `Notes` section (command/output, screenshot, or deterministic UI behavior). Skip this step for feature work.
+8.  For bug-fix tickets only: capture a concrete reproduction signal and record it in the workpad `Notes` section (command/output, screenshot, or deterministic UI behavior). Skip this step for feature work.
 9.  Run the `pull` skill to sync with latest `origin/main` before any code edits, then record the pull/sync result in the workpad `Notes`.
     - Include a `pull skill evidence` note with:
       - merge source(s),
       - result (`clean` or `conflicts resolved`),
       - resulting `HEAD` short SHA.
-10. Compact context and proceed to execution.
+10. **Update the workpad.** Ensure the plan, acceptance criteria, validation, environment stamp, and notes are all written to the workpad comment.
+11. **Stop.** The plan is your deliverable this turn. You are done. The next turn will begin Phase 1 implementation.
 
 ## PR feedback sweep protocol (required)
 
@@ -412,43 +513,61 @@ Use this only when completion is blocked by missing required tools or missing au
 
 ## Step 2: Execution phase (Todo -> In Progress -> Human Review)
 
-1.  Determine current repo state (`branch`, `git status`, `HEAD`) and verify the kickoff `pull` sync result is already recorded in the workpad before implementation continues.
-2.  If current issue state is `Todo`, move it to `In Progress`; otherwise leave the current state unchanged.
-3.  Load the existing workpad comment and treat it as the active execution checklist.
-    - Edit it liberally whenever reality changes (scope, risks, validation approach, discovered tasks).
-4.  Implement against the hierarchical TODOs and keep the comment current:
-    - Check off completed items.
-    - Add newly discovered items in the appropriate section.
+Execution is broken into three phases. Each phase is composed of one or more turns that follow the Turn Protocol.
+
+### Phase 1: Implementation turns (one plan item per turn)
+
+This turn's job is to complete exactly one plan item. That single item — implemented, verified, committed, and recorded in the workpad — is the complete deliverable.
+
+1.  **Orient.** Read the workpad. Determine current repo state (`branch`, `git status`, `HEAD`). If this is the first implementation turn, verify the kickoff `pull` sync result is recorded in the workpad.
+2.  If current issue state is `Todo`, move it to `In Progress`; otherwise leave unchanged.
+3.  **Pick.** Select the single highest-priority unchecked plan item from the workpad. That item is your entire scope.
+    - For tickets that started as `Todo` with an attached PR, the first pick must be: run the full PR feedback sweep protocol before new feature work.
+4.  **Execute.** Implement that one item.
+    - If new sub-tasks or risks are discovered, add them to the workpad plan — but do not implement them this turn.
     - Keep parent/child structure intact as scope evolves.
-    - Update the workpad immediately after each meaningful milestone (for example: reproduction complete, code change landed, validation run, review feedback addressed).
-    - Never leave completed work unchecked in the plan.
-    - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
-5.  After all implementation is complete, run validation **once**:
-    - Execute ticket-provided `Validation`/`Test Plan`/`Testing` requirements when present; treat unmet items as incomplete work.
+5.  **Verify.** Run a targeted check that proves the item works:
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
-    - If app-touching, run `launch-app` validation and capture/upload media via `github-pr-media` before handoff.
+    - If app-touching, validate the specific behavior changed (screenshots/media if UI).
     - You may make temporary local proof edits to validate assumptions; revert them before commit.
-    - Document validation steps and outcomes in the workpad `Validation`/`Notes` sections.
-    - If validation fails, fix the issue and rerun only the failing checks — do not rerun the entire suite.
-6.  Verify acceptance criteria are met. If gaps exist, fix them and rerun only the affected validation.
-7.  Commit, push, and create/update the PR.
+    - If validation fails, fix and rerun only the failing checks — do not run the full suite.
+6.  **Commit.** Commit the change with a clear message referencing the plan item.
+7.  **Update workpad.** Check off the completed plan item. Add validation outcome to `Validation` section. Add progress note to `Notes` with timestamp. If a reusable learning was discovered, add it to `Patterns`. Save the workpad comment.
+8.  **Stop.** You are done. The next turn will pick the next unchecked item.
+
+### Phase 2: PR creation turn
+
+Enter this phase when all plan items in the workpad are checked. This turn's job is to create the PR and sync with main. That is the complete deliverable.
+
+1.  Read the workpad. Confirm all plan items and acceptance criteria are checked.
+2.  Run any remaining acceptance criteria validation that wasn't covered per-item.
+    - Execute ticket-provided `Validation`/`Test Plan`/`Testing` requirements when present; treat unmet items as incomplete work.
+    - If app-touching, run `launch-app` validation and capture/upload media via `github-pr-media` before handoff.
+3.  If gaps exist, fix them, validate, and commit — but limit to one fix-commit cycle.
+4.  Merge latest `origin/main` into branch and resolve conflicts. Only rerun checks if the merge introduced conflicts in code you changed.
+5.  Push and create/update the PR.
     - Ensure the GitHub PR has label `symphony` (add it if missing).
     - Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
-8.  Merge latest `origin/main` into branch and resolve conflicts. Only rerun checks if the merge introduced conflicts in code you changed.
-9.  Update the workpad comment with final checklist status and validation notes.
-    - Mark completed plan/acceptance/validation checklist items as checked.
-    - Add final handoff notes (commit + validation summary) in the same workpad comment.
+6.  Update the workpad with final checklist status.
     - Do not include PR URL in the workpad comment; keep PR linkage on the issue via attachment/link fields.
     - Add a short `### Confusions` section at the bottom when any part of task execution was unclear/confusing, with concise bullets.
     - Do not post any additional completion summary comment.
-10. Before moving to `Human Review`, run the PR feedback sweep protocol:
+7.  **Stop.** PR is created. You are done. The next turn handles the feedback sweep.
+
+### Phase 3: Feedback sweep and handoff turn
+
+Enter this phase after the PR is created. This turn's job is to sweep PR feedback and, if clean, move to `Human Review`. If feedback requires code changes, implement **one** fix this turn — the next turn will re-sweep.
+
+1.  Read the workpad. Run the PR feedback sweep protocol:
     - Address or push back on all actionable comments.
     - Poll CI checks — do not re-run locally what CI already covers.
+    - If feedback requires code changes, implement one fix, validate, commit, push, update the workpad, and **stop**. The next turn will re-sweep.
+2.  If no actionable feedback remains:
     - Confirm every required ticket-provided validation/test-plan item is explicitly marked complete in the workpad.
-    - Re-open and refresh the workpad before state transition so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
-11. Only then move issue to `Human Review`.
+    - Re-open and refresh the workpad so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
+    - Move issue to `Human Review`.
     - Exception: if blocked by missing required non-GitHub tools/auth per the blocked-access escape hatch, move to `Human Review` with the blocker brief and explicit unblock actions.
-12. For `Todo` tickets that already had a PR attached at kickoff:
+3.  For `Todo` tickets that already had a PR attached at kickoff:
     - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
     - Ensure branch was pushed with any required updates.
     - Then move to `Human Review`.
@@ -476,10 +595,11 @@ Use this only when completion is blocked by missing required tools or missing au
 
 ## Completion bar before Human Review
 
-- Step 1/2 checklist is fully complete and accurately reflected in the single workpad comment.
+- All plan items are checked in the workpad (each validated and committed in its own turn).
 - Acceptance criteria and required ticket-provided validation items are complete.
-- Validation passed once after implementation (local run) and CI checks are green on the PR.
-- PR feedback sweep is complete and no actionable comments remain.
+- Per-item validation passed during implementation turns; acceptance-level validation passed in the PR turn.
+- CI checks are green on the PR.
+- PR feedback sweep (Phase 3) is complete and no actionable comments remain.
 - Branch is pushed and PR is linked on the issue with `symphony` label.
 - If app-touching, runtime validation/media requirements from `App runtime validation (required)` are complete.
 
@@ -529,6 +649,11 @@ Use this exact structure for the persistent workpad comment and keep it updated 
 ### Validation
 
 - [ ] targeted tests: `<command>`
+
+### Patterns
+
+- <reusable learnings discovered during execution, e.g. "this codebase uses X for Y", "always update Z when changing W">
+- <only add general, reusable patterns — not task-specific details>
 
 ### Notes
 

@@ -10,7 +10,7 @@ defmodule SymphonyElixir.Claude.AppServer do
   @behaviour SymphonyElixir.Engine
 
   require Logger
-  alias SymphonyElixir.{Claude.CommandBuilder, Claude.EventTranslator, Config, MCP.ConfigWriter}
+  alias SymphonyElixir.{Claude.CommandBuilder, Claude.EventTranslator, Config, Linear.OAuth, MCP.ConfigWriter}
 
   @port_line_bytes 1_048_576
 
@@ -181,9 +181,10 @@ defmodule SymphonyElixir.Claude.AppServer do
   defp write_mcp_config(workspace) do
     settings = Config.settings!()
     api_key = settings.tracker.api_key
+    oauth_token = OAuth.current_access_token()
     endpoint = settings.tracker.endpoint
 
-    ConfigWriter.write(workspace, api_key: api_key, endpoint: endpoint)
+    ConfigWriter.write(workspace, api_key: api_key, oauth_token: oauth_token, endpoint: endpoint)
   end
 
   defp validate_workspace(workspace, nil) when is_binary(workspace) do
