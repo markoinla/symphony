@@ -416,10 +416,27 @@ export type LinearProject = {
   team_key: string | null
 }
 
+export type GitHubRepo = {
+  id: number
+  full_name: string
+  name: string
+  owner: string
+  description: string | null
+  private: boolean
+  default_branch: string
+  url: string
+}
+
 export function searchLinearProjects(query: string) {
   const params = new URLSearchParams()
   if (query) params.set('q', query)
   return requestJson<{ projects: LinearProject[] }>(`/api/v1/linear/projects?${params.toString()}`)
+}
+
+export function searchGitHubRepos(query: string) {
+  const params = new URLSearchParams()
+  if (query) params.set('q', query)
+  return requestJson<{ repos: GitHubRepo[] }>(`/api/v1/github/repos?${params.toString()}`)
 }
 
 export function emptyProject(): ProjectBody {
