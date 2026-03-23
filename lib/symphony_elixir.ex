@@ -34,11 +34,8 @@ defmodule SymphonyElixir.Application do
         SymphonyElixir.Repo,
         {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
         SymphonyElixir.WorkflowStore,
-        {DynamicSupervisor, name: SymphonyElixir.OrchestratorSupervisor, strategy: :one_for_one},
-        SymphonyElixir.OrchestratorStarter,
-        SymphonyElixir.HttpServer,
-        SymphonyElixir.StatusDashboard
-      ]
+        {DynamicSupervisor, name: SymphonyElixir.OrchestratorSupervisor, strategy: :one_for_one}
+      ] ++ runtime_children()
 
     Supervisor.start_link(
       children,
@@ -53,12 +50,27 @@ defmodule SymphonyElixir.Application do
     :ok
   end
 
-  defp run_migrations do
-    repo_config = Application.get_env(:symphony_elixir, SymphonyElixir.Repo, [])
+  defp runtime_children do
+    if sandbox_pool?() do
+      []
+    else
+      [
+        SymphonyElixir.OrchestratorStarter,
+        SymphonyElixir.HttpServer,
+        SymphonyElixir.StatusDashboard
+      ]
+    end
+  end
 
-    unless repo_config[:pool] == Ecto.Adapters.SQL.Sandbox do
+  defp run_migrations do
+    unless sandbox_pool?() do
       {:ok, _, _} =
         Ecto.Migrator.with_repo(SymphonyElixir.Repo, &Ecto.Migrator.run(&1, :up, all: true))
     end
+  end
+
+  defp sandbox_pool? do
+    repo_config = Application.get_env(:symphony_elixir, SymphonyElixir.Repo, [])
+    repo_config[:pool] == Ecto.Adapters.SQL.Sandbox
   end
 end

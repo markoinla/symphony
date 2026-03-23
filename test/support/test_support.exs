@@ -21,12 +21,14 @@ defmodule SymphonyElixir.TestSupport do
       alias SymphonyElixir.WorkflowStore
       alias SymphonyElixir.Workspace
 
+      alias Ecto.Adapters.SQL.Sandbox, as: SQLSandbox
+
       import SymphonyElixir.TestSupport,
         only: [write_workflow_file!: 1, write_workflow_file!: 2, restore_env: 2, stop_default_http_server: 0]
 
       setup do
-        :ok = Ecto.Adapters.SQL.Sandbox.checkout(SymphonyElixir.Repo)
-        Ecto.Adapters.SQL.Sandbox.mode(SymphonyElixir.Repo, {:shared, self()})
+        :ok = SQLSandbox.checkout(SymphonyElixir.Repo)
+        SQLSandbox.mode(SymphonyElixir.Repo, {:shared, self()})
 
         workflow_root =
           Path.join(
