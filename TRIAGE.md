@@ -21,6 +21,7 @@ agent:
   max_turns: 5
   max_continuations: 0
 claude:
+  model: claude-sonnet-4-6
   permission_mode: bypassPermissions
 codex:
   command: codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --config model_reasoning_summary=detailed app-server

@@ -23,6 +23,7 @@ agent:
   max_turns: 10
   max_continuations: 0
 claude:
+  model: claude-haiku-4-5-20251001
   permission_mode: bypassPermissions
 codex:
   command: codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --config model_reasoning_summary=detailed app-server
