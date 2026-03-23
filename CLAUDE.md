@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Symphony is an Elixir/OTP agent orchestration service that polls Linear for issues, creates per-issue workspaces, and runs Codex in app-server mode. It includes a React dashboard for observability.
 
-**Stack:** Elixir 1.19 (OTP 28) + Phoenix 1.8 backend, React 19 + TypeScript + Vite frontend, SQLite3 database.
+**Stack:** Elixir 1.19 (OTP 28) + Phoenix 1.8 backend, React 19 + TypeScript + Vite frontend, PostgreSQL database.
 
 ## Common Commands
 
@@ -21,16 +21,21 @@ cd dashboard && npm run dev # Start Vite dev server (port 5173, proxies /api to 
 # Build
 mix build                  # Build dashboard assets + escript
 
-# Quality gates
+# Fast validation (use this for pre-commit/pre-push checks)
+mix compile --warnings-as-errors && mix format --check-formatted && mix lint
+
+# Run specific tests only — prefer targeted tests over full suite
+mix test path/to/test.exs           # Run a single test file
+mix test path/to/test.exs:42        # Run a specific test by line number
+
+# Full CI (slow — only run when explicitly asked, NOT on every change)
 make all                   # Full CI: setup, build, fmt-check, lint, coverage, dialyzer
+mix test                   # Run all tests
+mix test --cover           # Run with coverage
+mix dialyzer --format short   # Static type checking
 mix format                 # Format code
 mix format --check-formatted
 mix lint                   # specs.check + credo --strict
-mix test                   # Run all tests
-mix test --cover           # Run with coverage
-mix test path/to/test.exs  # Run a single test file
-mix test path/to/test.exs:42  # Run a specific test by line number
-mix dialyzer --format short   # Static type checking
 mix specs.check            # Verify all public functions have @spec
 
 # Dashboard
