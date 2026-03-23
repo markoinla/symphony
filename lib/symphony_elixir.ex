@@ -23,6 +23,7 @@ defmodule SymphonyElixir.Application do
   @impl true
   def start(_type, _args) do
     :ok = SymphonyElixir.LogFile.configure()
+    resolve_db_path()
     ensure_db_directory()
 
     children =
@@ -52,6 +53,11 @@ defmodule SymphonyElixir.Application do
   def stop(_state) do
     SymphonyElixir.StatusDashboard.render_offline_status()
     :ok
+  end
+
+  defp resolve_db_path do
+    db_path = Path.expand("~/.symphony/symphony.db")
+    Application.put_env(:symphony_elixir, SymphonyElixir.Repo, database: db_path)
   end
 
   defp ensure_db_directory do
