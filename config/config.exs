@@ -12,8 +12,10 @@ config :symphony_elixir, SymphonyElixirWeb.Endpoint,
     layout: false
   ],
   pubsub_server: SymphonyElixir.PubSub,
-  secret_key_base: String.duplicate("s", 64),
-  check_origin: false,
+  secret_key_base:
+    System.get_env("SYMPHONY_SECRET_KEY_BASE") ||
+      Base.encode64(:crypto.strong_rand_bytes(48), padding: false),
+  check_origin: ["https://symphony.marko.la"],
   server: false
 
 import_config "#{config_env()}.exs"

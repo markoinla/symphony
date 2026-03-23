@@ -368,6 +368,28 @@ export function updateTimelineMessage(payload: MessagesPayload, incoming: Timeli
   return { ...payload, sessions }
 }
 
+export type AuthStatus = {
+  authenticated: boolean
+  auth_required: boolean
+}
+
+export function getAuthStatus() {
+  return requestJson<AuthStatus>('/api/v1/auth/status')
+}
+
+export function login(password: string) {
+  return requestJson<{ ok: boolean }>('/api/v1/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ password }),
+  })
+}
+
+export function logout() {
+  return requestJson<{ ok: boolean }>('/api/v1/auth/logout', {
+    method: 'POST',
+  })
+}
+
 export function emptyProject(): ProjectBody {
   return {
     name: '',

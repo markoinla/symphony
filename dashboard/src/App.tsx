@@ -15,7 +15,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import * as Collapsible from '@radix-ui/react-collapsible'
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   ApiError,
@@ -23,6 +23,7 @@ import {
   deleteProject,
   deleteSetting,
   emptyProject,
+  getAuthStatus,
   getIssue,
   getProjects,
   getSessionTimeline,
@@ -31,6 +32,8 @@ import {
   getOAuthStatus,
   getSettings,
   getState,
+  login,
+  logout,
   mergeTimelineMessage,
   revokeOAuth,
   type AgentSettingsDefaults,
@@ -107,7 +110,17 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      retry: 1,
+      retry: (failureCount, error) => {
+        if (error instanceof ApiError && error.status === 401) return false
+        return failureCount < 1
+      },
+    },
+    mutations: {
+      onError: (error) => {
+        if (error instanceof ApiError && error.status === 401) {
+          window.location.href = '/login'
+        }
+      },
     },
   },
 })
@@ -167,12 +180,19 @@ const settingsRoute = createRoute({
   component: SettingsView,
 })
 
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/login',
+  component: LoginView,
+})
+
 const routeTree = rootRoute.addChildren([
   dashboardRoute,
   sessionRoute,
   historyRoute,
   projectsRoute,
   settingsRoute,
+  loginRoute,
 ])
 
 const router = createRouter({
@@ -185,6 +205,60 @@ declare module '@tanstack/react-router' {
   interface Register {
     router: typeof router
   }
+}
+
+function LoginView() {
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setLoading(true)
+
+    try {
+      await login(password)
+      window.location.href = '/'
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        setError('Invalid password')
+      } else {
+        setError('Something went wrong')
+      }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-th-bg p-4">
+      <Card className="w-full max-w-sm">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4 p-6">
+          <div className="flex flex-col items-center gap-2">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-th-accent">
+              <svg className="h-5 w-5 text-white" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 1l2.5 5h5L11 9.5l1.5 5.5L8 12l-4.5 3 1.5-5.5L0.5 6h5z" />
+              </svg>
+            </div>
+            <h1 className="text-lg font-semibold text-th-text-1">Symphony</h1>
+          </div>
+          <Input
+            autoFocus
+            name="password"
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            type="password"
+            value={password}
+          />
+          {error && <p className="text-sm text-red-500">{error}</p>}
+          <Button disabled={loading || !password} type="submit">
+            {loading ? 'Signing in...' : 'Sign in'}
+          </Button>
+        </form>
+      </Card>
+    </div>
+  )
 }
 
 export default function App() {
@@ -205,6 +279,33 @@ function RootLayout() {
     path: pathname,
   })
   const mobileNavOpen = mobileNavState.path === pathname && mobileNavState.open
+
+  const authQuery = useQuery({
+    queryKey: ['auth-status'],
+    queryFn: getAuthStatus,
+    retry: false,
+    staleTime: 30_000,
+  })
+
+  const isLoginPage = pathname === '/login'
+
+  // Redirect to login if auth is required and not authenticated
+  useEffect(() => {
+    if (authQuery.data && authQuery.data.auth_required && !authQuery.data.authenticated && !isLoginPage) {
+      window.location.href = '/login'
+    }
+  }, [authQuery.data, isLoginPage])
+
+  if (isLoginPage) {
+    return <Outlet />
+  }
+
+  const handleLogout = async () => {
+    await logout()
+    window.location.href = '/login'
+  }
+
+  const showLogout = authQuery.data?.auth_required && authQuery.data?.authenticated
 
   return (
     <div className="min-h-screen bg-th-bg text-th-text-2 transition-colors duration-200">
@@ -236,6 +337,20 @@ function RootLayout() {
             </div>
 
             <div className="flex items-center gap-2">
+              {showLogout && (
+                <Button
+                  aria-label="Sign out"
+                  className="text-th-text-4 hover:bg-th-muted hover:text-th-text-2"
+                  onClick={handleLogout}
+                  size="icon"
+                  type="button"
+                  variant="ghost"
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </Button>
+              )}
               <Button
                 aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
                 className="text-th-text-4 hover:bg-th-muted hover:text-th-text-2"

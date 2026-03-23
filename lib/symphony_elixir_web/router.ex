@@ -9,25 +9,50 @@ defmodule SymphonyElixirWeb.Router do
     plug(:accepts, ["json"])
   end
 
+  pipeline :authenticated_api do
+    plug(:accepts, ["json"])
+    plug(SymphonyElixirWeb.Plugs.RequireAuth)
+  end
+
+  pipeline :authenticated_stream do
+    plug(SymphonyElixirWeb.Plugs.RequireAuth)
+  end
+
+  pipeline :authenticated_browser do
+    plug(SymphonyElixirWeb.Plugs.RequireAuth)
+  end
+
+  # Public: auth endpoints (no auth required)
+  scope "/api/v1/auth", SymphonyElixirWeb do
+    pipe_through(:api)
+    post("/login", AuthController, :login)
+    post("/logout", AuthController, :logout)
+    get("/status", AuthController, :status)
+  end
+
+  # Public: webhooks have their own HMAC auth
   scope "/api/v1/webhooks", SymphonyElixirWeb do
     pipe_through(:api)
     post("/linear", WebhookController, :linear)
   end
 
+  # Public: OAuth callback is a browser redirect
+  scope "/api/v1/oauth", SymphonyElixirWeb do
+    get("/linear/callback", OAuthController, :callback)
+  end
+
+  # Authenticated: SSE streams
   scope "/api/v1", SymphonyElixirWeb do
+    pipe_through(:authenticated_stream)
     get("/stream/dashboard", StreamController, :dashboard)
     get("/stream/session/:issue_id", StreamController, :session)
     match(:*, "/stream/dashboard", ObservabilityApiController, :method_not_allowed)
     match(:*, "/stream/session/:issue_id", ObservabilityApiController, :method_not_allowed)
   end
 
-  # OAuth callback is a browser redirect, not a JSON API endpoint
-  scope "/api/v1/oauth", SymphonyElixirWeb do
-    get("/linear/callback", OAuthController, :callback)
-  end
-
+  # Authenticated: main API
   scope "/api/v1", SymphonyElixirWeb do
-    pipe_through(:api)
+    pipe_through(:authenticated_api)
 
     get("/state", ObservabilityApiController, :state)
     post("/refresh", ObservabilityApiController, :refresh)
@@ -58,6 +83,7 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/*path", ObservabilityApiController, :not_found)
   end
 
+  # SPA catch-all (auth checked client-side via /api/v1/auth/status)
   scope "/", SymphonyElixirWeb do
     get("/*path", SpaController, :index)
     match(:*, "/*path", ObservabilityApiController, :method_not_allowed)
