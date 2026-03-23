@@ -11,14 +11,14 @@ defmodule SymphonyElixir.WebhookDispatcher do
   alias SymphonyElixir.{AgentSession, Config, Settings, Store, Workflow}
   alias SymphonyElixir.Linear.{AgentAPI, Client}
 
-  @spec dispatch_created(map()) :: :ok | {:error, term()}
-  def dispatch_created(payload) when is_map(payload) do
+  @spec dispatch_created(map(), keyword()) :: :ok | {:error, term()}
+  def dispatch_created(payload, opts \\ []) when is_map(payload) do
     with {:ok, issue_id} <- extract_issue_id(payload),
          {:ok, agent_session_id} <- extract_agent_session_id(payload) do
       Logger.info("Webhook dispatch_created issue_id=#{issue_id} agent_session_id=#{agent_session_id}")
 
-      # Emit initial acknowledgment
-      emit_initial_thought(agent_session_id)
+      # Emit initial acknowledgment — must stay first side-effect after ID extraction
+      emit_initial_thought(agent_session_id, opts)
 
       # Check if already claimed (e.g., Orchestrator already picked it up)
       case Store.claim_issue(issue_id, "webhook") do
@@ -140,12 +140,32 @@ defmodule SymphonyElixir.WebhookDispatcher do
     end
   end
 
-  defp emit_initial_thought(agent_session_id) do
-    AgentAPI.create_activity(agent_session_id, %{
-      type: "thought",
-      body: "Starting session...",
-      ephemeral: true
-    })
+  defp emit_initial_thought(agent_session_id, opts) do
+    result =
+      AgentAPI.create_activity(agent_session_id, %{
+        type: "thought",
+        body: "Starting session...",
+        ephemeral: true
+      })
+
+    emit_first_activity_telemetry(opts[:received_at], agent_session_id)
+
+    result
+  end
+
+  defp emit_first_activity_telemetry(nil, _agent_session_id), do: :ok
+
+  defp emit_first_activity_telemetry(received_at, agent_session_id) do
+    latency_ns = System.monotonic_time() - received_at
+    latency_ms = System.convert_time_unit(latency_ns, :native, :millisecond)
+
+    :telemetry.execute(
+      [:symphony, :webhook, :first_activity_latency],
+      %{duration: latency_ns},
+      %{agent_session_id: agent_session_id}
+    )
+
+    Logger.info("Webhook first_activity_latency_ms=#{latency_ms} agent_session_id=#{agent_session_id}")
   end
 
   defp fetch_issue(issue_id) do
