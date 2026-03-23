@@ -264,6 +264,8 @@ function LinearOAuthSection() {
   const [clientId, setClientId] = useState('')
   const [clientSecret, setClientSecret] = useState('')
   const oauthStatus = statusQuery.data?.status ?? 'disconnected'
+  const credentialsSource = statusQuery.data?.credentials_source ?? 'none'
+  const credentialsFromEnv = credentialsSource === 'env'
 
   const initialFeedback = useMemo(() => {
     const params = new URLSearchParams(window.location.search)
@@ -344,7 +346,11 @@ function LinearOAuthSection() {
         <div className="rounded-lg border border-th-border bg-th-inset p-4">
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-1 text-sm text-th-text-2">
-              {existingClientId ? <div>App ID: <code className="text-th-text-3">{existingClientId.value}</code></div> : null}
+              {existingClientId ? (
+                <div>App ID: <code className="text-th-text-3">{existingClientId.value}</code></div>
+              ) : credentialsFromEnv ? (
+                <div className="text-xs text-th-text-4">Credentials: via environment variable</div>
+              ) : null}
               {existingExpiresAt ? (
                 <div className="text-xs text-th-text-4">Token expires: {formatDateTime(existingExpiresAt.value)}</div>
               ) : (
@@ -372,6 +378,21 @@ function LinearOAuthSection() {
                 Disconnect
               </Button>
             </div>
+          </div>
+        </div>
+      ) : credentialsFromEnv ? (
+        <div className="rounded-lg border border-th-border bg-th-inset p-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-1 text-sm text-th-text-2">
+              <div className="text-xs text-th-text-4">Credentials: via environment variable</div>
+            </div>
+            <Button
+              disabled={connectMutation.isPending}
+              onClick={() => { setFeedback(null); void connectMutation.mutateAsync() }}
+              type="button"
+            >
+              Connect to Linear
+            </Button>
           </div>
         </div>
       ) : (
