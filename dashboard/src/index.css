@@ -19,22 +19,34 @@
   --color-th-muted: var(--th-muted);
   --color-th-accent: var(--th-accent);
   --color-th-accent-muted: var(--th-accent-muted);
+  --color-th-danger: var(--th-danger);
+  --color-th-danger-muted: var(--th-danger-muted);
+  --color-th-success: var(--th-success);
+  --color-th-success-muted: var(--th-success-muted);
+  --color-th-warning: var(--th-warning);
+  --color-th-warning-muted: var(--th-warning-muted);
 }
 
-/* Light theme (default) */
+/* Light theme (default) — Linear/Claude inspired minimal palette */
 :root {
-  --th-bg: #f9f9fb;
+  --th-bg: #f8f8fa;
   --th-surface: #ffffff;
-  --th-inset: #f4f5f7;
-  --th-border: #e8e8ec;
-  --th-border-muted: #d1d1d6;
+  --th-inset: #f3f3f6;
+  --th-border: #e4e4e9;
+  --th-border-muted: #cbcbd3;
   --th-text-1: #1a1a2e;
   --th-text-2: #3c3c50;
   --th-text-3: #6b6b80;
   --th-text-4: #9898ac;
-  --th-muted: #f2f2f5;
+  --th-muted: #f0f0f4;
   --th-accent: #5e6ad2;
-  --th-accent-muted: #eef0ff;
+  --th-accent-muted: #eceeff;
+  --th-danger: #e5484d;
+  --th-danger-muted: #fff0f0;
+  --th-success: #30a46c;
+  --th-success-muted: #e9f9ee;
+  --th-warning: #e5a000;
+  --th-warning-muted: #fef3dd;
 
   color: var(--th-text-1);
   font-family: var(--font-sans);
@@ -45,20 +57,26 @@
   background-color: var(--th-bg);
 }
 
-/* Dark theme */
+/* Dark theme — deeper, quieter tones */
 .dark {
-  --th-bg: #0f0f14;
-  --th-surface: #1a1a24;
-  --th-inset: #13131b;
-  --th-border: #26263a;
-  --th-border-muted: #35354d;
+  --th-bg: #0c0c11;
+  --th-surface: #16161e;
+  --th-inset: #111118;
+  --th-border: #232334;
+  --th-border-muted: #31314a;
   --th-text-1: #ededf0;
-  --th-text-2: #9898ac;
+  --th-text-2: #a0a0b4;
   --th-text-3: #6b6b80;
   --th-text-4: #4a4a5e;
-  --th-muted: #1e1e2c;
+  --th-muted: #1c1c28;
   --th-accent: #8b8eff;
   --th-accent-muted: rgba(94, 106, 210, 0.12);
+  --th-danger: #e5484d;
+  --th-danger-muted: rgba(229, 72, 77, 0.1);
+  --th-success: #30a46c;
+  --th-success-muted: rgba(48, 164, 108, 0.1);
+  --th-warning: #e5a000;
+  --th-warning-muted: rgba(229, 160, 0, 0.1);
 }
 
 * {
