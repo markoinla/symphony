@@ -31,7 +31,7 @@ defmodule SymphonyElixir.Linear.OAuth do
             "client_id" => client_id,
             "redirect_uri" => redirect_uri,
             "response_type" => "code",
-            "scope" => "write,read",
+            "scope" => "write,read,app:assignable,app:mentionable",
             "state" => state,
             "actor" => "app"
           })

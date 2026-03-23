@@ -1,16 +1,16 @@
 [Unit]
 Description=Symphony Orchestrator
-After=network.target
+After=network.target docker.service
 
 [Service]
 Type=simple
 User=marko
-WorkingDirectory=/home/marko/Projects/symphony
-ExecStart=/home/marko/Projects/symphony/bin/symphony --port 4000 WORKFLOW.md ENRICHMENT.md --i-understand-that-this-will-be-running-without-the-usual-guardrails
-Restart=on-failure
+WorkingDirectory=/home/marko/projects/symphony
+ExecStart=/home/marko/projects/symphony/start.sh
+Restart=always
 RestartSec=5
-Environment=PATH=/home/marko/.local/share/mise/installs/erlang/28.4.1/bin:/home/marko/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-EnvironmentFile=/home/marko/Projects/symphony/.env
+Environment=HOME=/home/marko
+EnvironmentFile=-/home/marko/projects/symphony/.env
 
 [Install]
 WantedBy=multi-user.target
