@@ -30,18 +30,7 @@ defmodule SymphonyElixirWeb.GithubApiController do
            "direction" => "desc"
          }) do
       {:ok, repos} when is_list(repos) ->
-        filtered =
-          if query == "" do
-            Enum.take(repos, 20)
-          else
-            repos
-            |> Enum.filter(fn repo ->
-              full_name = String.downcase(repo["full_name"] || "")
-              String.contains?(full_name, query)
-            end)
-            |> Enum.take(20)
-          end
-
+        filtered = filter_repos(repos, query)
         json(conn, %{repos: Enum.map(filtered, &format_repo/1)})
 
       {:error, reason} ->
@@ -52,6 +41,17 @@ defmodule SymphonyElixirWeb.GithubApiController do
           "GitHub API request failed: #{inspect(reason)}"
         )
     end
+  end
+
+  defp filter_repos(repos, ""), do: Enum.take(repos, 20)
+
+  defp filter_repos(repos, query) do
+    repos
+    |> Enum.filter(fn repo ->
+      full_name = String.downcase(repo["full_name"] || "")
+      String.contains?(full_name, query)
+    end)
+    |> Enum.take(20)
   end
 
   defp format_repo(node) do
