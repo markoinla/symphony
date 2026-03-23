@@ -13,8 +13,8 @@ services:
       # Mount host home directory (read-only for auth, git, ssh)
       - ${HOME}:${HOME}:ro
 
-      # Writable overlay for Symphony DB (persists across redeploys)
-      - symphony-data:${HOME}/.symphony
+      # Writable: DB directory (bind mount over the ro home)
+      - ${HOME}/.symphony:${HOME}/.symphony
 
       # Writable workspace directory
       - /tmp/symphony_workspaces:/tmp/symphony_workspaces
@@ -33,6 +33,3 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
-
-volumes:
-  symphony-data:
