@@ -77,7 +77,7 @@ This is an unattended review session. You must NOT modify any code or create bra
 
 ### Step 1: Check for prior review
 
-Search the issue comments for a previous review comment (identified by the `## Review` header). If one exists and no new information has been added since (no new comments, no new commits pushed), stop without posting a duplicate. If circumstances have changed (new commits, new comments), proceed with a fresh review.
+Search the issue comments for a previous `## Review` comment. If one exists, check whether any **human** comments have been posted after it or new commits have been pushed to the PR since it was written. Ignore your own bot-authored comments when making this determination — only human activity counts as "new information." If nothing new has happened, stop immediately without posting a duplicate. If there is genuinely new human input or new commits, proceed with a fresh review.
 
 ### Step 2: Locate the PR
 
