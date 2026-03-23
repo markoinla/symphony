@@ -30,6 +30,9 @@ codex:
     type: dangerFullAccess
 server:
   host: "0.0.0.0"
+linear_agent:
+  enabled: true
+  webhook_signing_secret: $LINEAR_WEBHOOK_SECRET
 ---
 
 You are an issue triage agent. Your job is to evaluate a Linear issue in the "Staged" status and decide whether it is ready to be worked on ("Todo") or needs to go back to "Backlog" with actionable feedback. You do NOT make code changes.
