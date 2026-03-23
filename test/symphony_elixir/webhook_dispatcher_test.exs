@@ -47,6 +47,72 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
       # Should succeed (associates session) even when already claimed
       assert :ok = WebhookDispatcher.dispatch_created(payload)
     end
+
+    test "emits first_activity_latency telemetry when received_at is provided" do
+      issue_id = "test-issue-#{System.unique_integer([:positive])}"
+      Store.claim_issue(issue_id, "orchestrator")
+
+      test_pid = self()
+
+      handler_id = "test-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:symphony, :webhook, :first_activity_latency],
+        fn event, measurements, metadata, _ ->
+          send(test_pid, {:telemetry_event, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      payload = %{
+        "data" => %{
+          "id" => "agent-sess-telemetry",
+          "issueId" => issue_id
+        }
+      }
+
+      received_at = System.monotonic_time()
+      WebhookDispatcher.dispatch_created(payload, received_at: received_at)
+
+      assert_receive {:telemetry_event, [:symphony, :webhook, :first_activity_latency], %{duration: duration}, %{agent_session_id: "agent-sess-telemetry"}}
+
+      assert is_integer(duration)
+      assert duration >= 0
+
+      :telemetry.detach(handler_id)
+    end
+
+    test "does not emit telemetry when received_at is not provided" do
+      issue_id = "test-issue-#{System.unique_integer([:positive])}"
+      Store.claim_issue(issue_id, "orchestrator")
+
+      test_pid = self()
+
+      handler_id = "test-no-telemetry-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:symphony, :webhook, :first_activity_latency],
+        fn event, measurements, metadata, _ ->
+          send(test_pid, {:telemetry_event, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      payload = %{
+        "data" => %{
+          "id" => "agent-sess-no-telemetry",
+          "issueId" => issue_id
+        }
+      }
+
+      WebhookDispatcher.dispatch_created(payload)
+
+      refute_receive {:telemetry_event, _, _, _}
+
+      :telemetry.detach(handler_id)
+    end
   end
 
   describe "dispatch_prompted/1" do

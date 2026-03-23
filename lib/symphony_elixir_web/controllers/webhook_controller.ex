@@ -10,12 +10,14 @@ defmodule SymphonyElixirWeb.WebhookController do
 
   @spec linear(Plug.Conn.t(), map()) :: Plug.Conn.t()
   def linear(conn, %{"action" => "created"} = params) do
+    received_at = System.monotonic_time()
+
     # Respond immediately — Linear requires response within 5 seconds
     conn = json(conn, %{ok: true})
 
     # Dispatch asynchronously
     Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-      WebhookDispatcher.dispatch_created(params)
+      WebhookDispatcher.dispatch_created(params, received_at: received_at)
     end)
 
     conn
