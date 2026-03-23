@@ -48,7 +48,13 @@ COPY --from=build /app/priv/static/dashboard /app/_build/dev/lib/symphony_elixir
 # Workflow config files
 COPY --from=build /app/*.md /app/
 
-RUN mkdir -p /root/.symphony
+# Run as non-root user (Claude CLI refuses --dangerously-skip-permissions as root)
+RUN groupadd -r symphony && useradd -r -g symphony -m -d /home/symphony symphony
+RUN mkdir -p /home/symphony/.symphony /tmp/symphony_workspaces \
+    && chown -R symphony:symphony /app /home/symphony /tmp/symphony_workspaces
+
+USER symphony
+ENV HOME=/home/symphony
 
 WORKDIR /app
 

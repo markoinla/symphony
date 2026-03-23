@@ -16,21 +16,21 @@ services:
       - "4000:4000"
     volumes:
       # Persistence
-      - symphony-data:/root/.symphony
+      - symphony-data:/home/symphony/.symphony
       - /tmp/symphony_workspaces:/tmp/symphony_workspaces
       - ./log:/app/log
 
       # Host CLI tools (set paths in .env)
       - ${CLAUDE_BIN:-/usr/local/bin/claude}:/usr/local/bin/claude:ro
       - ${CODEX_BIN:-/usr/local/bin/codex}:/usr/local/bin/codex:ro
-      - ${CLAUDE_HOME:-~/.claude}:/root/.claude:ro
-      - ${CODEX_HOME:-~/.codex}:/root/.codex
+      - ${CLAUDE_HOME:-~/.claude}:/home/symphony/.claude:ro
+      - ${CODEX_HOME:-~/.codex}:/home/symphony/.codex
 
       # Git access
       - ${GH_BIN:-/usr/bin/gh}:/usr/bin/gh:ro
-      - ${GH_CONFIG:-~/.config/gh}:/root/.config/gh:ro
-      - ${GIT_CONFIG:-~/.gitconfig}:/root/.gitconfig:ro
-      - ${SSH_DIR:-~/.ssh}:/root/.ssh:ro
+      - ${GH_CONFIG:-~/.config/gh}:/home/symphony/.config/gh:ro
+      - ${GIT_CONFIG:-~/.gitconfig}:/home/symphony/.gitconfig:ro
+      - ${SSH_DIR:-~/.ssh}:/home/symphony/.ssh:ro
     env_file:
       - .env
     working_dir: /app
