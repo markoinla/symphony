@@ -2,7 +2,7 @@ import Config
 
 config :phoenix, :json_library, Jason
 
-config :symphony_elixir, SymphonyElixir.Repo, database: Path.expand("~/.symphony/symphony.db")
+config :symphony_elixir, ecto_repos: [SymphonyElixir.Repo]
 
 config :symphony_elixir, SymphonyElixirWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,

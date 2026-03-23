@@ -23,8 +23,7 @@ defmodule SymphonyElixir.Application do
   @impl true
   def start(_type, _args) do
     :ok = SymphonyElixir.LogFile.configure()
-    resolve_db_path()
-    ensure_db_directory()
+    run_migrations()
 
     children =
       [
@@ -33,14 +32,10 @@ defmodule SymphonyElixir.Application do
         {Registry, keys: :unique, name: SymphonyElixir.OrchestratorRegistry},
         {Registry, keys: :unique, name: SymphonyElixir.AgentSessionRegistry},
         SymphonyElixir.Repo,
-        SymphonyElixir.Store.Migrator,
         {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
         SymphonyElixir.WorkflowStore,
-        {DynamicSupervisor, name: SymphonyElixir.OrchestratorSupervisor, strategy: :one_for_one},
-        SymphonyElixir.OrchestratorStarter,
-        SymphonyElixir.HttpServer,
-        SymphonyElixir.StatusDashboard
-      ]
+        {DynamicSupervisor, name: SymphonyElixir.OrchestratorSupervisor, strategy: :one_for_one}
+      ] ++ runtime_children()
 
     Supervisor.start_link(
       children,
@@ -55,21 +50,27 @@ defmodule SymphonyElixir.Application do
     :ok
   end
 
-  defp resolve_db_path do
-    case Application.get_env(:symphony_elixir, SymphonyElixir.Repo)[:database] do
-      nil ->
-        db_path = Path.expand("~/.symphony/symphony.db")
-        Application.put_env(:symphony_elixir, SymphonyElixir.Repo, database: db_path)
-
-      _already_set ->
-        :ok
+  defp runtime_children do
+    if sandbox_pool?() do
+      []
+    else
+      [
+        SymphonyElixir.OrchestratorStarter,
+        SymphonyElixir.HttpServer,
+        SymphonyElixir.StatusDashboard
+      ]
     end
   end
 
-  defp ensure_db_directory do
-    case Application.get_env(:symphony_elixir, SymphonyElixir.Repo)[:database] do
-      path when is_binary(path) -> path |> Path.dirname() |> File.mkdir_p!()
-      _ -> :ok
+  defp run_migrations do
+    unless sandbox_pool?() do
+      {:ok, _, _} =
+        Ecto.Migrator.with_repo(SymphonyElixir.Repo, &Ecto.Migrator.run(&1, :up, all: true))
     end
+  end
+
+  defp sandbox_pool? do
+    repo_config = Application.get_env(:symphony_elixir, SymphonyElixir.Repo, [])
+    repo_config[:pool] == Ecto.Adapters.SQL.Sandbox
   end
 end

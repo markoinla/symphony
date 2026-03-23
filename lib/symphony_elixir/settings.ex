@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.Settings do
   @moduledoc """
-  Reads/writes global settings from SQLite.
+  Reads/writes global settings from the database.
 
   For project-specific configuration, use `config_overlay/1` with a
   `%Store.Project{}` struct to merge project fields into the overlay.

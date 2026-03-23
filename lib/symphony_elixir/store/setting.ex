@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.Store.Setting do
   @moduledoc """
-  Ecto schema for global key-value settings stored in SQLite.
+  Ecto schema for global key-value settings.
   """
 
   use Ecto.Schema

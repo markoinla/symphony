@@ -3,9 +3,12 @@
 # Set HOST_HOME in your .env to your home directory path, e.g.:
 #   HOST_HOME=/home/marko
 #
+# Set DATABASE_URL in your .env to your PostgreSQL connection string, e.g.:
+#   DATABASE_URL=ecto://postgres:password@host:5432/symphony
+#
 # The container runs as root with IS_SANDBOX=1 so Claude CLI accepts
 # --dangerously-skip-permissions. Host home is mounted for auth/git/ssh
-# config, with the DB directory writable.
+# config.
 
 services:
   symphony:
@@ -16,9 +19,6 @@ services:
     volumes:
       # Mount host home directory (auth, git, ssh, claude config)
       - ${HOST_HOME}:${HOST_HOME}
-
-      # Persistent DB directory (named volume survives redeployments)
-      - symphony-data:${HOST_HOME}/.symphony
 
       # Writable workspace directory
       - /tmp/symphony_workspaces:/tmp/symphony_workspaces
@@ -35,8 +35,3 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
-
-volumes:
-  symphony-data:
-
-
