@@ -27,4 +27,4 @@ echo "API:       http://localhost:4000/api/v1"
 echo ""
 
 # Start Symphony (blocks in foreground)
-./bin/symphony --port 4000 WORKFLOW.md ENRICHMENT.md TRIAGE.md --i-understand-that-this-will-be-running-without-the-usual-guardrails "$@"
+./bin/symphony --port 4000 WORKFLOW.md ENRICHMENT.md TRIAGE.md MENTION.md --i-understand-that-this-will-be-running-without-the-usual-guardrails "$@"

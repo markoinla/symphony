@@ -8,7 +8,7 @@ defmodule SymphonyElixir.WebhookDispatcher do
 
   require Logger
 
-  alias SymphonyElixir.{AgentSession, Config, Settings, Store}
+  alias SymphonyElixir.{AgentSession, Config, Settings, Store, Workflow}
   alias SymphonyElixir.Linear.{AgentAPI, Client}
 
   @spec dispatch_created(map()) :: :ok | {:error, term()}
@@ -83,14 +83,14 @@ defmodule SymphonyElixir.WebhookDispatcher do
     end
   end
 
-  defp start_agent_session_and_runner(issue, agent_session_id, _prompt_context) do
+  defp start_agent_session_and_runner(issue, agent_session_id, prompt_context) do
     case AgentSession.start_link(
            issue_id: issue.id,
            agent_session_id: agent_session_id,
            dispatch_source: :webhook
          ) do
       {:ok, _pid} ->
-        spawn_agent_runner(issue)
+        spawn_agent_runner(issue, prompt_context)
         :ok
 
       {:error, {:already_started, _pid}} ->
@@ -104,11 +104,18 @@ defmodule SymphonyElixir.WebhookDispatcher do
     end
   end
 
-  defp spawn_agent_runner(issue) do
+  defp spawn_agent_runner(issue, prompt_context) do
     Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
       try do
         resolve_and_set_project()
-        SymphonyElixir.AgentRunner.run(issue, nil, max_turns: Config.settings!().agent.max_turns)
+        {workflow_name, config} = resolve_mention_workflow()
+
+        Workflow.with_workflow(workflow_name, fn ->
+          SymphonyElixir.AgentRunner.run(issue, nil,
+            max_turns: config.agent.max_turns,
+            prompt_context: prompt_context
+          )
+        end)
       rescue
         e ->
           Logger.error("Webhook-dispatched agent run failed for #{issue.id}: #{Exception.message(e)}")
@@ -117,6 +124,17 @@ defmodule SymphonyElixir.WebhookDispatcher do
         AgentSession.stop(issue.id)
       end
     end)
+  end
+
+  defp resolve_mention_workflow do
+    mention_name = "MENTION"
+
+    if mention_name in Workflow.workflow_names() do
+      {mention_name, Config.settings!(mention_name)}
+    else
+      default_name = Workflow.default_workflow_name()
+      {default_name, Config.settings!(default_name)}
+    end
   end
 
   defp emit_initial_thought(agent_session_id) do
