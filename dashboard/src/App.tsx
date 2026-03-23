@@ -514,6 +514,23 @@ function ProjectSessionSection({
   )
 }
 
+function LinearIssueBadge({ identifier }: { identifier: string }) {
+  return (
+    <a
+      className="inline-flex shrink-0 items-center gap-1 rounded bg-indigo-500/10 px-1.5 py-0.5 text-[11px] font-medium text-indigo-600 transition-colors hover:bg-indigo-500/20 dark:text-indigo-400"
+      href={`https://linear.app/issue/${identifier}`}
+      onClick={(e) => e.stopPropagation()}
+      rel="noopener noreferrer"
+      target="_blank"
+    >
+      <svg className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+        <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      Linear
+    </a>
+  )
+}
+
 function RunningSessionCard({
   entry,
   index,
@@ -535,6 +552,7 @@ function RunningSessionCard({
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
             <span className="truncate text-sm font-medium text-th-text-1">{entry.issue_identifier}</span>
+            <LinearIssueBadge identifier={entry.issue_identifier} />
           </div>
           <p className="mt-2 line-clamp-2 text-[13px] leading-5 text-th-text-3">
             {entry.last_message ?? entry.last_event ?? 'Waiting for events\u2026'}
@@ -571,6 +589,7 @@ function RetrySessionCard({
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />
             <span className="truncate text-sm font-medium text-th-text-1">{entry.issue_identifier}</span>
+            <LinearIssueBadge identifier={entry.issue_identifier} />
             <span className="shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-[11px] font-medium text-amber-600 dark:text-amber-400">
               Retry {entry.attempt}
             </span>
@@ -827,6 +846,7 @@ function SessionView() {
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className="text-sm font-semibold text-th-text-1">{data.issue_identifier}</span>
+            <LinearIssueBadge identifier={data.issue_identifier} />
             {data.issue_title ? (
               <span className="min-w-0 break-words text-[13px] text-th-text-3 sm:truncate">{data.issue_title}</span>
             ) : null}
@@ -1146,6 +1166,7 @@ function HistoryCard({ index, session }: { index: number; session: SessionsPaylo
             <span className="truncate text-sm font-medium text-th-text-1">
               {issueIdentifier ?? 'Unknown'}
             </span>
+            {issueIdentifier ? <LinearIssueBadge identifier={issueIdentifier} /> : null}
             {failed ? (
               <span className="shrink-0 rounded bg-red-500/10 px-1.5 py-0.5 text-[11px] font-medium text-red-500">
                 Failed
