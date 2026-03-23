@@ -391,6 +391,23 @@ export function logout() {
   })
 }
 
+export type LinearProject = {
+  id: string
+  name: string
+  slug_id: string
+  slug: string
+  url: string
+  state: string
+  organization_slug: string | null
+  team_key: string | null
+}
+
+export function searchLinearProjects(query: string) {
+  const params = new URLSearchParams()
+  if (query) params.set('q', query)
+  return requestJson<{ projects: LinearProject[] }>(`/api/v1/linear/projects?${params.toString()}`)
+}
+
 export function emptyProject(): ProjectBody {
   return {
     name: '',

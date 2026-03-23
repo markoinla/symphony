@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Trash2 } from 'lucide-react'
 
@@ -6,8 +6,11 @@ import {
   createProject,
   deleteProject,
   emptyProject,
+  getOAuthStatus,
   getProjects,
+  type LinearProject,
   type Project,
+  searchLinearProjects,
   updateProject,
 } from '../lib/api'
 import { formatQueryError, formatJson, nilIfBlank } from '../lib/helpers'
@@ -17,6 +20,8 @@ import {
   CardHeader,
   CardTitle,
   CardDescription,
+  Combobox,
+  type ComboboxOption,
   ErrorPanel,
   FeedbackBanner,
   Field,
@@ -54,6 +59,48 @@ function projectToDraft(project: Project): ProjectDraft {
   }
 }
 
+function LinearProjectPicker({
+  onSelect,
+  selectedLabel,
+}: {
+  onSelect: (project: LinearProject) => void
+  selectedLabel: string | null
+}) {
+  const [searchResults, setSearchResults] = useState<LinearProject[]>([])
+  const [loading, setLoading] = useState(false)
+
+  const handleSearch = useCallback(async (query: string) => {
+    setLoading(true)
+    try {
+      const result = await searchLinearProjects(query)
+      setSearchResults(result.projects)
+    } catch {
+      setSearchResults([])
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  const options: ComboboxOption<LinearProject>[] = searchResults.map((project) => ({
+    value: project,
+    label: project.name,
+    description: [project.organization_slug, project.state].filter(Boolean).join(' · '),
+  }))
+
+  return (
+    <Combobox
+      options={options}
+      onSearch={handleSearch}
+      onSelect={(option) => onSelect(option.value)}
+      placeholder="Search Linear projects..."
+      searchPlaceholder="Type to search projects..."
+      loading={loading}
+      emptyMessage="No projects found."
+      value={selectedLabel}
+    />
+  )
+}
+
 export function ProjectsView() {
   const queryClient = useQueryClient()
   const projectsQuery = useQuery({
@@ -61,8 +108,16 @@ export function ProjectsView() {
     queryFn: getProjects,
   })
 
+  const oauthQuery = useQuery({
+    queryKey: ['oauth-status'],
+    queryFn: getOAuthStatus,
+  })
+
+  const oauthConnected = oauthQuery.data?.status === 'connected'
+
   const [draft, setDraft] = useState<ProjectDraft>(emptyProject)
   const [editingId, setEditingId] = useState<number | null>(null)
+  const [selectedProjectName, setSelectedProjectName] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
 
   const saveMutation = useMutation({
@@ -73,6 +128,7 @@ export function ProjectsView() {
       setFeedback(editingId === null ? 'Project created.' : 'Project updated.')
       setDraft(emptyProject())
       setEditingId(null)
+      setSelectedProjectName(null)
     },
     onError: (error: unknown) => setFeedback(formatQueryError(error)),
   })
@@ -84,9 +140,20 @@ export function ProjectsView() {
       setFeedback('Project deleted.')
       setDraft(emptyProject())
       setEditingId(null)
+      setSelectedProjectName(null)
     },
     onError: (error: unknown) => setFeedback(formatQueryError(error)),
   })
+
+  function handleLinearProjectSelect(project: LinearProject) {
+    setSelectedProjectName(project.name)
+    setDraft((current) => ({
+      ...current,
+      name: current.name || project.name,
+      linear_project_slug: project.slug,
+      linear_organization_slug: project.organization_slug ?? current.linear_organization_slug,
+    }))
+  }
 
   return (
     <div className="space-y-6">
@@ -116,6 +183,15 @@ export function ProjectsView() {
               void saveMutation.mutateAsync({ id: editingId, body: normalizeProjectDraft(draft) })
             }}
           >
+            {oauthConnected ? (
+              <Field label="Linear project">
+                <LinearProjectPicker
+                  onSelect={handleLinearProjectSelect}
+                  selectedLabel={selectedProjectName}
+                />
+              </Field>
+            ) : null}
+
             <Field label="Project name">
               <Input
                 onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
@@ -206,6 +282,7 @@ export function ProjectsView() {
                   onClick={() => {
                     setDraft(emptyProject())
                     setEditingId(null)
+                    setSelectedProjectName(null)
                     setFeedback(null)
                   }}
                   type="button"
@@ -240,6 +317,7 @@ export function ProjectsView() {
                     onClick={() => {
                       setDraft(projectToDraft(project))
                       setEditingId(project.id)
+                      setSelectedProjectName(null)
                       setFeedback(null)
                     }}
                     size="sm"
