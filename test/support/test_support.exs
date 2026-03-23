@@ -45,6 +45,10 @@ defmodule SymphonyElixir.TestSupport do
           Application.delete_env(:symphony_elixir, :memory_tracker_issues)
           Application.delete_env(:symphony_elixir, :memory_tracker_recipient)
           File.rm_rf(workflow_root)
+
+          # Clean up the per-PID test database file
+          test_db = Application.get_env(:symphony_elixir, SymphonyElixir.Repo)[:database]
+          if test_db, do: File.rm(test_db)
         end)
 
         :ok
