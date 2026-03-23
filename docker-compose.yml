@@ -18,10 +18,6 @@ services:
       # Persistence
       - symphony-data:/root/.symphony
       - /tmp/symphony_workspaces:/tmp/symphony_workspaces
-      - ./WORKFLOW.md:/app/WORKFLOW.md:ro
-      - ./ENRICHMENT.md:/app/ENRICHMENT.md:ro
-      - ./TRIAGE.md:/app/TRIAGE.md:ro
-      - ./MENTION.md:/app/MENTION.md:ro
       - ./log:/app/log
 
       # Host CLI tools (set paths in .env)

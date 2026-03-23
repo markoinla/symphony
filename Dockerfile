@@ -45,6 +45,9 @@ COPY --from=build /app/_build/prod/lib/exqlite /app/_build/dev/lib/exqlite
 COPY --from=build /app/_build/prod/lib/symphony_elixir/ebin /app/_build/dev/lib/symphony_elixir/ebin
 COPY --from=build /app/priv/static/dashboard /app/_build/dev/lib/symphony_elixir/priv/static/dashboard
 
+# Workflow config files
+COPY --from=build /app/*.md /app/
+
 RUN mkdir -p /root/.symphony
 
 WORKDIR /app

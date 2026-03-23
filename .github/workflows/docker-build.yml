@@ -45,3 +45,9 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Trigger Dokploy deploy
+        if: success()
+        run: |
+          curl -sf -X POST "${{ secrets.DOKPLOY_DEPLOY_WEBHOOK }}" \
+            -H "Content-Type: application/json" || echo "Deploy webhook failed"

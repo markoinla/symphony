@@ -11,6 +11,9 @@ test/
 docs/
 *.md
 !WORKFLOW.md
+!ENRICHMENT.md
+!TRIAGE.md
+!MENTION.md
 .env
 .env.*
 log/
