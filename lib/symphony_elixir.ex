@@ -23,8 +23,6 @@ defmodule SymphonyElixir.Application do
   @impl true
   def start(_type, _args) do
     :ok = SymphonyElixir.LogFile.configure()
-    resolve_db_path()
-    ensure_db_directory()
 
     children =
       [
@@ -33,7 +31,6 @@ defmodule SymphonyElixir.Application do
         {Registry, keys: :unique, name: SymphonyElixir.OrchestratorRegistry},
         {Registry, keys: :unique, name: SymphonyElixir.AgentSessionRegistry},
         SymphonyElixir.Repo,
-        SymphonyElixir.Store.Migrator,
         {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
         SymphonyElixir.WorkflowStore,
         {DynamicSupervisor, name: SymphonyElixir.OrchestratorSupervisor, strategy: :one_for_one},
@@ -53,23 +50,5 @@ defmodule SymphonyElixir.Application do
   def stop(_state) do
     SymphonyElixir.StatusDashboard.render_offline_status()
     :ok
-  end
-
-  defp resolve_db_path do
-    case Application.get_env(:symphony_elixir, SymphonyElixir.Repo)[:database] do
-      nil ->
-        db_path = Path.expand("~/.symphony/symphony.db")
-        Application.put_env(:symphony_elixir, SymphonyElixir.Repo, database: db_path)
-
-      _already_set ->
-        :ok
-    end
-  end
-
-  defp ensure_db_directory do
-    case Application.get_env(:symphony_elixir, SymphonyElixir.Repo)[:database] do
-      path when is_binary(path) -> path |> Path.dirname() |> File.mkdir_p!()
-      _ -> :ok
-    end
   end
 end

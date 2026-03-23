@@ -4,7 +4,7 @@ defmodule SymphonyElixir.DashboardLinks do
 
   The public base URL is resolved in order of precedence:
 
-  1. `server.public_base_url` SQLite setting (dashboard Settings page)
+  1. `server.public_base_url` setting (dashboard Settings page)
   2. `SYMPHONY_PUBLIC_BASE_URL` environment variable
   """
 

@@ -43,7 +43,6 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixir.OrchestratorStarter,
           SymphonyElixir.Repo,
           SymphonyElixir.Store,
-          SymphonyElixir.Store.Migrator,
           SymphonyElixir.Store.Project,
           SymphonyElixir.Store.Setting,
           SymphonyElixir.Store.Session,
@@ -98,8 +97,8 @@ defmodule SymphonyElixir.MixProject do
       {:jason, "~> 1.4"},
       {:yaml_elixir, "~> 2.12"},
       {:solid, "~> 1.2"},
-      {:ecto, "~> 3.13"},
-      {:ecto_sqlite3, "~> 0.18"},
+      {:ecto_sql, "~> 3.13"},
+      {:postgrex, ">= 0.0.0"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
       {:dotenvy, "~> 0.9"}

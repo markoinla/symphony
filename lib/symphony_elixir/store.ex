@@ -2,7 +2,7 @@ defmodule SymphonyElixir.Store do
   @moduledoc """
   Persistence API for session and message storage.
 
-  Write-through layer backed by SQLite — the in-memory SessionLog remains
+  Write-through layer backed by PostgreSQL — the in-memory SessionLog remains
   the primary read path for live sessions; this module provides durable
   storage for historical browsing.
   """

@@ -48,15 +48,11 @@ ENV IS_SANDBOX=1
 
 COPY --from=build /app/bin/symphony /usr/local/bin/symphony
 
-# The escript loads NIF .so files from _build/dev/lib/ at runtime
-COPY --from=build /app/_build/prod/lib/exqlite /app/_build/dev/lib/exqlite
 COPY --from=build /app/_build/prod/lib/symphony_elixir/ebin /app/_build/dev/lib/symphony_elixir/ebin
 COPY --from=build /app/priv/static/dashboard /app/_build/dev/lib/symphony_elixir/priv/static/dashboard
 
 # Workflow config files
 COPY --from=build /app/*.md /app/
-
-RUN mkdir -p /root/.symphony
 
 WORKDIR /app
 
