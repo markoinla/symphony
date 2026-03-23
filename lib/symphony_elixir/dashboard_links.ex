@@ -23,7 +23,15 @@ defmodule SymphonyElixir.DashboardLinks do
   @env_var "SYMPHONY_PUBLIC_BASE_URL"
 
   defp base_url do
-    (Settings.get(@setting_key) || System.get_env(@env_var) || "")
+    (Settings.get(@setting_key) || non_blank_env(@env_var) || "")
     |> String.trim_trailing("/")
+  end
+
+  defp non_blank_env(var) do
+    case System.get_env(var) do
+      nil -> nil
+      "" -> nil
+      val -> val
+    end
   end
 end
