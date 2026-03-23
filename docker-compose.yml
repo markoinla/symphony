@@ -17,6 +17,9 @@ services:
       # Mount host home directory (auth, git, ssh, claude config)
       - ${HOST_HOME}:${HOST_HOME}
 
+      # Separate DB so container doesn't share with host Symphony
+      - symphony-data:${HOST_HOME}/.symphony
+
       # Writable workspace directory
       - /tmp/symphony_workspaces:/tmp/symphony_workspaces
     environment:
@@ -32,4 +35,7 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
+
+volumes:
+  symphony-data:
 
