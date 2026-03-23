@@ -117,16 +117,6 @@ operations (querying issues, creating/updating comments, managing labels, changi
 issue state). If the tools are not immediately visible, use `ToolSearch` to discover
 them. If no Linear tools are found, stop and ask the user to check the configuration.
 
-## Playwright MCP for browser testing
-
-A Playwright MCP server is available globally. Use its tools (`browser_navigate`, `browser_screenshot`, `browser_click`, `browser_type`, etc.) for any browser-based validation — do not write Playwright scripts manually. The MCP runs headless by default. Use it to:
-
-- Reproduce UI bugs by navigating to the relevant page and taking a screenshot.
-- Validate UI changes after implementation.
-- Capture screenshot evidence for the workpad (see "Uploading media to Linear comments" below).
-
-If the project provides test credentials (e.g. in `.env.local` or a `CLAUDE.md` file), use them for authentication during validation.
-
 ## Linear GraphQL reference
 
 Use these exact queries and mutations with the Linear MCP tools. For creating and
