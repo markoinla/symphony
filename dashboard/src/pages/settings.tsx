@@ -491,8 +491,8 @@ function GitHubOAuthSection() {
 
   const saveCredentialsMutation = useMutation({
     mutationFn: async ({ id, secret }: { id: string; secret: string }) => {
-      await upsertSetting('github_oauth.client_id', id)
-      await upsertSetting('github_oauth.client_secret', secret)
+      if (id) await upsertSetting('github_oauth.client_id', id)
+      if (secret) await upsertSetting('github_oauth.client_secret', secret)
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
