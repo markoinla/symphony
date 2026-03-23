@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Trash2 } from 'lucide-react'
 
@@ -68,16 +68,24 @@ function LinearProjectPicker({
 }) {
   const [searchResults, setSearchResults] = useState<LinearProject[]>([])
   const [loading, setLoading] = useState(false)
+  const requestIdRef = useRef(0)
 
   const handleSearch = useCallback(async (query: string) => {
+    const id = ++requestIdRef.current
     setLoading(true)
     try {
       const result = await searchLinearProjects(query)
-      setSearchResults(result.projects)
+      if (id === requestIdRef.current) {
+        setSearchResults(result.projects)
+      }
     } catch {
-      setSearchResults([])
+      if (id === requestIdRef.current) {
+        setSearchResults([])
+      }
     } finally {
-      setLoading(false)
+      if (id === requestIdRef.current) {
+        setLoading(false)
+      }
     }
   }, [])
 
@@ -113,7 +121,8 @@ export function ProjectsView() {
     queryFn: getOAuthStatus,
   })
 
-  const oauthConnected = oauthQuery.data?.status === 'connected'
+  const oauthStatus = oauthQuery.data?.status
+  const oauthConnected = oauthStatus === 'connected' || oauthStatus === 'expired'
 
   const [draft, setDraft] = useState<ProjectDraft>(emptyProject)
   const [editingId, setEditingId] = useState<number | null>(null)
