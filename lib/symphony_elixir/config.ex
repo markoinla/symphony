@@ -196,8 +196,10 @@ defmodule SymphonyElixir.Config do
   end
 
   defp validate_linear_semantics(tracker) do
+    has_auth = is_binary(tracker.api_key) or has_oauth_token?()
+
     cond do
-      not is_binary(tracker.api_key) ->
+      not has_auth ->
         {:error, :missing_linear_api_token}
 
       tracker.filter_by == "project" and not is_binary(tracker.project_slug) ->
@@ -211,6 +213,13 @@ defmodule SymphonyElixir.Config do
 
       true ->
         :ok
+    end
+  end
+
+  defp has_oauth_token? do
+    case SymphonyElixir.Linear.OAuth.current_access_token() do
+      token when is_binary(token) and token != "" -> true
+      _ -> false
     end
   end
 

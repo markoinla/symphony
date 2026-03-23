@@ -12,11 +12,20 @@ defmodule SymphonyElixir.MCP.ConfigWriterTest do
     assert server["env"]["LINEAR_ENDPOINT"] == "https://custom.endpoint/graphql"
   end
 
+  test "build_config includes oauth token when provided" do
+    config = ConfigWriter.build_config(escript_path: "/bin/symphony", oauth_token: "oauth-tok", endpoint: "")
+
+    server = config["mcpServers"]["symphony-linear"]
+    assert server["env"]["LINEAR_OAUTH_TOKEN"] == "oauth-tok"
+    refute Map.has_key?(server["env"], "LINEAR_API_KEY")
+  end
+
   test "build_config omits empty env vars" do
-    config = ConfigWriter.build_config(escript_path: "/bin/symphony", api_key: "", endpoint: "")
+    config = ConfigWriter.build_config(escript_path: "/bin/symphony", api_key: "", oauth_token: "", endpoint: "")
 
     server = config["mcpServers"]["symphony-linear"]
     refute Map.has_key?(server["env"], "LINEAR_API_KEY")
+    refute Map.has_key?(server["env"], "LINEAR_OAUTH_TOKEN")
     refute Map.has_key?(server["env"], "LINEAR_ENDPOINT")
   end
 

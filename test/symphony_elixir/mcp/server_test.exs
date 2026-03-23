@@ -42,7 +42,7 @@ defmodule SymphonyElixir.MCP.ServerTest do
   end
 
   test "tools/call dispatches to linear_graphql" do
-    mock_http = fn _endpoint, %{body: body, api_key: _key} ->
+    mock_http = fn _endpoint, %{body: body, token: _token, token_type: _type} ->
       decoded = Jason.decode!(body)
       assert decoded["query"] =~ "viewer"
       {:ok, Jason.encode!(%{"data" => %{"viewer" => %{"id" => "user-1"}}})}
@@ -85,7 +85,7 @@ defmodule SymphonyElixir.MCP.ServerTest do
 
     assert response["result"]["isError"] == true
     assert [%{"text" => text}] = response["result"]["content"]
-    assert text =~ "LINEAR_API_KEY"
+    assert text =~ "LINEAR_OAUTH_TOKEN" or text =~ "LINEAR_API_KEY"
   end
 
   test "tools/call returns error for unknown tool" do

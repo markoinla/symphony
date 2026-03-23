@@ -21,11 +21,13 @@ defmodule SymphonyElixir.MCP.ConfigWriter do
   def build_config(opts \\ []) do
     escript_path = Keyword.get(opts, :escript_path, find_escript_path())
     api_key = Keyword.get(opts, :api_key, "")
+    oauth_token = Keyword.get(opts, :oauth_token, "")
     endpoint = Keyword.get(opts, :endpoint, "")
 
     env =
       %{}
       |> maybe_put("LINEAR_API_KEY", api_key)
+      |> maybe_put("LINEAR_OAUTH_TOKEN", oauth_token)
       |> maybe_put("LINEAR_ENDPOINT", endpoint)
 
     %{

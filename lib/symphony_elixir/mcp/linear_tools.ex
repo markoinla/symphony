@@ -3,7 +3,8 @@ defmodule SymphonyElixir.MCP.LinearTools do
   Self-contained Linear tool implementations for the MCP server.
 
   Uses `:httpc` directly (no Req dependency) so the MCP escript stays lightweight.
-  Reads `LINEAR_API_KEY` and `LINEAR_ENDPOINT` from the environment.
+  Reads `LINEAR_OAUTH_TOKEN` (preferred) or `LINEAR_API_KEY` and `LINEAR_ENDPOINT`
+  from the environment.
   """
 
   @default_endpoint "https://api.linear.app/graphql"
@@ -186,20 +187,43 @@ defmodule SymphonyElixir.MCP.LinearTools do
   defp post_graphql(body, opts) do
     http_client = Keyword.get(opts, :http_client, &default_http_client/2)
     endpoint = Keyword.get(opts, :endpoint, System.get_env("LINEAR_ENDPOINT") || @default_endpoint)
-    api_key = Keyword.get(opts, :api_key, System.get_env("LINEAR_API_KEY"))
 
-    if is_nil(api_key) or api_key == "" do
-      {:error, "LINEAR_API_KEY environment variable is not set."}
-    else
-      http_client.(endpoint, %{body: body, api_key: api_key})
+    case resolve_token(opts) do
+      {token, token_type} ->
+        http_client.(endpoint, %{body: body, token: token, token_type: token_type})
+
+      :none ->
+        {:error, "Linear auth not configured. Set LINEAR_OAUTH_TOKEN or LINEAR_API_KEY."}
     end
   end
 
-  defp default_http_client(endpoint, %{body: body, api_key: api_key}) do
+  defp resolve_token(opts) do
+    oauth_token = Keyword.get(opts, :oauth_token, System.get_env("LINEAR_OAUTH_TOKEN"))
+
+    if is_binary(oauth_token) and oauth_token != "" do
+      {oauth_token, :bearer}
+    else
+      api_key = Keyword.get(opts, :api_key, System.get_env("LINEAR_API_KEY"))
+
+      if is_binary(api_key) and api_key != "" do
+        {api_key, :api_key}
+      else
+        :none
+      end
+    end
+  end
+
+  defp default_http_client(endpoint, %{body: body, token: token, token_type: token_type}) do
     :ok = ensure_httpc_started()
 
+    auth_value =
+      case token_type do
+        :bearer -> "Bearer #{token}"
+        :api_key -> token
+      end
+
     headers = [
-      {~c"authorization", String.to_charlist(api_key)},
+      {~c"authorization", String.to_charlist(auth_value)},
       {~c"content-type", ~c"application/json"}
     ]
 

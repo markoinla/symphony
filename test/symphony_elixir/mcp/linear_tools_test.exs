@@ -39,7 +39,7 @@ defmodule SymphonyElixir.MCP.LinearToolsTest do
     test "passes variables to query" do
       opts = [
         api_key: "test-token",
-        http_client: fn _endpoint, %{body: body} ->
+        http_client: fn _endpoint, %{body: body, token: _, token_type: _} ->
           decoded = Jason.decode!(body)
           assert decoded["variables"]["id"] == "issue-1"
           {:ok, Jason.encode!(%{"data" => %{"issue" => %{"title" => "Test"}}})}
@@ -59,9 +59,9 @@ defmodule SymphonyElixir.MCP.LinearToolsTest do
       assert message =~ "non-empty"
     end
 
-    test "returns error when api key is missing" do
+    test "returns error when no auth is configured" do
       assert {:error, message} = LinearTools.execute("linear_graphql", %{"query" => "{ viewer { id } }"}, api_key: nil)
-      assert message =~ "LINEAR_API_KEY"
+      assert message =~ "LINEAR_OAUTH_TOKEN" or message =~ "LINEAR_API_KEY"
     end
   end
 
@@ -69,7 +69,7 @@ defmodule SymphonyElixir.MCP.LinearToolsTest do
     test "creates comment with agent reply tag" do
       opts = [
         api_key: "test-token",
-        http_client: fn _endpoint, %{body: body} ->
+        http_client: fn _endpoint, %{body: body, token: _, token_type: _} ->
           decoded = Jason.decode!(body)
           assert decoded["variables"]["input"]["body"] =~ "<!-- symphony:agent-reply -->"
           assert decoded["variables"]["input"]["body"] =~ "Hello world"
@@ -115,7 +115,7 @@ defmodule SymphonyElixir.MCP.LinearToolsTest do
     test "updates comment successfully" do
       opts = [
         api_key: "test-token",
-        http_client: fn _endpoint, %{body: body} ->
+        http_client: fn _endpoint, %{body: body, token: _, token_type: _} ->
           decoded = Jason.decode!(body)
           assert decoded["variables"]["id"] == "comment-1"
           assert decoded["variables"]["input"]["body"] == "Updated body"
