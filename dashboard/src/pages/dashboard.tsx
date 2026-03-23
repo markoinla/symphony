@@ -42,6 +42,7 @@ export function DashboardView() {
   const stateQuery = useQuery({
     queryKey: ['state'],
     queryFn: getState,
+    refetchInterval: 10_000,
   })
 
   useDashboardStream(
@@ -55,13 +56,14 @@ export function DashboardView() {
   const recentSessionsQuery = useQuery({
     queryKey: ['sessions', 'recent'],
     queryFn: () => getSessions({ limit: 50 }),
+    refetchInterval: 10_000,
   })
 
   const recentSessions = useMemo(() => {
     if (!recentSessionsQuery.data) return []
     const cutoff = now - 24 * 60 * 60 * 1000
     return recentSessionsQuery.data.sessions.filter((session) => {
-      if (session.status === 'running') return false
+      if (!session.ended_at) return false
       const ts = session.ended_at ?? session.started_at
       return ts && new Date(ts).getTime() >= cutoff
     })
