@@ -1,36 +1,29 @@
 # Host prerequisites: claude or codex CLI installed and authenticated.
 #
-# Configure these in your .env file:
-#   CLAUDE_BIN=/home/youruser/.local/bin/claude   (find with: which claude)
-#   CLAUDE_HOME=/home/youruser/.claude
-#   CODEX_BIN=/usr/local/bin/codex                (find with: which codex)
-#   CODEX_HOME=/home/youruser/.codex
-#   GIT_CONFIG=/home/youruser/.gitconfig
-#   SSH_DIR=/home/youruser/.ssh
+# The container runs as the host user (not root) so all auth, git config,
+# and SSH keys work automatically via a single home directory mount.
 
 services:
   symphony:
     build: .
     container_name: symphony
+    user: "${UID:-1000}:${GID:-1000}"
     ports:
       - "4000:4000"
     volumes:
-      # Persistence
-      - symphony-data:/home/symphony/.symphony
+      # Mount host home directory (read-only for auth, git, ssh)
+      - ${HOME}:${HOME}:ro
+
+      # Writable overlay for Symphony DB (persists across redeploys)
+      - symphony-data:${HOME}/.symphony
+
+      # Writable workspace directory
       - /tmp/symphony_workspaces:/tmp/symphony_workspaces
+
+      # Log directory
       - ./log:/app/log
-
-      # Host CLI tools (set paths in .env)
-      - ${CLAUDE_BIN:-/usr/local/bin/claude}:/usr/local/bin/claude:ro
-      - ${CODEX_BIN:-/usr/local/bin/codex}:/usr/local/bin/codex:ro
-      - ${CLAUDE_HOME:-~/.claude}:/home/symphony/.claude:ro
-      - ${CODEX_HOME:-~/.codex}:/home/symphony/.codex
-
-      # Git access
-      - ${GH_BIN:-/usr/bin/gh}:/usr/bin/gh:ro
-      - ${GH_CONFIG:-~/.config/gh}:/home/symphony/.config/gh:ro
-      - ${GIT_CONFIG:-~/.gitconfig}:/home/symphony/.gitconfig:ro
-      - ${SSH_DIR:-~/.ssh}:/home/symphony/.ssh:ro
+    environment:
+      - HOME=${HOME}
     env_file:
       - .env
     working_dir: /app

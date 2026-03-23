@@ -48,13 +48,7 @@ COPY --from=build /app/priv/static/dashboard /app/_build/dev/lib/symphony_elixir
 # Workflow config files
 COPY --from=build /app/*.md /app/
 
-# Run as non-root user (Claude CLI refuses --dangerously-skip-permissions as root)
-RUN groupadd -r symphony && useradd -r -g symphony -m -d /home/symphony symphony
-RUN mkdir -p /home/symphony/.symphony /tmp/symphony_workspaces \
-    && chown -R symphony:symphony /app /home/symphony /tmp/symphony_workspaces
-
-USER symphony
-ENV HOME=/home/symphony
+RUN chmod -R a+rw /app /tmp
 
 WORKDIR /app
 
@@ -62,6 +56,10 @@ EXPOSE 4000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -sf http://localhost:4000/healthz || exit 1
+
+# Run as host user via docker-compose `user:` directive (not root — Claude CLI
+# refuses --dangerously-skip-permissions as root). No USER directive here so
+# the image works with any UID.
 
 ENTRYPOINT ["symphony"]
 CMD ["--i-understand-that-this-will-be-running-without-the-usual-guardrails", "--port", "4000", "/app/WORKFLOW.md", "/app/ENRICHMENT.md", "/app/TRIAGE.md", "/app/MENTION.md"]
