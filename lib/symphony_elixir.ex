@@ -56,8 +56,14 @@ defmodule SymphonyElixir.Application do
   end
 
   defp resolve_db_path do
-    db_path = Path.expand("~/.symphony/symphony.db")
-    Application.put_env(:symphony_elixir, SymphonyElixir.Repo, database: db_path)
+    case Application.get_env(:symphony_elixir, SymphonyElixir.Repo)[:database] do
+      nil ->
+        db_path = Path.expand("~/.symphony/symphony.db")
+        Application.put_env(:symphony_elixir, SymphonyElixir.Repo, database: db_path)
+
+      _already_set ->
+        :ok
+    end
   end
 
   defp ensure_db_directory do
