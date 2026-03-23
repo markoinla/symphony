@@ -66,4 +66,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -sf http://localhost:4000/healthz || exit 1
 
 ENTRYPOINT ["symphony"]
-CMD ["--i-understand-that-this-will-be-running-without-the-usual-guardrails", "--port", "4000", "/app/WORKFLOW.md", "/app/ENRICHMENT.md", "/app/TRIAGE.md", "/app/MENTION.md"]
+CMD ["--i-understand-that-this-will-be-running-without-the-usual-guardrails", "--port", "4000", "/app/WORKFLOW.md", "/app/ENRICHMENT.md", "/app/TRIAGE.md", "/app/MENTION.md", "/app/REVIEW.md"]
