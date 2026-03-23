@@ -316,6 +316,20 @@ export function revokeOAuth() {
   })
 }
 
+export function getGitHubOAuthStatus() {
+  return requestJson<OAuthStatus>('/api/v1/oauth/github/status')
+}
+
+export function getGitHubOAuthAuthorizeUrl() {
+  return requestJson<{ authorize_url: string }>('/api/v1/oauth/github/authorize')
+}
+
+export function revokeGitHubOAuth() {
+  return requestJson<{ status: string }>('/api/v1/oauth/github/revoke', {
+    method: 'POST',
+  })
+}
+
 export function mergeTimelineMessage(payload: MessagesPayload, incoming: TimelineMessage) {
   const sessions = [...payload.sessions]
   const activeIndex = sessions.findIndex((session) => session.live)
