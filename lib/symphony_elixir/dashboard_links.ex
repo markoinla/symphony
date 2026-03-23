@@ -2,8 +2,10 @@ defmodule SymphonyElixir.DashboardLinks do
   @moduledoc """
   Builds Symphony dashboard URLs used for tracker resource links.
 
-  The public base URL is read from the `server.public_base_url` SQLite setting,
-  configurable via the dashboard Settings page.
+  The public base URL is resolved in order of precedence:
+
+  1. `server.public_base_url` SQLite setting (dashboard Settings page)
+  2. `SYMPHONY_PUBLIC_BASE_URL` environment variable
   """
 
   alias SymphonyElixir.Settings
@@ -18,8 +20,10 @@ defmodule SymphonyElixir.DashboardLinks do
   @spec session_issue_title() :: String.t()
   def session_issue_title, do: "Symphony Session"
 
+  @env_var "SYMPHONY_PUBLIC_BASE_URL"
+
   defp base_url do
-    (Settings.get(@setting_key) || "")
+    (Settings.get(@setting_key) || System.get_env(@env_var) || "")
     |> String.trim_trailing("/")
   end
 end

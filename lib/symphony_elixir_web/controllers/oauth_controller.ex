@@ -76,6 +76,7 @@ defmodule SymphonyElixirWeb.OAuthController do
   defp build_redirect_uri(_conn) do
     base_url =
       SymphonyElixir.Store.get_setting("server.public_base_url") ||
+        System.get_env("SYMPHONY_PUBLIC_BASE_URL") ||
         SymphonyElixirWeb.Endpoint.url()
 
     base_url
