@@ -253,6 +253,8 @@ defmodule SymphonyElixir.Orchestrator do
             _ ->
               Logger.warning("Agent task exited for issue_id=#{issue_id} session_id=#{session_id} reason=#{inspect(reason)}; scheduling retry")
 
+              AgentSession.complete(issue_id, :failed)
+
               next_attempt = next_retry_attempt_from_running(running_entry)
 
               schedule_issue_retry(state, issue_id, next_attempt, %{
@@ -550,6 +552,8 @@ defmodule SymphonyElixir.Orchestrator do
       %{pid: pid, ref: ref, identifier: identifier} = running_entry ->
         state = record_session_completion_totals(state, running_entry)
         worker_host = Map.get(running_entry, :worker_host)
+
+        AgentSession.complete(issue_id, :failed)
 
         if cleanup_workspace do
           cleanup_issue_workspace(identifier, worker_host)
