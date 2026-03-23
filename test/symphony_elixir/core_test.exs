@@ -1172,7 +1172,7 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "use `blocks` when the current issue must be"
     refute prompt =~ "blockedBy"
     assert prompt =~ "Continuation context (turn #2):"
-    assert prompt =~ "retry attempt #2"
+    assert prompt =~ "Read the workpad first."
   end
 
   test "prompt builder adds continuation guidance for retries" do
