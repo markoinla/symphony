@@ -50,7 +50,45 @@ Symphony stops the active agent for that issue and cleans up matching workspaces
      Team Settings → Workflow in Linear.
 6. Follow the instructions below to install the required runtime dependencies and start the service.
 
-## Prerequisites
+## Deploy with Docker
+
+### Prerequisites
+
+On your server, install and authenticate:
+- **Docker** and **Docker Compose**
+- **Claude CLI** — installed and logged in (`claude auth login`)
+- **GitHub CLI** — installed and logged in (`gh auth login`)
+
+### Quick start
+
+```bash
+git clone https://github.com/markoinla/symphony.git
+cd symphony
+echo "HOST_HOME=$HOME" > .env
+echo "SYMPHONY_AUTH_PASSWORD=$(openssl rand -base64 16)" >> .env
+docker compose up -d
+```
+
+Open `http://localhost:4000`:
+1. **Settings** → Connect Linear OAuth
+2. **Projects** → Create a project (name, GitHub repo, Linear org/project slug)
+3. Create an issue in Linear — Symphony picks it up
+
+To update: `docker compose pull && docker compose up -d`
+
+### Deploy with Dokploy
+
+1. **Add GHCR registry** in Dokploy → Settings → Registry:
+   - URL: `ghcr.io`, Username: your GitHub username, Password: GitHub PAT with `read:packages` scope
+2. **Create service** → Docker Compose → GitHub → `markoinla/symphony`, branch `main`, path `./docker-compose.yml`
+3. **Environment variables**: `HOST_HOME=/home/youruser` and `SYMPHONY_AUTH_PASSWORD=your-password`
+4. **Deploy**, then configure Linear OAuth and projects in the dashboard
+
+Pushes to `main` auto-build the Docker image via GitHub Actions and trigger a Dokploy redeploy.
+
+## Development (without Docker)
+
+### Prerequisites
 
 We recommend using [mise](https://mise.jdx.dev/) to manage Elixir/Erlang versions.
 
@@ -59,11 +97,11 @@ mise install
 mise exec -- elixir --version
 ```
 
-## Run
+### Run
 
 ```bash
-git clone https://github.com/openai/symphony
-cd symphony/elixir
+git clone https://github.com/markoinla/symphony.git
+cd symphony
 mise trust
 mise install
 mise exec -- mix setup
