@@ -1,8 +1,18 @@
 import { useState } from 'react'
 import * as Collapsible from '@radix-ui/react-collapsible'
+import { Bot, ChevronRight, Plus } from 'lucide-react'
 
 import { cn } from '../lib/utils'
-import { Badge, Button, Card, Field, Input, Textarea } from '../components/ui'
+import {
+  Badge,
+  Button,
+  Dialog,
+  DialogContent,
+  EmptyState,
+  Field,
+  Input,
+  Textarea,
+} from '../components/ui'
 
 type MockAgent = {
   name: string
@@ -76,137 +86,170 @@ const mockAgents: MockAgent[] = [
   },
 ]
 
-export function AgentsView() {
-  const [selectedAgent, setSelectedAgent] = useState<string | null>('WORKFLOW')
+// ---------------------------------------------------------------------------
+// Agent detail dialog
+// ---------------------------------------------------------------------------
+
+function AgentDetailDialog({
+  open,
+  onOpenChange,
+  agent,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  agent: MockAgent | null
+}) {
   const [showAdvanced, setShowAdvanced] = useState(false)
 
-  const agent = mockAgents.find((a) => a.name === selectedAgent)
+  if (!agent) return null
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent title={agent.name} description={agent.description}>
+        <div className="grid gap-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Engine">
+              <Input readOnly value={agent.engine} />
+            </Field>
+            <Field label="Concurrency">
+              <Input readOnly type="number" value={agent.concurrency} />
+            </Field>
+            <Field label="Polling interval (seconds)">
+              <Input readOnly type="number" value={agent.polling_interval} />
+            </Field>
+            <Field label="Max turns">
+              <Input readOnly type="number" value={agent.max_turns} />
+            </Field>
+          </div>
+
+          <Field label="Prompt template">
+            <Textarea
+              className="min-h-[160px] font-mono text-xs leading-5"
+              readOnly
+              value={agent.prompt_template}
+            />
+          </Field>
+
+          <Collapsible.Root onOpenChange={setShowAdvanced} open={showAdvanced}>
+            <Collapsible.Trigger className="group flex w-full items-center gap-1.5 rounded-md py-1.5 text-xs font-medium text-th-text-3 transition hover:text-th-text-1">
+              <ChevronRight className="h-3 w-3 transition-transform group-data-[state=open]:rotate-90" />
+              Raw JSON config
+            </Collapsible.Trigger>
+            <Collapsible.Content>
+              <pre className="mt-3 overflow-auto rounded-lg border border-th-border bg-th-inset p-4 font-mono text-xs leading-5 text-th-text-3">
+                {JSON.stringify(agent.config, null, 2)}
+              </pre>
+            </Collapsible.Content>
+          </Collapsible.Root>
+
+          <div className="flex items-center justify-end gap-3 border-t border-th-border pt-4">
+            <Button onClick={() => onOpenChange(false)} type="button" variant="ghost">
+              Close
+            </Button>
+            <Button type="button">Save changes</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Agent card
+// ---------------------------------------------------------------------------
+
+function AgentCard({
+  agent,
+  onView,
+}: {
+  agent: MockAgent
+  onView: (agent: MockAgent) => void
+}) {
+  return (
+    <div className="session-card rounded-xl border border-th-border bg-th-surface p-4 transition-shadow hover:shadow-sm sm:p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 space-y-2.5">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-th-text-1">{agent.name}</h3>
+            <Badge tone={agent.enabled ? 'running' : 'neutral'}>
+              {agent.enabled ? 'Enabled' : 'Disabled'}
+            </Badge>
+          </div>
+
+          <p className="text-[13px] leading-5 text-th-text-3">{agent.description}</p>
+
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-th-text-4">
+            <span>Engine: {agent.engine}</span>
+            <span>Concurrency: {agent.concurrency}</span>
+            <span>Poll: {agent.polling_interval}s</span>
+            <span>Max turns: {agent.max_turns}</span>
+          </div>
+        </div>
+
+        <Button
+          className="shrink-0"
+          onClick={() => onView(agent)}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
+          Edit
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Main view
+// ---------------------------------------------------------------------------
+
+export function AgentsView() {
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [selectedAgent, setSelectedAgent] = useState<MockAgent | null>(null)
+
+  function handleView(agent: MockAgent) {
+    setSelectedAgent(agent)
+    setDialogOpen(true)
+  }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-lg font-semibold tracking-tight text-th-text-1">Agents</h1>
-        <p className="mt-1 text-sm text-th-text-3">
-          Manage agent definitions — configure workflows, prompt templates, and runtime settings.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight text-th-text-1">Agents</h1>
+          <p className="mt-1 text-sm text-th-text-3">
+            Manage agent definitions — configure workflows, prompt templates, and runtime settings.
+          </p>
+        </div>
+        <Button className="shrink-0" type="button">
+          <Plus className={cn('mr-1.5 h-3.5 w-3.5')} />
+          New agent
+        </Button>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[0.8fr,1.2fr]">
-        <Card className="min-w-0 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-base font-semibold tracking-tight text-th-text-1">Agent definitions</h2>
-            <Button size="sm" type="button">
-              + New agent
-            </Button>
-          </div>
+      {mockAgents.length === 0 ? (
+        <EmptyState
+          icon={<Bot className="h-5 w-5 text-th-text-4" />}
+          title="No agents yet"
+          description="Create your first agent to start automating workflows."
+        />
+      ) : null}
 
-          <div className="space-y-2">
-            {mockAgents.map((a) => (
-              <button
-                className={cn(
-                  'w-full rounded-lg border p-4 text-left transition-colors',
-                  selectedAgent === a.name
-                    ? 'border-th-accent bg-th-accent-muted'
-                    : 'border-th-border bg-th-inset hover:border-th-border-muted',
-                )}
-                key={a.name}
-                onClick={() => setSelectedAgent(a.name)}
-                type="button"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="truncate text-sm font-semibold text-th-text-1">{a.name}</span>
-                  <Badge tone={a.enabled ? 'running' : 'neutral'}>
-                    {a.enabled ? 'Enabled' : 'Disabled'}
-                  </Badge>
-                </div>
-                <p className="mt-1.5 text-[13px] leading-5 text-th-text-3">{a.description}</p>
-                <div className="mt-3 flex flex-wrap gap-3 text-xs text-th-text-4">
-                  <span>Engine: {a.engine}</span>
-                  <span>Concurrency: {a.concurrency}</span>
-                  <span>Poll: {a.polling_interval}s</span>
-                  <span>Max turns: {a.max_turns}</span>
-                </div>
-              </button>
-            ))}
-          </div>
-        </Card>
-
-        {agent ? (
-          <Card className="min-w-0 space-y-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold tracking-tight text-th-text-1">{agent.name}</h2>
-                <p className="mt-1 text-sm text-th-text-3">{agent.description}</p>
-              </div>
-              <Badge tone={agent.enabled ? 'running' : 'neutral'}>
-                {agent.enabled ? 'Enabled' : 'Disabled'}
-              </Badge>
-            </div>
-
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Engine">
-                <Input readOnly value={agent.engine} />
-              </Field>
-              <Field label="Concurrency">
-                <Input readOnly type="number" value={agent.concurrency} />
-              </Field>
-              <Field label="Polling interval (seconds)">
-                <Input readOnly type="number" value={agent.polling_interval} />
-              </Field>
-              <Field label="Max turns">
-                <Input readOnly type="number" value={agent.max_turns} />
-              </Field>
-            </div>
-
-            <Field label="Prompt template">
-              <Textarea
-                className="min-h-[160px] font-mono text-xs leading-5"
-                readOnly
-                value={agent.prompt_template}
-              />
-            </Field>
-
-            <Collapsible.Root onOpenChange={setShowAdvanced} open={showAdvanced}>
-              <Collapsible.Trigger asChild>
-                <button
-                  className="flex items-center gap-2 text-sm font-medium text-th-text-3 hover:text-th-text-1"
-                  type="button"
-                >
-                  <svg
-                    className={cn('h-3.5 w-3.5 transition-transform', showAdvanced && 'rotate-90')}
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth={2}
-                    viewBox="0 0 24 24"
-                  >
-                    <path d="M9 5l7 7-7 7" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                  Advanced — Raw JSON config
-                </button>
-              </Collapsible.Trigger>
-              <Collapsible.Content>
-                <pre className="mt-3 overflow-auto rounded-lg border border-th-border bg-th-inset p-4 font-mono text-xs leading-5 text-th-text-3">
-                  {JSON.stringify(agent.config, null, 2)}
-                </pre>
-              </Collapsible.Content>
-            </Collapsible.Root>
-
-            <div className="flex flex-col gap-3 border-t border-th-border pt-5 sm:flex-row">
-              <Button type="button">Save changes</Button>
-              <Button type="button" variant="secondary">
-                Reset
-              </Button>
-              <Button className="sm:ml-auto" type="button" variant="danger">
-                Delete agent
-              </Button>
-            </div>
-          </Card>
-        ) : (
-          <Card className="flex min-w-0 items-center justify-center py-24">
-            <p className="text-sm text-th-text-4">Select an agent to view its configuration</p>
-          </Card>
-        )}
+      <div className="grid gap-3">
+        {mockAgents.map((agent) => (
+          <AgentCard key={agent.name} agent={agent} onView={handleView} />
+        ))}
       </div>
+
+      <AgentDetailDialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          setDialogOpen(open)
+          if (!open) setSelectedAgent(null)
+        }}
+        agent={selectedAgent}
+      />
     </div>
   )
 }
