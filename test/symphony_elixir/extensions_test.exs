@@ -665,7 +665,8 @@ defmodule SymphonyElixir.ExtensionsTest do
                "total_tokens" => 12,
                "seconds_running" => 42.5
              },
-             "rate_limits" => %{"primary" => %{"remaining" => 11}}
+             "rate_limits" => %{"primary" => %{"remaining" => 11}},
+             "loaded_workflows" => state_payload["loaded_workflows"]
            }
 
     conn = get(build_conn(), "/api/v1/MT-HTTP")
