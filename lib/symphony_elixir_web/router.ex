@@ -22,6 +22,12 @@ defmodule SymphonyElixirWeb.Router do
     plug(SymphonyElixirWeb.Plugs.RequireAuth)
   end
 
+  # Public: health check (no auth required)
+  scope "/", SymphonyElixirWeb do
+    pipe_through(:api)
+    get("/healthz", ObservabilityApiController, :healthz)
+  end
+
   # Public: auth endpoints (no auth required)
   scope "/api/v1/auth", SymphonyElixirWeb do
     pipe_through(:api)

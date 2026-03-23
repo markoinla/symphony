@@ -54,6 +54,11 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
     end
   end
 
+  @spec healthz(Conn.t(), map()) :: Conn.t()
+  def healthz(conn, _params) do
+    json(conn, %{status: "ok"})
+  end
+
   @spec method_not_allowed(Conn.t(), map()) :: Conn.t()
   def method_not_allowed(conn, _params) do
     error_response(conn, 405, "method_not_allowed", "Method not allowed")
