@@ -18,7 +18,7 @@ defmodule SymphonyElixir.Linear.Auth do
       _ ->
         case Config.settings!().tracker.api_key do
           key when is_binary(key) and key != "" ->
-            {:ok, {"Authorization", key}}
+            {:ok, {"Authorization", "Bearer #{key}"}}
 
           _ ->
             {:error, :missing_linear_auth}
