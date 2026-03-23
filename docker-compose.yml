@@ -27,6 +27,7 @@ services:
       - ${CODEX_HOME:-~/.codex}:/root/.codex
 
       # Git access
+      - ${GH_BIN:-/usr/bin/gh}:/usr/bin/gh:ro
       - ${GIT_CONFIG:-~/.gitconfig}:/root/.gitconfig:ro
       - ${SSH_DIR:-~/.ssh}:/root/.ssh:ro
     env_file:
