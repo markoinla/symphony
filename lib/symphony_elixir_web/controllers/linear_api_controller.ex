@@ -45,39 +45,12 @@ defmodule SymphonyElixirWeb.LinearApiController do
 
   defp do_search_projects(conn, token, params) do
     query = (params["q"] || "") |> String.trim()
-
-    filter =
-      if query == "" do
-        %{state: %{eq: "started"}}
-      else
-        %{name: %{containsIgnoreCase: query}, state: %{in: ["started", "planned"]}}
-      end
-
+    filter = project_filter(query)
     variables = %{filter: filter, first: 20}
 
     case linear_graphql(token, @projects_query, variables) do
       {:ok, %{"data" => %{"projects" => %{"nodes" => nodes}}}} ->
-        projects =
-          Enum.map(nodes, fn node ->
-            team = List.first(get_in(node, ["teams", "nodes"]) || [])
-            org_slug = team && get_in(team, ["organization", "urlKey"])
-            team_key = team && team["key"]
-
-            slug = build_project_slug(node["name"], node["slugId"])
-
-            %{
-              id: node["id"],
-              name: node["name"],
-              slug_id: node["slugId"],
-              slug: slug,
-              url: node["url"],
-              state: node["state"],
-              organization_slug: org_slug,
-              team_key: team_key
-            }
-          end)
-
-        json(conn, %{projects: projects})
+        json(conn, %{projects: Enum.map(nodes, &format_project/1)})
 
       {:ok, %{"errors" => errors}} ->
         message = errors |> List.first() |> then(& &1["message"]) || "GraphQL error"
@@ -86,6 +59,24 @@ defmodule SymphonyElixirWeb.LinearApiController do
       {:error, reason} ->
         error_response(conn, 502, "linear_error", "Linear API request failed: #{inspect(reason)}")
     end
+  end
+
+  defp project_filter(""), do: %{state: %{eq: "started"}}
+  defp project_filter(query), do: %{name: %{containsIgnoreCase: query}, state: %{in: ["started", "planned"]}}
+
+  defp format_project(node) do
+    team = List.first(get_in(node, ["teams", "nodes"]) || [])
+
+    %{
+      id: node["id"],
+      name: node["name"],
+      slug_id: node["slugId"],
+      slug: build_project_slug(node["name"], node["slugId"]),
+      url: node["url"],
+      state: node["state"],
+      organization_slug: team && get_in(team, ["organization", "urlKey"]),
+      team_key: team && team["key"]
+    }
   end
 
   defp build_project_slug(name, slug_id) when is_binary(name) and is_binary(slug_id) do
