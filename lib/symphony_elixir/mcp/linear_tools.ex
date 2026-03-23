@@ -219,7 +219,7 @@ defmodule SymphonyElixir.MCP.LinearTools do
     auth_value =
       case token_type do
         :bearer -> "Bearer #{token}"
-        :api_key -> token
+        :api_key -> "Bearer #{token}"
       end
 
     headers = [
