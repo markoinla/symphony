@@ -1,6 +1,8 @@
 defmodule SymphonyElixir.AppServerTest do
   use SymphonyElixir.TestSupport
 
+  @moduletag :codex_required
+
   test "app server rejects the workspace root and paths outside workspace root" do
     test_root =
       Path.join(

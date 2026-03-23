@@ -1193,6 +1193,7 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt == "Retry #2"
   end
 
+  @tag :codex_required
   test "agent runner keeps workspace after successful codex run" do
     test_root =
       Path.join(
@@ -1277,6 +1278,7 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  @tag :codex_required
   test "agent runner forwards timestamped codex updates to recipient" do
     test_root =
       Path.join(
@@ -1365,6 +1367,7 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  @tag :codex_required
   test "agent runner adds the configured pickup label when it claims an issue" do
     test_root =
       Path.join(
@@ -1441,6 +1444,7 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  @tag :codex_required
   test "agent runner skips pickup label writes when the issue already has the configured label" do
     test_root =
       Path.join(
@@ -1512,6 +1516,7 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  @tag :codex_required
   test "agent runner does not repost workspace-ready comments when reusing an existing workspace" do
     test_root =
       Path.join(
@@ -1585,6 +1590,7 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  @tag :codex_required
   test "agent runner continues with a follow-up turn while the issue remains active" do
     test_root =
       Path.join(
@@ -1716,6 +1722,7 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  @tag :codex_required
   test "agent runner stops continuing once agent.max_turns is reached" do
     test_root =
       Path.join(
@@ -1813,6 +1820,7 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  @tag :codex_required
   test "app server starts with workspace cwd and expected startup command" do
     test_root =
       Path.join(
@@ -1959,6 +1967,7 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  @tag :codex_required
   test "app server startup command supports codex args override from workflow config" do
     test_root =
       Path.join(
@@ -2044,6 +2053,7 @@ defmodule SymphonyElixir.CoreTest do
     end
   end
 
+  @tag :codex_required
   test "app server startup payload uses configurable approval and sandbox settings from workflow config" do
     test_root =
       Path.join(
