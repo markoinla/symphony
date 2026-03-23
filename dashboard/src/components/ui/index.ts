@@ -1,5 +1,6 @@
 export { Badge } from './badge'
 export { Button } from './button'
+export { Combobox, type ComboboxOption } from './combobox'
 export { Card, CardHeader, CardTitle, CardDescription } from './card'
 export { EmptyState, ErrorPanel, FeedbackBanner, LoadingPanel } from './feedback'
 export { Input, Textarea } from './input'

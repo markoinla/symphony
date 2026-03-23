@@ -1171,8 +1171,8 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "Type values: `\"blocks\"`, `\"related\"`, `\"duplicate\"`, `\"similar\"`"
     assert prompt =~ "use `blocks` when the current issue must be"
     refute prompt =~ "blockedBy"
-    assert prompt =~ "Continuation context:"
-    assert prompt =~ "retry attempt #2"
+    assert prompt =~ "Continuation context (turn #2):"
+    assert prompt =~ "Read the workpad first."
   end
 
   test "prompt builder adds continuation guidance for retries" do
