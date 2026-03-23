@@ -54,6 +54,32 @@ defmodule SymphonyElixir.MCP.LinearToolsTest do
                )
     end
 
+    test "resolves api_key token with correct type" do
+      opts = [
+        api_key: "lin_api_test123",
+        http_client: fn _endpoint, %{token: token, token_type: token_type} ->
+          assert token == "lin_api_test123"
+          assert token_type == :api_key
+          {:ok, Jason.encode!(%{"data" => %{"viewer" => %{"id" => "u1"}}})}
+        end
+      ]
+
+      assert {:ok, _text} = LinearTools.execute("linear_graphql", %{"query" => "{ viewer { id } }"}, opts)
+    end
+
+    test "sends oauth token with bearer type" do
+      opts = [
+        oauth_token: "oauth-tok-456",
+        http_client: fn _endpoint, %{token: token, token_type: token_type} ->
+          assert token == "oauth-tok-456"
+          assert token_type == :bearer
+          {:ok, Jason.encode!(%{"data" => %{"viewer" => %{"id" => "u1"}}})}
+        end
+      ]
+
+      assert {:ok, _text} = LinearTools.execute("linear_graphql", %{"query" => "{ viewer { id } }"}, opts)
+    end
+
     test "rejects empty query" do
       assert {:error, message} = LinearTools.execute("linear_graphql", %{"query" => ""}, mock_opts(%{}))
       assert message =~ "non-empty"
