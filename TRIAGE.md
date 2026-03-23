@@ -49,6 +49,17 @@ Current status: {{ issue.state }}
 Labels: {{ issue.labels }}
 URL: {{ issue.url }}
 
+{% if issue.parent_issue %}
+Parent issue: {{ issue.parent_issue.identifier }} — {{ issue.parent_issue.title }} ({{ issue.parent_issue.state }})
+{% endif %}
+
+{% if issue.child_issues.size > 0 %}
+Sub-issues ({{ issue.child_issues.size }}):
+{% for child in issue.child_issues %}
+- {{ child.identifier }} — {{ child.title }} ({{ child.state }})
+{% endfor %}
+{% endif %}
+
 Description:
 {% if issue.description %}
 {{ issue.description }}
@@ -81,6 +92,12 @@ This is an unattended triage session. You must NOT modify any code or create bra
 
 Search the issue comments for a previous triage comment (identified by the `## Triage` header). If one exists, review it and assess whether the concerns raised have been addressed by new information in the issue description or subsequent comments. If the same problems persist, reject again with an updated comment referencing the prior attempt.
 
+### Step 1.5: Circuit breaker — check for `triage-rejected` label
+
+If the issue has the `triage-rejected` label, it was previously rejected by triage and has looped back to Staged without the label being removed. This means the underlying problems have NOT been addressed.
+
+**Action**: Stop immediately. Do not post a new triage comment. Do not change the issue state. The `triage-rejected` label acts as a circuit breaker to prevent Backlog → Staged → Backlog loops. A human must remove the `triage-rejected` label after addressing the triage feedback before the issue can be re-triaged.
+
 ### Step 2: Check for existing enrichment
 
 Check if the issue has the `enriched` label.
@@ -102,6 +119,7 @@ Assess the issue against these criteria. Remember: bias toward approval. A "yes"
 2. **Scope**: Is this a reasonable unit of work for a single issue, or is it an epic that should be broken down?
 3. **Feasibility**: Based on the codebase context (from enrichment or your own exploration), can this reasonably be done? This applies to code changes, test runs, config updates, or any other kind of work.
 4. **Dependencies**: Are there blocking issues that are not yet resolved? Check the issue's relations for `blocked_by` links to non-terminal issues.
+5. **Hierarchy**: Does this issue have sub-issues (children)? Parent issues that decompose work into sub-issues must NOT be moved to Todo — they are coordination containers, not actionable work items. The sub-issues should be staged individually instead.
 
 ### Step 5: Make the decision
 
@@ -155,7 +173,35 @@ Only if you genuinely cannot determine what needs to be done, even after reading
 <Any additional context, e.g., suggestions for breaking a large issue into smaller ones, related issues to consider, etc.>
 ```
 
-2. Move the issue to "Backlog" status.
+2. Add the `triage-rejected` label to the issue (create the label on the team if it doesn't exist).
+3. Move the issue to "Backlog" status.
+
+#### Outcome C: Reject parent issue back to Backlog
+
+If the issue has sub-issues (children), it is a parent/container issue and must NEVER be moved to Todo:
+
+1. Post a comment with the `## Triage` header using this structure:
+
+```markdown
+## Triage
+
+**Decision**: Returned to backlog — parent issue
+
+### Reason
+This is a parent issue with sub-issue(s). Parent issues are coordination containers and should not be moved to Todo directly, as this would trigger an agent to attempt the entire scope in a single pass.
+
+### Sub-issues
+<List each child issue identifier, title, and current state>
+
+### What needs to change
+Stage the individual sub-issues for triage instead of this parent issue. If the sub-issues are not yet created or are incomplete, break this parent issue down into concrete, actionable sub-issues first.
+
+### Notes
+<Any context about which sub-issues look ready vs which need more detail.>
+```
+
+2. Add the `triage-rejected` label to the issue (create the label on the team if it doesn't exist).
+3. Move the issue to "Backlog" status.
 
 ### Step 6: Done
 
@@ -249,6 +295,8 @@ query GetIssue($id: String!) {
 - Do NOT modify any files in the workspace.
 - Do NOT create git branches or commits.
 - Do NOT create follow-up issues — triage evaluates, it does not expand scope.
+- NEVER move a parent issue (one with sub-issues/children) to Todo. Always reject it back to Backlog with the `triage-rejected` label.
+- If the issue has the `triage-rejected` label, stop immediately without taking any action.
 - Post exactly one triage comment, update the issue state, then stop.
 - If the workspace is empty or the codebase is unavailable, evaluate based on the issue description and enrichment comment alone and note the limitation.
 - Always provide actionable feedback when returning an issue to Backlog. "Not ready" without explanation is not acceptable.

@@ -17,8 +17,8 @@ services:
       # Mount host home directory (auth, git, ssh, claude config)
       - ${HOST_HOME}:${HOST_HOME}
 
-      # Separate DB so container doesn't share with host Symphony
-      - symphony-data:${HOST_HOME}/.symphony
+      # Persistent DB directory (uses Dokploy's ../files convention)
+      - ../files/symphony-data:${HOST_HOME}/.symphony
 
       # Writable workspace directory
       - /tmp/symphony_workspaces:/tmp/symphony_workspaces
@@ -36,6 +36,4 @@ services:
       start_period: 10s
       retries: 3
 
-volumes:
-  symphony-data:
 
