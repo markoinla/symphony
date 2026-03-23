@@ -42,9 +42,10 @@ defmodule SymphonyElixirWeb.Router do
     post("/linear", WebhookController, :linear)
   end
 
-  # Public: OAuth callback is a browser redirect
+  # Public: OAuth callbacks are browser redirects
   scope "/api/v1/oauth", SymphonyElixirWeb do
     get("/linear/callback", OAuthController, :callback)
+    get("/github/callback", GitHubOAuthController, :callback)
   end
 
   # Authenticated: SSE streams
@@ -74,6 +75,9 @@ defmodule SymphonyElixirWeb.Router do
     get("/oauth/linear/authorize", OAuthController, :authorize)
     get("/oauth/linear/status", OAuthController, :status)
     post("/oauth/linear/revoke", OAuthController, :revoke)
+    get("/oauth/github/authorize", GitHubOAuthController, :authorize)
+    get("/oauth/github/status", GitHubOAuthController, :status)
+    post("/oauth/github/revoke", GitHubOAuthController, :revoke)
 
     match(:*, "/state", ObservabilityApiController, :method_not_allowed)
     match(:*, "/refresh", ObservabilityApiController, :method_not_allowed)

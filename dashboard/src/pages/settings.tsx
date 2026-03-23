@@ -4,6 +4,7 @@ import {
   Eye,
   EyeOff,
   ExternalLink,
+  Github,
   Key,
   Link2,
   Globe,
@@ -17,9 +18,12 @@ import {
   type AgentSettingsDefaults,
   type Setting,
   deleteSetting,
+  getGitHubOAuthAuthorizeUrl,
+  getGitHubOAuthStatus,
   getOAuthAuthorizeUrl,
   getOAuthStatus,
   getSettings,
+  revokeGitHubOAuth,
   revokeOAuth,
   upsertSetting,
 } from '../lib/api'
@@ -107,11 +111,11 @@ export function SettingsView() {
         </p>
       </div>
 
-      <Tabs defaultValue="connections">
+      <Tabs defaultValue="integrations">
         <TabsList>
-          <TabsTrigger value="connections">
+          <TabsTrigger value="integrations">
             <Link2 className="mr-1.5 h-3.5 w-3.5" />
-            Connections
+            Integrations
           </TabsTrigger>
           <TabsTrigger value="agent">
             <Sliders className="mr-1.5 h-3.5 w-3.5" />
@@ -123,10 +127,11 @@ export function SettingsView() {
           </TabsTrigger>
         </TabsList>
 
-        <TabsContent value="connections">
+        <TabsContent value="integrations">
           <div className="space-y-5">
             <LinearApiKeySection />
             <LinearOAuthSection />
+            <GitHubOAuthSection />
             <DashboardUrlSection />
           </div>
         </TabsContent>
@@ -445,6 +450,197 @@ function LinearOAuthSection() {
   )
 }
 
+function GitHubOAuthSection() {
+  const queryClient = useQueryClient()
+
+  const statusQuery = useQuery({
+    queryKey: ['github-oauth-status'],
+    queryFn: getGitHubOAuthStatus,
+    refetchInterval: 60_000,
+  })
+
+  const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
+  const existingClientId = settingsQuery.data?.settings.find((s) => s.key === 'github_oauth.client_id')
+
+  const [clientId, setClientId] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
+  const oauthStatus = statusQuery.data?.status ?? 'disconnected'
+  const credentialsSource = statusQuery.data?.credentials_source ?? 'none'
+  const credentialsFromEnv = credentialsSource === 'env'
+
+  const initialFeedback = useMemo(() => {
+    const params = new URLSearchParams(window.location.search)
+    const oauthResult = params.get('github_oauth')
+    if (oauthResult) {
+      window.history.replaceState({}, '', window.location.pathname)
+      if (oauthResult === 'success') return 'Successfully connected to GitHub.'
+      const message = params.get('message') || 'Unknown error'
+      return `GitHub OAuth authorization failed: ${message}`
+    }
+    return null
+  }, [])
+
+  const [feedback, setFeedback] = useState<string | null>(initialFeedback)
+
+  useEffect(() => {
+    if (initialFeedback?.startsWith('Successfully')) {
+      void queryClient.invalidateQueries({ queryKey: ['github-oauth-status'] })
+      void queryClient.invalidateQueries({ queryKey: ['settings'] })
+    }
+  }, [initialFeedback, queryClient])
+
+  const saveCredentialsMutation = useMutation({
+    mutationFn: async ({ id, secret }: { id: string; secret: string }) => {
+      await upsertSetting('github_oauth.client_id', id)
+      await upsertSetting('github_oauth.client_secret', secret)
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setFeedback('GitHub OAuth app credentials saved.')
+      setClientId('')
+      setClientSecret('')
+    },
+    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+  })
+
+  const connectMutation = useMutation({
+    mutationFn: getGitHubOAuthAuthorizeUrl,
+    onSuccess: (data) => { window.location.href = data.authorize_url },
+    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+  })
+
+  const disconnectMutation = useMutation({
+    mutationFn: revokeGitHubOAuth,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['github-oauth-status'] })
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setFeedback('Disconnected from GitHub.')
+    },
+    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+  })
+
+  const statusBadge =
+    oauthStatus === 'connected' ? (
+      <Badge tone="running">Connected</Badge>
+    ) : oauthStatus === 'expired' ? (
+      <Badge tone="retrying">Token expired</Badge>
+    ) : (
+      <Badge tone="neutral">Disconnected</Badge>
+    )
+
+  return (
+    <Card className="space-y-4">
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Github className="h-4 w-4 text-th-text-3" />
+          <CardTitle>GitHub OAuth</CardTitle>
+          {statusBadge}
+        </div>
+        <CardDescription>
+          Connect Symphony to GitHub to link repositories to projects.
+        </CardDescription>
+      </CardHeader>
+
+      {feedback ? <FeedbackBanner message={feedback} /> : null}
+
+      {oauthStatus === 'connected' || oauthStatus === 'expired' ? (
+        <div className="rounded-lg border border-th-border bg-th-inset p-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-1 text-sm text-th-text-2">
+              {existingClientId ? (
+                <div>App ID: <code className="text-th-text-3">{existingClientId.value}</code></div>
+              ) : credentialsFromEnv ? (
+                <div className="text-xs text-th-text-4">Credentials: via environment variable</div>
+              ) : null}
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {oauthStatus === 'expired' ? (
+                <Button
+                  disabled={connectMutation.isPending}
+                  onClick={() => { setFeedback(null); void connectMutation.mutateAsync() }}
+                  size="sm"
+                  type="button"
+                >
+                  Reconnect
+                </Button>
+              ) : null}
+              <Button
+                disabled={disconnectMutation.isPending}
+                onClick={() => { setFeedback(null); void disconnectMutation.mutateAsync() }}
+                size="sm"
+                type="button"
+                variant="danger"
+              >
+                Disconnect
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : credentialsFromEnv ? (
+        <div className="rounded-lg border border-th-border bg-th-inset p-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="space-y-1 text-sm text-th-text-2">
+              <div className="text-xs text-th-text-4">Credentials: via environment variable</div>
+            </div>
+            <Button
+              disabled={connectMutation.isPending}
+              onClick={() => { setFeedback(null); void connectMutation.mutateAsync() }}
+              type="button"
+            >
+              Connect to GitHub
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <form
+            className="grid gap-4 sm:grid-cols-2"
+            onSubmit={(event) => {
+              event.preventDefault()
+              setFeedback(null)
+              void saveCredentialsMutation.mutateAsync({ id: clientId.trim(), secret: clientSecret.trim() })
+            }}
+          >
+            <Field label="Client ID">
+              <Input
+                onChange={(event) => setClientId(event.target.value)}
+                placeholder={existingClientId?.value || 'Your GitHub OAuth App client ID'}
+                value={clientId}
+              />
+            </Field>
+            <Field label="Client Secret">
+              <Input
+                onChange={(event) => setClientSecret(event.target.value)}
+                placeholder="Your GitHub OAuth App client secret"
+                type="password"
+                value={clientSecret}
+              />
+            </Field>
+            <div className="sm:col-span-2 flex gap-3">
+              <Button
+                disabled={saveCredentialsMutation.isPending || (!clientId.trim() && !clientSecret.trim())}
+                type="submit"
+                variant="secondary"
+              >
+                {existingClientId ? 'Update credentials' : 'Save credentials'}
+              </Button>
+              {existingClientId ? (
+                <Button
+                  disabled={connectMutation.isPending}
+                  onClick={() => { setFeedback(null); void connectMutation.mutateAsync() }}
+                  type="button"
+                >
+                  Connect to GitHub
+                </Button>
+              ) : null}
+            </div>
+          </form>
+        </>
+      )}
+    </Card>
+  )
+}
+
 function DashboardUrlSection() {
   const queryClient = useQueryClient()
   const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
@@ -707,6 +903,9 @@ function AdvancedSettingsSection() {
     'linear_oauth.client_id',
     'linear_oauth.client_secret',
     'linear_oauth.expires_at',
+    'github_oauth.client_id',
+    'github_oauth.client_secret',
+    'github_oauth.expires_at',
     'server.public_base_url',
     'agent.max_concurrent_agents',
     'agent.max_turns',
