@@ -70,6 +70,34 @@ defmodule SymphonyElixir.Linear.AgentAPI do
     end
   end
 
+  @spec complete_session(String.t(), :completed | :failed) :: :ok | {:error, term()}
+  def complete_session(agent_session_id, outcome)
+      when is_binary(agent_session_id) and outcome in [:completed, :failed] do
+    body =
+      case outcome do
+        :completed -> "Agent session completed successfully."
+        :failed -> "Agent session ended with errors."
+      end
+
+    content = %{type: "response", body: body}
+
+    case agent_graphql(@create_activity_mutation, %{
+           input: %{
+             agentSessionId: agent_session_id,
+             content: content,
+             signal: "stop"
+           }
+         }) do
+      {:ok, response} ->
+        if get_in(response, ["data", "agentActivityCreate", "success"]) == true,
+          do: :ok,
+          else: {:error, :session_complete_failed}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   @spec update_session(String.t(), keyword()) :: :ok | {:error, term()}
   def update_session(agent_session_id, opts \\ [])
       when is_binary(agent_session_id) and is_list(opts) do
