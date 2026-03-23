@@ -7,6 +7,7 @@ import {
   getSessions,
   type StatePayload,
   type SessionsPayload,
+  type LoadedWorkflow,
 } from '../lib/api'
 import { useDashboardStream } from '../lib/streams'
 import {
@@ -102,6 +103,10 @@ export function DashboardView() {
         </div>
       </div>
 
+      {payload.loaded_workflows && payload.loaded_workflows.length > 0 ? (
+        <LoadedWorkflowsSection workflows={payload.loaded_workflows} />
+      ) : null}
+
       {payload.error ? (
         <ErrorPanel title="Snapshot warning" detail={`${payload.error.code}: ${payload.error.message}`} />
       ) : null}
@@ -165,6 +170,24 @@ export function DashboardView() {
             ))}
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+function LoadedWorkflowsSection({ workflows }: { workflows: LoadedWorkflow[] }) {
+  return (
+    <div className="space-y-2">
+      <h2 className="text-sm font-medium text-th-text-3">Loaded workflows</h2>
+      <div className="flex flex-wrap gap-2">
+        {workflows.map((workflow) => (
+          <span
+            key={workflow.name}
+            className="inline-flex items-center rounded-full border border-th-border bg-th-surface px-3 py-1 text-sm font-medium text-th-text-2"
+          >
+            {workflow.display_name}
+          </span>
+        ))}
       </div>
     </div>
   )
