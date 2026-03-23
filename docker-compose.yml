@@ -1,28 +1,28 @@
 # Host prerequisites: claude or codex CLI installed and authenticated.
 #
-# The container runs as the host user (not root) so all auth, git config,
-# and SSH keys work automatically via a single home directory mount.
+# Set HOST_HOME in your .env to your home directory path, e.g.:
+#   HOST_HOME=/home/marko
+#
+# The container runs as root with IS_SANDBOX=1 so Claude CLI accepts
+# --dangerously-skip-permissions. Host home is mounted for auth/git/ssh
+# config, with the DB directory writable.
 
 services:
   symphony:
     image: ghcr.io/markoinla/symphony:main
-    user: "${UID:-1000}:${GID:-1000}"
     ports:
       - "4000:4000"
     volumes:
       # Mount host home directory (read-only for auth, git, ssh)
-      - ${HOME}:${HOME}:ro
+      - ${HOST_HOME}:${HOST_HOME}:ro
 
-      # Writable: DB directory (bind mount over the ro home)
-      - ${HOME}/.symphony:${HOME}/.symphony
+      # Writable overlay for DB (over the ro home mount)
+      - symphony-data:${HOST_HOME}/.symphony
 
       # Writable workspace directory
       - /tmp/symphony_workspaces:/tmp/symphony_workspaces
-
-      # Log directory
-      - ./log:/app/log
     environment:
-      - HOME=${HOME}
+      - HOME=${HOST_HOME}
     env_file:
       - .env
     working_dir: /app
@@ -33,3 +33,6 @@ services:
       timeout: 5s
       start_period: 10s
       retries: 3
+
+volumes:
+  symphony-data:

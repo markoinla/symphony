@@ -38,6 +38,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 
+# IS_SANDBOX=1 allows Claude CLI to run --dangerously-skip-permissions as root
+ENV IS_SANDBOX=1
+
 COPY --from=build /app/bin/symphony /usr/local/bin/symphony
 
 # The escript loads NIF .so files from _build/dev/lib/ at runtime
@@ -48,7 +51,7 @@ COPY --from=build /app/priv/static/dashboard /app/_build/dev/lib/symphony_elixir
 # Workflow config files
 COPY --from=build /app/*.md /app/
 
-RUN chmod -R a+rw /app /tmp
+RUN mkdir -p /root/.symphony
 
 WORKDIR /app
 
@@ -56,10 +59,6 @@ EXPOSE 4000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -sf http://localhost:4000/healthz || exit 1
-
-# Run as host user via docker-compose `user:` directive (not root — Claude CLI
-# refuses --dangerously-skip-permissions as root). No USER directive here so
-# the image works with any UID.
 
 ENTRYPOINT ["symphony"]
 CMD ["--i-understand-that-this-will-be-running-without-the-usual-guardrails", "--port", "4000", "/app/WORKFLOW.md", "/app/ENRICHMENT.md", "/app/TRIAGE.md", "/app/MENTION.md"]
