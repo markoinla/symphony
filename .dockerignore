@@ -1,0 +1,16 @@
+_build/
+deps/
+bin/
+dashboard/node_modules/
+dashboard/dist/
+.git/
+.github/
+.elixir_ls/
+.vscode/
+test/
+docs/
+*.md
+!WORKFLOW.md
+.env
+.env.*
+log/

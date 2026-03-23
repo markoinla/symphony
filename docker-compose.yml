@@ -1,0 +1,48 @@
+# Host prerequisites: claude or codex CLI installed and authenticated.
+#
+# Configure these in your .env file:
+#   CLAUDE_BIN=/home/youruser/.local/bin/claude   (find with: which claude)
+#   CLAUDE_HOME=/home/youruser/.claude
+#   CODEX_BIN=/usr/local/bin/codex                (find with: which codex)
+#   CODEX_HOME=/home/youruser/.codex
+#   GIT_CONFIG=/home/youruser/.gitconfig
+#   SSH_DIR=/home/youruser/.ssh
+
+services:
+  symphony:
+    build: .
+    container_name: symphony
+    ports:
+      - "4000:4000"
+    volumes:
+      # Persistence
+      - symphony-data:/root/.symphony
+      - /tmp/symphony_workspaces:/tmp/symphony_workspaces
+      - ./WORKFLOW.md:/app/WORKFLOW.md:ro
+      - ./ENRICHMENT.md:/app/ENRICHMENT.md:ro
+      - ./TRIAGE.md:/app/TRIAGE.md:ro
+      - ./MENTION.md:/app/MENTION.md:ro
+      - ./log:/app/log
+
+      # Host CLI tools (set paths in .env)
+      - ${CLAUDE_BIN:-/usr/local/bin/claude}:/usr/local/bin/claude:ro
+      - ${CODEX_BIN:-/usr/local/bin/codex}:/usr/local/bin/codex:ro
+      - ${CLAUDE_HOME:-~/.claude}:/root/.claude:ro
+      - ${CODEX_HOME:-~/.codex}:/root/.codex
+
+      # Git access
+      - ${GIT_CONFIG:-~/.gitconfig}:/root/.gitconfig:ro
+      - ${SSH_DIR:-~/.ssh}:/root/.ssh:ro
+    env_file:
+      - .env
+    working_dir: /app
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  symphony-data:
