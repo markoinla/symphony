@@ -76,11 +76,20 @@ defmodule SymphonyElixirWeb.OAuthController do
   defp build_redirect_uri(_conn) do
     base_url =
       SymphonyElixir.Store.get_setting("server.public_base_url") ||
+        non_blank_env("SYMPHONY_PUBLIC_BASE_URL") ||
         SymphonyElixirWeb.Endpoint.url()
 
     base_url
     |> String.trim_trailing("/")
     |> Kernel.<>("/api/v1/oauth/linear/callback")
+  end
+
+  defp non_blank_env(var) do
+    case System.get_env(var) do
+      nil -> nil
+      "" -> nil
+      val -> val
+    end
   end
 
   defp fetch_param(params, key) do

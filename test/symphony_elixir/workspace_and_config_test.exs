@@ -1189,6 +1189,29 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
              "https://symphony.example.com/root/session/MT-321"
   end
 
+  test "dashboard links falls back to SYMPHONY_PUBLIC_BASE_URL env var" do
+    SymphonyElixir.Store.delete_setting("server.public_base_url")
+    System.put_env("SYMPHONY_PUBLIC_BASE_URL", "https://env.example.com")
+
+    on_exit(fn -> System.delete_env("SYMPHONY_PUBLIC_BASE_URL") end)
+
+    assert SymphonyElixir.DashboardLinks.session_issue_url("MT-1") ==
+             "https://env.example.com/session/MT-1"
+  end
+
+  test "dashboard links SQLite setting takes precedence over env var" do
+    SymphonyElixir.Store.put_setting("server.public_base_url", "https://db.example.com")
+    System.put_env("SYMPHONY_PUBLIC_BASE_URL", "https://env.example.com")
+
+    on_exit(fn ->
+      SymphonyElixir.Store.delete_setting("server.public_base_url")
+      System.delete_env("SYMPHONY_PUBLIC_BASE_URL")
+    end)
+
+    assert SymphonyElixir.DashboardLinks.session_issue_url("MT-1") ==
+             "https://db.example.com/session/MT-1"
+  end
+
   test "settings returns an empty overlay map when no settings exist in DB" do
     SymphonyElixir.Settings.put_current_project(nil)
     SymphonyElixir.Store.delete_all_settings()

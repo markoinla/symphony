@@ -679,6 +679,7 @@ function DashboardUrlSection() {
         </div>
         <CardDescription>
           Public base URL used in session links posted to Linear issues. Include the scheme and host.
+          Alternatively, set the <code className="text-xs">SYMPHONY_PUBLIC_BASE_URL</code> environment variable. The database setting takes precedence.
         </CardDescription>
       </CardHeader>
 
