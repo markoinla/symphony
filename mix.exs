@@ -101,7 +101,8 @@ defmodule SymphonyElixir.MixProject do
       {:ecto, "~> 3.13"},
       {:ecto_sqlite3, "~> 0.18"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
+      {:dotenvy, "~> 0.9"}
     ]
   end
 
