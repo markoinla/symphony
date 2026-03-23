@@ -25,6 +25,9 @@ defmodule SymphonyElixir.TestSupport do
         only: [write_workflow_file!: 1, write_workflow_file!: 2, restore_env: 2, stop_default_http_server: 0]
 
       setup do
+        :ok = Ecto.Adapters.SQL.Sandbox.checkout(SymphonyElixir.Repo)
+        Ecto.Adapters.SQL.Sandbox.mode(SymphonyElixir.Repo, {:shared, self()})
+
         workflow_root =
           Path.join(
             System.tmp_dir!(),
@@ -35,7 +38,6 @@ defmodule SymphonyElixir.TestSupport do
         workflow_file = Path.join(workflow_root, "WORKFLOW.md")
         write_workflow_file!(workflow_file)
         Workflow.set_workflow_file_path(workflow_file)
-        SymphonyElixir.Store.delete_all_projects()
         if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
         stop_default_http_server()
 

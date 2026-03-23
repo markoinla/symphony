@@ -23,6 +23,7 @@ defmodule SymphonyElixir.Application do
   @impl true
   def start(_type, _args) do
     :ok = SymphonyElixir.LogFile.configure()
+    run_migrations()
 
     children =
       [
@@ -50,5 +51,14 @@ defmodule SymphonyElixir.Application do
   def stop(_state) do
     SymphonyElixir.StatusDashboard.render_offline_status()
     :ok
+  end
+
+  defp run_migrations do
+    repo_config = Application.get_env(:symphony_elixir, SymphonyElixir.Repo, [])
+
+    unless repo_config[:pool] == Ecto.Adapters.SQL.Sandbox do
+      {:ok, _, _} =
+        Ecto.Migrator.with_repo(SymphonyElixir.Repo, &Ecto.Migrator.run(&1, :up, all: true))
+    end
   end
 end
