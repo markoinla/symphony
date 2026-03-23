@@ -279,6 +279,29 @@ defmodule SymphonyElixir.Store do
     Repo.get(Session, db_session_id)
   end
 
+  @spec find_session_by_agent_session_id(String.t()) :: Ecto.Schema.t() | nil
+  def find_session_by_agent_session_id(agent_session_id) when is_binary(agent_session_id) do
+    Session
+    |> where([s], s.agent_session_id == ^agent_session_id)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  @spec update_session_agent_session_id(integer(), String.t()) ::
+          {:ok, Ecto.Schema.t()} | {:error, term()}
+  def update_session_agent_session_id(db_session_id, agent_session_id)
+      when is_integer(db_session_id) and is_binary(agent_session_id) do
+    case get_session(db_session_id) do
+      nil ->
+        {:error, :not_found}
+
+      session ->
+        session
+        |> Ecto.Changeset.change(agent_session_id: agent_session_id)
+        |> Repo.update()
+    end
+  end
+
   @spec get_session_messages(integer()) :: [Ecto.Schema.t()]
   def get_session_messages(db_session_id) do
     Message

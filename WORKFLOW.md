@@ -35,6 +35,9 @@ codex:
     type: dangerFullAccess
 server:
   host: "0.0.0.0"
+linear_agent:
+  enabled: true
+  webhook_signing_secret: $LINEAR_WEBHOOK_SECRET
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`.

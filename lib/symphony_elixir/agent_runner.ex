@@ -7,10 +7,12 @@ defmodule SymphonyElixir.AgentRunner do
   alias SymphonyElixir.Engine
 
   alias SymphonyElixir.{
+    AgentSession,
     CommentWatch,
     Config,
     DashboardLinks,
     Linear.Issue,
+    Linear.PlanBuilder,
     PromptBuilder,
     SessionLog,
     Tracker,
@@ -28,9 +30,11 @@ defmodule SymphonyElixir.AgentRunner do
 
     case run_on_worker_hosts(issue, engine_update_recipient, opts, worker_hosts) do
       :ok ->
+        maybe_finalize_agent_session(issue, :completed)
         :ok
 
       {:error, reason} ->
+        maybe_finalize_agent_session(issue, :failed)
         Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
         raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
     end
@@ -84,6 +88,8 @@ defmodule SymphonyElixir.AgentRunner do
     fn message ->
       send_engine_update(recipient, issue, message)
       SessionLog.append(issue_id, session_id, message)
+      maybe_emit_agent_activity(issue_id, message)
+      maybe_sync_workpad_plan(issue_id, message)
     end
   end
 
@@ -141,6 +147,13 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp notify_workspace_ready(_issue, _workspace, _worker_host), do: :ok
+
+  defp maybe_notify_workspace_ready(%Issue{id: issue_id} = issue, workspace, worker_host, true)
+       when is_binary(issue_id) do
+    unless AgentSession.active?(issue_id) do
+      notify_workspace_ready(issue, workspace, worker_host)
+    end
+  end
 
   defp maybe_notify_workspace_ready(issue, workspace, worker_host, true) do
     notify_workspace_ready(issue, workspace, worker_host)
@@ -299,8 +312,12 @@ defmodule SymphonyElixir.AgentRunner do
            ) do
       Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
 
+      # Drain any pending prompts from agent session (mid-run user messages)
+      agent_prompts = drain_agent_prompts(issue.id)
+
       case continue_with_issue?(issue, issue_state_fetcher, comment_watch_state) do
         {:continue, refreshed_issue, next_comment_watch_state, unseen_comments} when turn_number < max_turns ->
+          all_comments = merge_agent_prompts(unseen_comments, agent_prompts)
           Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
           send_comment_watch_update(engine_update_recipient, refreshed_issue, next_comment_watch_state)
 
@@ -315,7 +332,7 @@ defmodule SymphonyElixir.AgentRunner do
             max_turns,
             session_id,
             next_comment_watch_state,
-            unseen_comments
+            all_comments
           )
 
         {:continue, refreshed_issue, next_comment_watch_state, _unseen_comments} ->
@@ -451,4 +468,71 @@ defmodule SymphonyElixir.AgentRunner do
   defp issue_context(%Issue{id: issue_id, identifier: identifier}) do
     "issue_id=#{issue_id} issue_identifier=#{identifier}"
   end
+
+  # -- Agent Session integration --
+
+  defp drain_agent_prompts(issue_id) when is_binary(issue_id) do
+    AgentSession.drain_pending_prompts(issue_id)
+  end
+
+  defp drain_agent_prompts(_issue_id), do: []
+
+  defp merge_agent_prompts(unseen_comments, []), do: unseen_comments
+
+  defp merge_agent_prompts(unseen_comments, agent_prompts) do
+    prompt_comments =
+      Enum.map(agent_prompts, fn prompt ->
+        %SymphonyElixir.Linear.Comment{
+          id: "agent-prompt-#{System.unique_integer([:positive])}",
+          body: prompt,
+          author: "User (via Linear Agent)",
+          created_at: DateTime.utc_now() |> DateTime.to_iso8601()
+        }
+      end)
+
+    unseen_comments ++ prompt_comments
+  end
+
+  defp maybe_emit_agent_activity(issue_id, message) when is_binary(issue_id) do
+    AgentSession.emit_activity(issue_id, message)
+  end
+
+  defp maybe_emit_agent_activity(_issue_id, _message), do: :ok
+
+  # Sync workpad plan to Linear agent session when the agent creates/updates a comment
+  # containing a ### Plan checklist.
+  defp maybe_sync_workpad_plan(issue_id, %{event: :notification} = msg) when is_binary(issue_id) do
+    method = get_in(msg, [:message, "method"])
+
+    body =
+      case method do
+        "claude/tool_use" ->
+          name = get_in(msg, [:message, "params", "name"]) || ""
+
+          if String.contains?(name, "comment") do
+            get_in(msg, [:message, "params", "input", "body"])
+          end
+
+        _ ->
+          nil
+      end
+
+    if is_binary(body) and String.contains?(body, "### Plan") do
+      case PlanBuilder.parse_workpad_plan(body) do
+        [] -> :ok
+        steps -> AgentSession.update_plan(issue_id, steps)
+      end
+    end
+  end
+
+  defp maybe_sync_workpad_plan(_issue_id, _message), do: :ok
+
+  defp maybe_finalize_agent_session(%Issue{id: issue_id}, _outcome)
+       when is_binary(issue_id) do
+    if AgentSession.active?(issue_id) do
+      AgentSession.stop(issue_id)
+    end
+  end
+
+  defp maybe_finalize_agent_session(_issue, _outcome), do: :ok
 end

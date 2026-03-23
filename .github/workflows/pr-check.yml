@@ -41,7 +41,7 @@ jobs:
         run: mix lint
 
       - name: Test
-        run: mix test
+        run: mix test --exclude codex_required
 
   dashboard:
     name: Dashboard

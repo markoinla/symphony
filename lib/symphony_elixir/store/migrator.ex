@@ -113,6 +113,9 @@ defmodule SymphonyElixir.Store.Migrator do
     )
     """)
 
+    maybe_add_column("sessions", "agent_session_id", "TEXT")
+    maybe_add_column("sessions", "dispatch_source", "TEXT DEFAULT 'orchestrator'")
+
     maybe_import_settings_file()
 
     Logger.info("SQLite auto-migrations complete")

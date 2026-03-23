@@ -9,7 +9,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   alias SymphonyElixir.{
     AgentRunner,
+    AgentSession,
     Config,
+    DashboardLinks,
     Settings,
     StatusDashboard,
     Store,
@@ -931,6 +933,8 @@ defmodule SymphonyElixir.Orchestrator do
     Settings.put_current_project(project)
 
     Workflow.with_workflow(workflow_name, fn ->
+      maybe_create_proactive_agent_session(issue)
+
       AgentRunner.run(
         issue,
         recipient,
@@ -941,6 +945,45 @@ defmodule SymphonyElixir.Orchestrator do
       )
     end)
   end
+
+  defp maybe_create_proactive_agent_session(%Issue{id: issue_id} = issue)
+       when is_binary(issue_id) do
+    if Config.settings!().linear_agent.enabled do
+      do_create_proactive_agent_session(issue)
+    end
+  rescue
+    e ->
+      Logger.warning("Error creating proactive agent session: #{Exception.message(e)}")
+  end
+
+  defp maybe_create_proactive_agent_session(_issue), do: :ok
+
+  defp do_create_proactive_agent_session(%Issue{id: issue_id} = issue) do
+    alias SymphonyElixir.Linear.AgentAPI
+
+    agent_opts = [issue_id: issue_id, dispatch_source: :orchestrator]
+
+    with {:ok, agent_session_id} <- AgentAPI.create_session_on_issue(issue_id),
+         {:ok, _pid} <- AgentSession.start_link([{:agent_session_id, agent_session_id} | agent_opts]) do
+      maybe_set_agent_external_urls(issue)
+    else
+      {:error, reason} ->
+        Logger.warning("Failed to create proactive agent session for #{issue_id}: #{inspect(reason)}")
+    end
+  end
+
+  defp maybe_set_agent_external_urls(%Issue{id: issue_id, identifier: identifier})
+       when is_binary(issue_id) and is_binary(identifier) do
+    url = DashboardLinks.session_issue_url(identifier)
+
+    AgentSession.set_external_urls(issue_id, [
+      %{label: "Symphony Dashboard", url: url}
+    ])
+  rescue
+    _ -> :ok
+  end
+
+  defp maybe_set_agent_external_urls(_issue), do: :ok
 
   defp resolve_project(nil) do
     case Store.list_projects() do
