@@ -23,20 +23,25 @@ defmodule SymphonyElixir.AgentRunner do
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
   def run(issue, engine_update_recipient \\ nil, opts \\ []) do
-    worker_hosts =
-      candidate_worker_hosts(Keyword.get(opts, :worker_host), Config.settings!().worker.ssh_hosts)
+    worker_hosts = candidate_worker_hosts(Keyword.get(opts, :worker_host), Config.settings!().worker.ssh_hosts)
 
     Logger.info("Starting agent run for #{issue_context(issue)} worker_hosts=#{inspect(worker_hosts_for_log(worker_hosts))}")
 
-    case run_on_worker_hosts(issue, engine_update_recipient, opts, worker_hosts) do
-      :ok ->
-        maybe_finalize_agent_session(issue, :completed)
-        :ok
+    try do
+      case run_on_worker_hosts(issue, engine_update_recipient, opts, worker_hosts) do
+        :ok ->
+          maybe_finalize_agent_session(issue, :completed)
+          :ok
 
-      {:error, reason} ->
+        {:error, reason} ->
+          maybe_finalize_agent_session(issue, :failed)
+          Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
+          raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
+      end
+    rescue
+      e ->
         maybe_finalize_agent_session(issue, :failed)
-        Logger.error("Agent run failed for #{issue_context(issue)}: #{inspect(reason)}")
-        raise RuntimeError, "Agent run failed for #{issue_context(issue)}: #{inspect(reason)}"
+        reraise e, __STACKTRACE__
     end
   end
 

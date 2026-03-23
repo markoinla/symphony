@@ -79,23 +79,11 @@ defmodule SymphonyElixir.Linear.AgentAPI do
         :failed -> "Agent session ended with errors."
       end
 
-    content = %{type: "response", body: body}
-
-    case agent_graphql(@create_activity_mutation, %{
-           input: %{
-             agentSessionId: agent_session_id,
-             content: content,
-             signal: "stop"
-           }
-         }) do
-      {:ok, response} ->
-        if get_in(response, ["data", "agentActivityCreate", "success"]) == true,
-          do: :ok,
-          else: {:error, :session_complete_failed}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
+    # Note: Linear's API restricts `signal: "stop"` to prompt-type activities,
+    # which cannot be created by OAuth apps. We send a final response activity
+    # instead, and Linear will auto-transition the session to "complete" after
+    # inactivity.
+    create_activity(agent_session_id, %{type: "response", body: body})
   end
 
   @spec update_session(String.t(), keyword()) :: :ok | {:error, term()}
@@ -141,6 +129,11 @@ defmodule SymphonyElixir.Linear.AgentAPI do
         endpoint = Config.settings!().tracker.endpoint
 
         case Req.post(endpoint, json: payload, headers: headers, receive_timeout: 30_000) do
+          {:ok, %{status: 200, body: %{"errors" => [_ | _] = errors} = body}} ->
+            messages = Enum.map_join(errors, "; ", &Map.get(&1, "message", "unknown"))
+            Logger.warning("Linear Agent API GraphQL errors: #{messages}")
+            {:ok, body}
+
           {:ok, %{status: 200, body: body}} ->
             {:ok, body}
 
