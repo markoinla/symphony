@@ -2,6 +2,8 @@ defmodule SymphonyElixir.Claude.AppServerTest do
   use SymphonyElixir.TestSupport
   alias SymphonyElixir.Claude.AppServer
 
+  @moduletag :codex_required
+
   describe "start_session/2" do
     test "returns session with workspace" do
       workspace =
