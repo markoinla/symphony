@@ -136,13 +136,8 @@ defmodule SymphonyElixir.Settings do
   end
 
   @spec default_workspace_root(String.t()) :: String.t()
-  def default_workspace_root(github_repo) when is_binary(github_repo) do
-    repo_name =
-      github_repo
-      |> String.split("/")
-      |> List.last()
-
-    Path.join("~/code", "#{repo_name}-workspaces")
+  def default_workspace_root(_github_repo) do
+    Path.join(System.tmp_dir!(), "symphony_workspaces")
   end
 
   # --- Private ---
