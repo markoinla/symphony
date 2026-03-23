@@ -4,6 +4,7 @@ defmodule SymphonyElixir.Config do
   """
 
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Linear
   alias SymphonyElixir.Workflow
 
   @default_prompt_template """
@@ -217,7 +218,7 @@ defmodule SymphonyElixir.Config do
   end
 
   defp has_oauth_token? do
-    case SymphonyElixir.Linear.OAuth.current_access_token() do
+    case Linear.OAuth.current_access_token() do
       token when is_binary(token) and token != "" -> true
       _ -> false
     end
