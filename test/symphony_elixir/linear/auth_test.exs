@@ -17,7 +17,7 @@ defmodule SymphonyElixir.Linear.AuthTest do
       end
     end
 
-    test "returns Bearer prefix for API key" do
+    test "returns raw API key without Bearer prefix" do
       old_oauth = System.get_env("LINEAR_OAUTH_TOKEN")
 
       try do
@@ -25,7 +25,7 @@ defmodule SymphonyElixir.Linear.AuthTest do
 
         # The test setup writes a WORKFLOW.md with tracker api_key: "token"
         assert {:ok, {"Authorization", value}} = Auth.resolve_auth_header()
-        assert value == "Bearer token"
+        assert value == "token"
       after
         restore_env("LINEAR_OAUTH_TOKEN", old_oauth)
       end
