@@ -75,7 +75,9 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
       received_at = System.monotonic_time()
       WebhookDispatcher.dispatch_created(payload, received_at: received_at)
 
-      assert_receive {:telemetry_event, [:symphony, :webhook, :first_activity_latency], %{duration: duration}, %{agent_session_id: "agent-sess-telemetry"}}
+      event_name = [:symphony, :webhook, :first_activity_latency]
+
+      assert_receive {:telemetry_event, ^event_name, %{duration: duration}, %{agent_session_id: "agent-sess-telemetry"}}
 
       assert is_integer(duration)
       assert duration >= 0
