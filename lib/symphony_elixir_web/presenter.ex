@@ -416,7 +416,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
   @spec history_payload(keyword()) :: map()
   def history_payload(opts \\ []) do
-    sessions = Store.list_sessions(Keyword.take(opts, [:limit, :offset, :issue_identifier, :status, :project_id]))
+    sessions = Store.list_sessions(Keyword.take(opts, [:limit, :offset, :issue_identifier, :status, :project_id, :workflow_name]))
 
     %{
       sessions: Enum.map(sessions, &session_summary_payload/1)
@@ -597,6 +597,7 @@ defmodule SymphonyElixirWeb.Presenter do
       total_tokens: live_token(running, :total_tokens),
       worker_host: Map.get(running, :worker_host),
       error: nil,
+      workflow_name: Map.get(running, :workflow_name),
       live: true,
       messages: live_session_messages(issue_id, current_session_id)
     }
@@ -695,7 +696,8 @@ defmodule SymphonyElixirWeb.Presenter do
       output_tokens: session.output_tokens,
       total_tokens: session.total_tokens,
       worker_host: session.worker_host,
-      error: session.error
+      error: session.error,
+      workflow_name: session.workflow_name
     }
   end
 
