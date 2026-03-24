@@ -25,6 +25,7 @@ export type Project = {
   linear_filter_by: string | null
   linear_label_name: string | null
   github_repo: string | null
+  github_branch: string | null
   workspace_root: string | null
   env_vars: string | null
   created_at: string | null
@@ -453,6 +454,7 @@ export function emptyProject(): ProjectBody {
     linear_filter_by: 'project',
     linear_label_name: null,
     github_repo: null,
+    github_branch: null,
     workspace_root: null,
     env_vars: null,
   }

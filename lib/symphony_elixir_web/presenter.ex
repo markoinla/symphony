@@ -673,6 +673,7 @@ defmodule SymphonyElixirWeb.Presenter do
       linear_filter_by: project.linear_filter_by,
       linear_label_name: project.linear_label_name,
       github_repo: project.github_repo,
+      github_branch: project.github_branch,
       workspace_root: project.workspace_root,
       env_vars: project.env_vars,
       created_at: iso8601(project.created_at),

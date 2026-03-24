@@ -98,6 +98,7 @@ defmodule SymphonyElixirWeb.ProjectApiController do
       linear_filter_by: normalize_filter_by(params["linear_filter_by"]),
       linear_label_name: params["linear_label_name"] |> trimmed() |> blank_to_nil(),
       github_repo: params["github_repo"] |> trimmed() |> blank_to_nil(),
+      github_branch: params["github_branch"] |> trimmed() |> blank_to_nil(),
       workspace_root: params["workspace_root"] |> trimmed() |> blank_to_nil(),
       env_vars: Map.get(params, "env_vars", "") |> blank_to_nil()
     }

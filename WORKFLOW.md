@@ -18,7 +18,11 @@ polling:
 hooks:
   timeout_ms: 300000
   after_create: |
-    git clone --depth 1 "https://github.com/$GITHUB_REPO" .
+    if [ -n "$GITHUB_BRANCH" ]; then
+      git clone --depth 1 --branch "$GITHUB_BRANCH" "https://github.com/$GITHUB_REPO" .
+    else
+      git clone --depth 1 "https://github.com/$GITHUB_REPO" .
+    fi
   before_remove: |
     echo "Cleaning up workspace"
 engine: claude
