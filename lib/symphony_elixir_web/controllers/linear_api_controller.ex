@@ -61,8 +61,20 @@ defmodule SymphonyElixirWeb.LinearApiController do
     end
   end
 
-  defp project_filter(""), do: %{state: %{eq: "started"}}
-  defp project_filter(query), do: %{name: %{containsIgnoreCase: query}, state: %{in: ["started", "planned"]}}
+  @doc false
+  @spec project_filter(String.t()) :: map()
+  def project_filter(""), do: %{state: %{eq: "started"}}
+
+  def project_filter(query) do
+    words = query |> String.split(~r/\s+/, trim: true)
+
+    name_filters = Enum.map(words, fn word -> %{name: %{containsIgnoreCase: word}} end)
+
+    case name_filters do
+      [single] -> Map.merge(single, %{state: %{in: ["started", "planned"]}})
+      multiple -> %{and: multiple, state: %{in: ["started", "planned"]}}
+    end
+  end
 
   defp format_project(node) do
     team = List.first(get_in(node, ["teams", "nodes"]) || [])
