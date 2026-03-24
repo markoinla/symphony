@@ -1,5 +1,5 @@
 defmodule SymphonyElixir.Store.SessionDebugTest do
-  use SymphonyElixir.TestSupport
+  use SymphonyElixir.DataCase, async: true
 
   alias SymphonyElixir.Store
 

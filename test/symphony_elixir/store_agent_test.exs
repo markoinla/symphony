@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.StoreAgentTest do
-  use SymphonyElixir.TestSupport
+  use SymphonyElixir.DataCase, async: true
 
+  import Ecto.Query
   alias SymphonyElixir.Store
 
   test "list_agents/0 returns agents ordered by name" do
@@ -70,9 +71,14 @@ defmodule SymphonyElixir.StoreAgentTest do
 
   test "update_agent/2 sets updated_at timestamp" do
     {:ok, original} = Store.upsert_agent(%{name: "TIMESTAMP_AGENT"})
-    Process.sleep(1_000)
+    past = DateTime.add(original.updated_at, -2, :second)
+
+    SymphonyElixir.Repo.update_all(
+      from(a in "agents", where: a.name == "TIMESTAMP_AGENT"),
+      set: [updated_at: past]
+    )
 
     {:ok, updated} = Store.update_agent("TIMESTAMP_AGENT", %{enabled: false})
-    assert DateTime.compare(updated.updated_at, original.updated_at) == :gt
+    assert DateTime.compare(updated.updated_at, past) == :gt
   end
 end

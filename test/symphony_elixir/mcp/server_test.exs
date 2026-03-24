@@ -1,5 +1,6 @@
 defmodule SymphonyElixir.MCP.ServerTest do
-  use SymphonyElixir.TestSupport
+  use SymphonyElixir.DataCase, async: true
+
   alias SymphonyElixir.MCP.Server
 
   defp call(message, opts \\ []) do

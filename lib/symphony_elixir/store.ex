@@ -78,6 +78,15 @@ defmodule SymphonyElixir.Store do
     Repo.get_by(Project, name: name)
   end
 
+  @spec find_project_by_slug_id(String.t()) :: Project.t() | nil
+  def find_project_by_slug_id(slug_id) when is_binary(slug_id) do
+    list_projects()
+    |> Enum.find(fn project ->
+      project.linear_project_slug &&
+        String.ends_with?(project.linear_project_slug, slug_id)
+    end)
+  end
+
   @spec create_project(map()) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
   def create_project(attrs) do
     now =
@@ -264,6 +273,22 @@ defmodule SymphonyElixir.Store do
       nil -> {:error, :not_found}
       session -> session |> Ecto.Changeset.change(stderr: stderr) |> Repo.update()
     end
+  end
+
+  @spec update_session_live(String.t(), map()) :: :ok
+  def update_session_live(engine_session_id, attrs)
+      when is_binary(engine_session_id) and is_map(attrs) do
+    session =
+      Session
+      |> where([s], s.session_id == ^engine_session_id and s.status == "running")
+      |> limit(1)
+      |> Repo.one()
+
+    if session do
+      session |> Session.changeset(attrs) |> Repo.update()
+    end
+
+    :ok
   end
 
   @spec complete_session_by_engine_session_id(String.t(), map()) ::

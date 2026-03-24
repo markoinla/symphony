@@ -1,5 +1,6 @@
 defmodule SymphonyElixir.Claude.EventTranslatorTest do
-  use SymphonyElixir.TestSupport
+  use SymphonyElixir.DataCase, async: true
+
   alias SymphonyElixir.Claude.EventTranslator
 
   describe "system init" do

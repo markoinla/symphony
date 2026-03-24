@@ -1,5 +1,5 @@
 defmodule SymphonyElixir.Codex.DynamicToolTest do
-  use SymphonyElixir.TestSupport
+  use SymphonyElixir.DataCase, async: true
 
   alias SymphonyElixir.Codex.DynamicTool
 

@@ -298,6 +298,9 @@ defmodule SymphonyElixir.Linear.Client do
             }
           }
         }
+        project {
+          slugId
+        }
       }
     }
   }
@@ -877,6 +880,7 @@ defmodule SymphonyElixir.Linear.Client do
       labels: extract_labels(issue),
       comments: comments,
       assigned_to_worker: assigned_to_worker?(assignee, assignee_filter),
+      project_slug_id: get_in(issue, ["project", "slugId"]),
       created_at: parse_datetime(issue["createdAt"]),
       updated_at: parse_datetime(issue["updatedAt"])
     }

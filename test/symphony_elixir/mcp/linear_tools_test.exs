@@ -1,5 +1,6 @@
 defmodule SymphonyElixir.MCP.LinearToolsTest do
-  use SymphonyElixir.TestSupport
+  use SymphonyElixir.DataCase, async: true
+
   alias SymphonyElixir.MCP.LinearTools
 
   defp mock_opts(response_body) do

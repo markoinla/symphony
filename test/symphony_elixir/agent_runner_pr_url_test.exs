@@ -1,5 +1,5 @@
 defmodule SymphonyElixir.AgentRunnerPrUrlTest do
-  use SymphonyElixir.TestSupport
+  use SymphonyElixir.DataCase, async: true
 
   alias SymphonyElixir.AgentRunner
 

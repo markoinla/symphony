@@ -177,6 +177,16 @@ defmodule SymphonyElixir.ExtensionsTest do
     write_workflow_file!(manual_path, prompt: "Manual workflow prompt")
     Workflow.set_workflow_file_path(manual_path)
 
+    # Use a short poll interval so we don't wait 1s per cycle in tests
+    previous_interval = Application.get_env(:symphony_elixir, :workflow_store_poll_interval_ms)
+    Application.put_env(:symphony_elixir, :workflow_store_poll_interval_ms, 10)
+
+    on_exit(fn ->
+      if previous_interval,
+        do: Application.put_env(:symphony_elixir, :workflow_store_poll_interval_ms, previous_interval),
+        else: Application.delete_env(:symphony_elixir, :workflow_store_poll_interval_ms)
+    end)
+
     assert {:ok, manual_pid} = WorkflowStore.start_link()
     assert Process.alive?(manual_pid)
 
@@ -185,18 +195,18 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert {:noreply, returned_state} = WorkflowStore.handle_info(:poll, state)
     assert returned_state.workflow.prompt == "Manual workflow prompt"
     refute returned_state.stamp == nil
-    assert_receive :poll, 1_100
+    assert_receive :poll, 100
 
     Workflow.set_workflow_file_path(missing_path)
     assert {:noreply, path_error_state} = WorkflowStore.handle_info(:poll, returned_state)
     assert path_error_state.workflow.prompt == "Manual workflow prompt"
-    assert_receive :poll, 1_100
+    assert_receive :poll, 100
 
     Workflow.set_workflow_file_path(manual_path)
     File.rm!(manual_path)
     assert {:noreply, removed_state} = WorkflowStore.handle_info(:poll, path_error_state)
     assert removed_state.workflow.prompt == "Manual workflow prompt"
-    assert_receive :poll, 1_100
+    assert_receive :poll, 100
 
     Process.exit(manual_pid, :normal)
     restart_result = Supervisor.restart_child(SymphonyElixir.Supervisor, WorkflowStore)

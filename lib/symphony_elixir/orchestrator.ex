@@ -316,6 +316,11 @@ defmodule SymphonyElixir.Orchestrator do
           |> maybe_put_runtime_value(:workspace_path, runtime_info[:workspace_path])
           |> maybe_put_runtime_value(:stderr_file, runtime_info[:stderr_file])
 
+        sync_session_to_db(updated_running_entry, %{
+          worker_host: runtime_info[:worker_host],
+          workspace_path: runtime_info[:workspace_path]
+        })
+
         notify_dashboard()
         {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
     end
@@ -364,7 +369,13 @@ defmodule SymphonyElixir.Orchestrator do
 
       running_entry ->
         existing = Map.get(running_entry, :hook_results, [])
-        updated_running_entry = Map.put(running_entry, :hook_results, existing ++ results)
+        all_results = existing ++ results
+        updated_running_entry = Map.put(running_entry, :hook_results, all_results)
+
+        sync_session_to_db(updated_running_entry, %{
+          hook_results: hook_results_to_map(all_results)
+        })
+
         {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
     end
   end
@@ -994,8 +1005,10 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp run_issue_task(workflow_name, issue, recipient, attempt, worker_host, project_id, project, comment_watch_state)
+  defp run_issue_task(workflow_name, issue, recipient, attempt, worker_host, fallback_project_id, _project, comment_watch_state)
        when is_binary(workflow_name) do
+    project = resolve_project_for_issue(issue, fallback_project_id)
+    project_id = if project, do: project.id, else: fallback_project_id
     Settings.put_current_project(project)
 
     Workflow.with_workflow(workflow_name, fn ->
@@ -1063,6 +1076,25 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp resolve_project(_), do: nil
+
+  # Resolve the correct project for an issue by matching its Linear project slug,
+  # falling back to the orchestrator's configured project.
+  defp resolve_project_for_issue(%Issue{project_slug_id: slug_id}, fallback_project_id)
+       when is_binary(slug_id) and slug_id != "" do
+    case Store.find_project_by_slug_id(slug_id) do
+      %Project{} = project ->
+        Logger.info("Resolved project=#{project.name} for issue slug_id=#{slug_id}")
+        project
+
+      nil ->
+        Logger.warning("No project found for slug_id=#{slug_id}, falling back to project_id=#{inspect(fallback_project_id)}")
+        resolve_project(fallback_project_id)
+    end
+  end
+
+  defp resolve_project_for_issue(_issue, fallback_project_id) do
+    resolve_project(fallback_project_id)
+  end
 
   defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states)
        when is_binary(issue_id) and is_function(issue_fetcher, 1) do
