@@ -1,7 +1,12 @@
 import { useEffect, useEffectEvent } from 'react'
 
-export function useDashboardStream(onStateChanged: () => void, enabled = true) {
+export function useDashboardStream(
+  onStateChanged: () => void,
+  enabled = true,
+  onAgentsChanged?: () => void,
+) {
   const handleStateChanged = useEffectEvent(onStateChanged)
+  const handleAgentsChanged = useEffectEvent(onAgentsChanged ?? (() => {}))
 
   useEffect(() => {
     if (!enabled) {
@@ -10,14 +15,20 @@ export function useDashboardStream(onStateChanged: () => void, enabled = true) {
 
     const stream = new EventSource('/api/v1/stream/dashboard')
 
-    const listener = () => {
+    const stateListener = () => {
       handleStateChanged()
     }
 
-    stream.addEventListener('state_changed', listener)
+    const agentsListener = () => {
+      handleAgentsChanged()
+    }
+
+    stream.addEventListener('state_changed', stateListener)
+    stream.addEventListener('agents_changed', agentsListener)
 
     return () => {
-      stream.removeEventListener('state_changed', listener)
+      stream.removeEventListener('state_changed', stateListener)
+      stream.removeEventListener('agents_changed', agentsListener)
       stream.close()
     }
   }, [enabled])

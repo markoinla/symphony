@@ -1,8 +1,10 @@
 import { useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import * as Collapsible from '@radix-ui/react-collapsible'
 import { Bot, ChevronRight, Plus } from 'lucide-react'
 
 import { cn } from '../lib/utils'
+import { useDashboardStream } from '../lib/streams'
 import {
   Badge,
   Button,
@@ -205,8 +207,17 @@ function AgentCard({
 // ---------------------------------------------------------------------------
 
 export function AgentsView() {
+  const queryClient = useQueryClient()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [selectedAgent, setSelectedAgent] = useState<MockAgent | null>(null)
+
+  useDashboardStream(
+    () => {},
+    true,
+    () => {
+      void queryClient.invalidateQueries({ queryKey: ['agents'] })
+    },
+  )
 
   function handleView(agent: MockAgent) {
     setSelectedAgent(agent)

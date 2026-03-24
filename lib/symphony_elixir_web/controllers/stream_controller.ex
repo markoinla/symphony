@@ -12,8 +12,10 @@ defmodule SymphonyElixirWeb.StreamController do
 
   @spec dashboard(Conn.t(), map()) :: Conn.t()
   def dashboard(conn, _params) do
-    case ObservabilityPubSub.subscribe() do
-      :ok -> conn |> prepare_sse() |> stream_dashboard_events()
+    with :ok <- ObservabilityPubSub.subscribe(),
+         :ok <- ObservabilityPubSub.subscribe_agents() do
+      conn |> prepare_sse() |> stream_dashboard_events()
+    else
       {:error, _reason} -> send_resp(conn, 503, "pubsub unavailable")
     end
   end
@@ -42,6 +44,9 @@ defmodule SymphonyElixirWeb.StreamController do
           {:ok, updated_conn} -> stream_dashboard_events(updated_conn)
           {:error, _reason} -> conn
         end
+
+      :agents_changed ->
+        stream_event(conn, "agents_changed", %{}, &stream_dashboard_events/1)
     after
       @heartbeat_ms ->
         heartbeat(conn, &stream_dashboard_events/1)

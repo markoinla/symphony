@@ -8,6 +8,7 @@ defmodule SymphonyElixirWeb.ObservabilityPubSub do
   @update_message :observability_updated
   @settings_topic "config:settings"
   @projects_topic "config:projects"
+  @agents_topic "config:agents"
 
   @spec subscribe() :: :ok | {:error, term()}
   def subscribe do
@@ -83,6 +84,22 @@ defmodule SymphonyElixirWeb.ObservabilityPubSub do
     case Process.whereis(@pubsub) do
       pid when is_pid(pid) ->
         Phoenix.PubSub.broadcast(@pubsub, @projects_topic, :projects_changed)
+
+      _ ->
+        :ok
+    end
+  end
+
+  @spec subscribe_agents() :: :ok | {:error, term()}
+  def subscribe_agents do
+    Phoenix.PubSub.subscribe(@pubsub, @agents_topic)
+  end
+
+  @spec broadcast_agents_changed() :: :ok
+  def broadcast_agents_changed do
+    case Process.whereis(@pubsub) do
+      pid when is_pid(pid) ->
+        Phoenix.PubSub.broadcast(@pubsub, @agents_topic, :agents_changed)
 
       _ ->
         :ok
