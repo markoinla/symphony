@@ -155,7 +155,7 @@ export function AnalyticsView() {
         <SummaryCard label="Output Tokens" value={formatNumber(summary.total_output_tokens)} />
       </div>
 
-      {daily.length === 0 ? (
+      {daily.length === 0 && summary.total_cost_cents === 0 && summary.total_sessions === 0 ? (
         <EmptyState
           icon={
             <svg className="h-5 w-5 text-th-text-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
@@ -184,7 +184,7 @@ export function AnalyticsView() {
                     stroke="var(--color-th-text-4, #9ca3af)"
                   />
                   <YAxis
-                    tickFormatter={(v: number) => `$${v.toFixed(0)}`}
+                    tickFormatter={(v: number) => `$${v.toFixed(2)}`}
                     tick={{ fontSize: 12 }}
                     stroke="var(--color-th-text-4, #9ca3af)"
                     width={60}
