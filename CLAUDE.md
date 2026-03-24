@@ -54,11 +54,34 @@ Located in `dashboard/`. Built with Vite, served as static assets from Phoenix i
 
 REST JSON API under `/api/v1/*`:
 - `GET /api/v1/state` — Orchestrator state snapshot
-- `GET /api/v1/sessions` — Session history
+- `GET /api/v1/sessions` — Session history (filterable by `workflow_name`, `issue_identifier`, `status`, `project_id`)
+- `GET /api/v1/sessions/:id/debug` — Full session debug payload (config, stderr, hooks, messages, summary)
 - `GET /api/v1/stream/dashboard` — SSE dashboard updates
 - `GET /api/v1/stream/session/:issue_id` — SSE session timeline
 - `GET/POST /api/v1/projects` — Project CRUD
 - `GET/PUT/DELETE /api/v1/settings/:key` — Settings management
+
+## Debugging Sessions
+
+Use the debug endpoint to get a complete picture of any session:
+
+```bash
+# Full debug context for a session (metadata, config, stderr, hook results, messages)
+curl localhost:4000/api/v1/sessions/42/debug
+
+# Filter sessions by workflow or issue
+curl localhost:4000/api/v1/sessions?workflow_name=EPIC_SPLITTER
+curl localhost:4000/api/v1/sessions?issue_identifier=SYM-162
+```
+
+**What to check first on a failed session:**
+1. `stderr` — Codex subprocess errors (port crashes, startup failures)
+2. `hook_results` — workspace hook failures that prevented the agent from starting
+3. `config_snapshot` — whether model/max_turns/permission_mode were correct at session start
+4. `error` — the session-level error message
+5. `summary.error_message_count` — how many error messages occurred during the run
+
+Logger metadata includes `workflow_name`, `issue_id`, `issue_identifier`, and `session_id` for log correlation.
 
 ## Code Conventions
 
@@ -68,6 +91,16 @@ REST JSON API under `/api/v1/*`:
 - Keep the implementation aligned with `docs/SPEC.md` — must not conflict, update spec if behavior changes.
 - Tests use `SymphonyElixir.TestSupport` (via `use`). Test helpers live in `test/support/`.
 - PR bodies must follow `.github/pull_request_template.md`. Validate with `mix pr_body.check --file <path>`.
+
+## Linear
+
+When creating issues, use these defaults unless instructed otherwise:
+
+- **Team:** Symphony (key: `SYM`, ID: `e6ff2862-1971-4b10-88a8-4aa16137fff0`)
+- **Project:** Symphony Agent Workflow (ID: `1d28e4e4-1505-40f0-8369-69b7ec05435d`)
+- **Default status:** Backlog
+
+Available statuses: Backlog, Staged, Todo, In Progress, Merging, Rework, Human Review, Done, Canceled, Duplicate.
 
 ## Docs Update Policy
 
