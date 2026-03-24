@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Pricing do
   require Logger
 
   @rates %{
+    "claude-opus" => {5_00, 25_00},
     "claude-sonnet" => {3_00, 15_00},
     "claude-haiku" => {0_80, 4_00}
   }

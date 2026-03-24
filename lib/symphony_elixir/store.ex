@@ -190,10 +190,14 @@ defmodule SymphonyElixir.Store do
 
   # ── Issue Claims ────────────────────────────────────────────────
 
-  @spec claim_issue(String.t(), String.t()) :: {:ok, :claimed} | {:error, :already_claimed}
+  @spec claim_issue(String.t(), String.t()) ::
+          {:ok, :claimed} | {:ok, :already_owned} | {:error, :already_claimed}
   def claim_issue(issue_id, orchestrator_key)
       when is_binary(issue_id) and is_binary(orchestrator_key) do
     case Repo.get(IssueClaim, issue_id) do
+      %IssueClaim{orchestrator_key: ^orchestrator_key} ->
+        {:ok, :already_owned}
+
       %IssueClaim{} ->
         {:error, :already_claimed}
 
@@ -395,6 +399,7 @@ defmodule SymphonyElixir.Store do
     |> maybe_filter_workflow_name(workflow_name)
     |> limit(^limit)
     |> offset(^offset)
+    |> preload(:project)
     |> Repo.all()
   end
 

@@ -749,6 +749,8 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp session_summary_payload(session) do
+    project = if Ecto.assoc_loaded?(session.project), do: session.project, else: nil
+
     %{
       id: session.id,
       issue_identifier: session.issue_identifier,
@@ -764,7 +766,10 @@ defmodule SymphonyElixirWeb.Presenter do
       worker_host: session.worker_host,
       error: session.error,
       workflow_name: session.workflow_name,
-      error_category: session.error_category
+      error_category: session.error_category,
+      github_branch: session.github_branch,
+      github_repo: if(project, do: project.github_repo),
+      project_name: if(project, do: project.name)
     }
   end
 

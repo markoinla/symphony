@@ -663,6 +663,17 @@ defmodule SymphonyElixir.CoreTest do
     :ok = SymphonyElixir.Store.release_issue_claim(issue_id)
   end
 
+  test "claim_issue returns already_owned when same orchestrator re-claims" do
+    issue_id = "issue-self-reclaim"
+
+    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue(issue_id, "WORKFLOW:1")
+    assert {:ok, :already_owned} = SymphonyElixir.Store.claim_issue(issue_id, "WORKFLOW:1")
+    assert {:error, :already_claimed} = SymphonyElixir.Store.claim_issue(issue_id, "TRIAGE:1")
+
+    # Cleanup
+    :ok = SymphonyElixir.Store.release_issue_claim(issue_id)
+  end
+
   test "clear_all_issue_claims removes all claims" do
     assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue("issue-clear-1", "WORKFLOW:1")
     assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue("issue-clear-2", "TRIAGE:1")

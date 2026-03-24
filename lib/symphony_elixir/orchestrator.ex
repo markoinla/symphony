@@ -911,11 +911,11 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil, comment_watch_state \\ nil) do
     case Store.claim_issue(issue.id, orchestrator_key(state)) do
-      {:ok, :claimed} ->
+      {:ok, status} when status in [:claimed, :already_owned] ->
         dispatch_claimed_issue(state, issue, attempt, preferred_worker_host, comment_watch_state)
 
       {:error, :already_claimed} ->
-        Logger.info("Skipping dispatch; issue already claimed by another orchestrator: #{issue_context(issue)}")
+        Logger.info("Skipping dispatch; issue claimed by another orchestrator: #{issue_context(issue)}")
         state
     end
   end
