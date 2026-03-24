@@ -89,6 +89,7 @@ export type SessionsPayload = {
     total_tokens: number
     worker_host: string | null
     error: string | null
+    error_category: string | null
     workflow_name: string | null
   }>
 }
@@ -507,6 +508,16 @@ export type SessionStats = {
   failure_counts: FailureCountBucket[]
   dead_letters: DeadLetterSession[]
   worker_health: WorkerHostStats[]
+}
+
+export async function getSessionStats(
+  range: SessionStatsRange,
+  filters?: { project_id?: string; workflow_name?: string },
+): Promise<SessionStats> {
+  const params = new URLSearchParams({ range, ...filters })
+  const res = await fetch(`/api/v1/sessions/stats?${params}`)
+  if (!res.ok) throw new Error(`Stats fetch failed: ${res.status}`)
+  return res.json()
 }
 
 // --- Cost Analytics ---
