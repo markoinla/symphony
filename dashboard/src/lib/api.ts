@@ -323,6 +323,13 @@ export function getAgents() {
   return requestJson<{ agents: AgentWorkflow[] }>('/api/v1/agents')
 }
 
+export function updateAgent(name: string, attrs: { enabled: boolean }) {
+  return requestJson<{ agent: AgentWorkflow }>(`/api/v1/agents/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(attrs),
+  })
+}
+
 export type OAuthStatus = {
   status: 'connected' | 'expired' | 'disconnected'
   expires_at: string | null

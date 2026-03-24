@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import * as Collapsible from '@radix-ui/react-collapsible'
 import { Bot, ChevronRight } from 'lucide-react'
 
 import { cn } from '../lib/utils'
-import { type AgentWorkflow, getAgents } from '../lib/api'
+import { type AgentWorkflow, getAgents, updateAgent } from '../lib/api'
 import {
   Badge,
   Button,
@@ -13,6 +13,7 @@ import {
   EmptyState,
   Field,
   Input,
+  Switch,
 } from '../components/ui'
 
 // ---------------------------------------------------------------------------
@@ -88,9 +89,13 @@ function AgentDetailDialog({
 function AgentCard({
   agent,
   onView,
+  onToggle,
+  isToggling,
 }: {
   agent: AgentWorkflow
   onView: (agent: AgentWorkflow) => void
+  onToggle: (agent: AgentWorkflow) => void
+  isToggling: boolean
 }) {
   return (
     <div className="session-card rounded-xl border border-th-border bg-th-surface p-4 transition-shadow hover:shadow-sm sm:p-5">
@@ -120,15 +125,22 @@ function AgentCard({
           </div>
         </div>
 
-        <Button
-          className="shrink-0"
-          onClick={() => onView(agent)}
-          size="sm"
-          type="button"
-          variant="ghost"
-        >
-          View
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          <Switch
+            checked={agent.enabled}
+            disabled={isToggling}
+            onCheckedChange={() => onToggle(agent)}
+          />
+          <Button
+            className="shrink-0"
+            onClick={() => onView(agent)}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            View
+          </Button>
+        </div>
       </div>
     </div>
   )
@@ -141,11 +153,17 @@ function AgentCard({
 export function AgentsView() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [selectedAgent, setSelectedAgent] = useState<AgentWorkflow | null>(null)
+  const queryClient = useQueryClient()
 
   const { data, isLoading } = useQuery({
     queryKey: ['agents'],
     queryFn: getAgents,
     refetchInterval: 30_000,
+  })
+
+  const toggleMutation = useMutation({
+    mutationFn: (agent: AgentWorkflow) => updateAgent(agent.name, { enabled: !agent.enabled }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['agents'] }),
   })
 
   const agents = data?.agents ?? []
@@ -176,7 +194,13 @@ export function AgentsView() {
 
       <div className="grid gap-3">
         {agents.map((agent) => (
-          <AgentCard key={agent.name} agent={agent} onView={handleView} />
+          <AgentCard
+            key={agent.name}
+            agent={agent}
+            onView={handleView}
+            onToggle={(a) => toggleMutation.mutate(a)}
+            isToggling={toggleMutation.isPending}
+          />
         ))}
       </div>
 
