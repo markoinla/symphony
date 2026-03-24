@@ -178,6 +178,7 @@ defmodule SymphonyElixir.SessionLog do
         |> Map.put(:status, to_string(status))
         |> Map.put(:ended_at, DateTime.utc_now())
         |> maybe_put_estimated_cost()
+        |> maybe_put_error_category(status)
 
       case Store.complete_session(state.db_session_id, completion_attrs) do
         {:ok, _session} ->
@@ -785,6 +786,18 @@ defmodule SymphonyElixir.SessionLog do
       end
 
     Map.put(attrs, :estimated_cost_cents, cost)
+  end
+
+  # ── Error category ────────────────────────────────────────────────────
+
+  defp maybe_put_error_category(%{error_category: _} = attrs, _status), do: attrs
+
+  defp maybe_put_error_category(attrs, :failed) do
+    Map.put(attrs, :error_category, "infra")
+  end
+
+  defp maybe_put_error_category(attrs, _status) do
+    Map.put(attrs, :error_category, nil)
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────
