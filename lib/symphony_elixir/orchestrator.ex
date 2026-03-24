@@ -345,7 +345,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> apply_engine_token_delta(token_delta)
           |> apply_engine_rate_limits(update)
 
-        maybe_sync_engine_stats_to_db(updated_running_entry, token_delta)
+        updated_running_entry = maybe_sync_engine_stats_to_db(updated_running_entry, token_delta)
 
         notify_dashboard()
         {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
@@ -1873,6 +1873,10 @@ defmodule SymphonyElixir.Orchestrator do
         total_tokens: Map.get(running_entry, :engine_total_tokens, 0),
         turn_count: turn_count
       })
+
+      Map.put(running_entry, :synced_turn_count, turn_count)
+    else
+      running_entry
     end
   end
 
