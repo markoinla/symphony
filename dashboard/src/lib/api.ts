@@ -521,9 +521,7 @@ export async function getSessionStats(
   filters?: { project_id?: string; workflow_name?: string },
 ): Promise<SessionStats> {
   const params = new URLSearchParams({ range, ...filters })
-  const res = await fetch(`/api/v1/sessions/stats?${params}`)
-  if (!res.ok) throw new Error(`Stats fetch failed: ${res.status}`)
-  return res.json()
+  return requestJson<SessionStats>(`/api/v1/sessions/stats?${params}`)
 }
 
 // --- Cost Analytics ---
