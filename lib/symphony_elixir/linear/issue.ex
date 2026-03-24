@@ -23,6 +23,7 @@ defmodule SymphonyElixir.Linear.Issue do
     labels: [],
     comments: [],
     assigned_to_worker: true,
+    project_slug_id: nil,
     created_at: nil,
     updated_at: nil
   ]
@@ -54,6 +55,7 @@ defmodule SymphonyElixir.Linear.Issue do
           labels: [String.t()],
           comments: [comment()],
           assigned_to_worker: boolean(),
+          project_slug_id: String.t() | nil,
           created_at: DateTime.t() | nil,
           updated_at: DateTime.t() | nil
         }

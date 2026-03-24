@@ -1,5 +1,6 @@
 defmodule SymphonyElixir.MCP.ConfigWriterTest do
-  use SymphonyElixir.TestSupport
+  use SymphonyElixir.DataCase, async: true
+
   alias SymphonyElixir.MCP.ConfigWriter
 
   test "build_config returns valid MCP config structure" do

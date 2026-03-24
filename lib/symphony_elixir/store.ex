@@ -78,6 +78,15 @@ defmodule SymphonyElixir.Store do
     Repo.get_by(Project, name: name)
   end
 
+  @spec find_project_by_slug_id(String.t()) :: Project.t() | nil
+  def find_project_by_slug_id(slug_id) when is_binary(slug_id) do
+    list_projects()
+    |> Enum.find(fn project ->
+      project.linear_project_slug &&
+        String.ends_with?(project.linear_project_slug, slug_id)
+    end)
+  end
+
   @spec create_project(map()) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
   def create_project(attrs) do
     now =
@@ -266,6 +275,36 @@ defmodule SymphonyElixir.Store do
     end
   end
 
+  @spec update_session_live(String.t(), map()) :: :ok
+  def update_session_live(engine_session_id, attrs)
+      when is_binary(engine_session_id) and is_map(attrs) do
+    session =
+      Session
+      |> where([s], s.session_id == ^engine_session_id and s.status == "running")
+      |> limit(1)
+      |> Repo.one()
+
+    if session do
+      session |> Session.changeset(attrs) |> Repo.update()
+    end
+
+    :ok
+  end
+
+  @spec update_session_live_by_id(integer(), map()) :: :ok
+  def update_session_live_by_id(db_session_id, attrs)
+      when is_integer(db_session_id) and is_map(attrs) do
+    case Repo.get(Session, db_session_id) do
+      %Session{status: "running"} = session ->
+        session |> Session.changeset(attrs) |> Repo.update()
+
+      _ ->
+        :ok
+    end
+
+    :ok
+  end
+
   @spec complete_session_by_engine_session_id(String.t(), map()) ::
           {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t() | :not_found}
   def complete_session_by_engine_session_id(session_id, attrs) do
@@ -424,12 +463,22 @@ defmodule SymphonyElixir.Store do
   @spec finalize_stale_sessions(keyword()) :: {integer(), nil}
   def finalize_stale_sessions(opts \\ []) do
     project_id = Keyword.get(opts, :project_id)
+    exclude_issue_ids = Keyword.get(opts, :exclude_issue_ids, [])
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    Session
-    |> where([s], s.status == "running")
-    |> maybe_filter_project_id(project_id)
-    |> Repo.update_all(
+    query =
+      Session
+      |> where([s], s.status == "running")
+      |> maybe_filter_project_id(project_id)
+
+    query =
+      if exclude_issue_ids != [] do
+        where(query, [s], s.issue_id not in ^exclude_issue_ids)
+      else
+        query
+      end
+
+    Repo.update_all(query,
       set: [
         status: "cancelled",
         ended_at: now,

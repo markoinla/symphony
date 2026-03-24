@@ -130,7 +130,8 @@ defmodule SymphonyElixir.WorkflowStore do
   end
 
   defp schedule_poll do
-    Process.send_after(self(), :poll, @poll_interval_ms)
+    interval = Application.get_env(:symphony_elixir, :workflow_store_poll_interval_ms, @poll_interval_ms)
+    Process.send_after(self(), :poll, interval)
   end
 
   defp reload_state(%State{} = state) do

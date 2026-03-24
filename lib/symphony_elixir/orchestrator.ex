@@ -178,8 +178,11 @@ defmodule SymphonyElixir.Orchestrator do
   def terminate(_reason, %State{running: running}) do
     Enum.each(running, fn {_issue_id, running_entry} ->
       session_id = running_entry_session_id(running_entry)
+      pid = Map.get(running_entry, :pid)
 
-      if session_id != "n/a" do
+      # Only finalize sessions whose agent task has already exited.
+      # Live tasks (under TaskSupervisor) will finalize themselves on completion.
+      if session_id != "n/a" and (is_nil(pid) or not Process.alive?(pid)) do
         input_tokens = Map.get(running_entry, :engine_input_tokens, 0)
         output_tokens = Map.get(running_entry, :engine_output_tokens, 0)
         estimated_cost_cents = compute_estimated_cost(input_tokens, output_tokens)
@@ -316,6 +319,11 @@ defmodule SymphonyElixir.Orchestrator do
           |> maybe_put_runtime_value(:workspace_path, runtime_info[:workspace_path])
           |> maybe_put_runtime_value(:stderr_file, runtime_info[:stderr_file])
 
+        sync_session_to_db(updated_running_entry, %{
+          worker_host: runtime_info[:worker_host],
+          workspace_path: runtime_info[:workspace_path]
+        })
+
         notify_dashboard()
         {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
     end
@@ -337,12 +345,26 @@ defmodule SymphonyElixir.Orchestrator do
           |> apply_engine_token_delta(token_delta)
           |> apply_engine_rate_limits(update)
 
+        updated_running_entry = maybe_sync_engine_stats_to_db(updated_running_entry, token_delta)
+
         notify_dashboard()
         {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
     end
   end
 
   def handle_info({:engine_worker_update, _issue_id, _update}, state), do: {:noreply, state}
+
+  def handle_info({:session_db_id, issue_id, db_session_id}, %{running: running} = state)
+      when is_binary(issue_id) and is_integer(db_session_id) do
+    case Map.get(running, issue_id) do
+      nil ->
+        {:noreply, state}
+
+      running_entry ->
+        updated = Map.put(running_entry, :db_session_id, db_session_id)
+        {:noreply, %{state | running: Map.put(running, issue_id, updated)}}
+    end
+  end
 
   def handle_info({:comment_watch_state, issue_id, comment_watch_state}, %{running: running} = state)
       when is_binary(issue_id) and is_map(comment_watch_state) do
@@ -364,7 +386,13 @@ defmodule SymphonyElixir.Orchestrator do
 
       running_entry ->
         existing = Map.get(running_entry, :hook_results, [])
-        updated_running_entry = Map.put(running_entry, :hook_results, existing ++ results)
+        all_results = existing ++ results
+        updated_running_entry = Map.put(running_entry, :hook_results, all_results)
+
+        sync_session_to_db(updated_running_entry, %{
+          hook_results: hook_results_to_map(all_results)
+        })
+
         {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
     end
   end
@@ -963,6 +991,7 @@ defmodule SymphonyElixir.Orchestrator do
             last_engine_timestamp: nil,
             last_engine_event: nil,
             engine_pid: nil,
+            db_session_id: nil,
             engine_input_tokens: 0,
             engine_output_tokens: 0,
             engine_total_tokens: 0,
@@ -994,8 +1023,10 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp run_issue_task(workflow_name, issue, recipient, attempt, worker_host, project_id, project, comment_watch_state)
+  defp run_issue_task(workflow_name, issue, recipient, attempt, worker_host, fallback_project_id, _project, comment_watch_state)
        when is_binary(workflow_name) do
+    project = resolve_project_for_issue(issue, fallback_project_id)
+    project_id = if project, do: project.id, else: fallback_project_id
     Settings.put_current_project(project)
 
     Workflow.with_workflow(workflow_name, fn ->
@@ -1063,6 +1094,25 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp resolve_project(_), do: nil
+
+  # Resolve the correct project for an issue by matching its Linear project slug,
+  # falling back to the orchestrator's configured project.
+  defp resolve_project_for_issue(%Issue{project_slug_id: slug_id}, fallback_project_id)
+       when is_binary(slug_id) and slug_id != "" do
+    case Store.find_project_by_slug_id(slug_id) do
+      %Project{} = project ->
+        Logger.info("Resolved project=#{project.name} for issue slug_id=#{slug_id}")
+        project
+
+      nil ->
+        Logger.warning("No project found for slug_id=#{slug_id}, falling back to project_id=#{inspect(fallback_project_id)}")
+        resolve_project(fallback_project_id)
+    end
+  end
+
+  defp resolve_project_for_issue(_issue, fallback_project_id) do
+    resolve_project(fallback_project_id)
+  end
 
   defp revalidate_issue_for_dispatch(%Issue{id: issue_id}, issue_fetcher, terminal_states)
        when is_binary(issue_id) and is_function(issue_fetcher, 1) do
@@ -1233,11 +1283,27 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp finalize_stale_db_sessions(%State{project_id: project_id}) do
-    {count, _} = Store.finalize_stale_sessions(project_id: project_id)
+    live_issue_ids = live_session_issue_ids()
+
+    {count, _} =
+      Store.finalize_stale_sessions(
+        project_id: project_id,
+        exclude_issue_ids: live_issue_ids
+      )
 
     if count > 0 do
       Logger.warning("Finalized #{count} stale running session(s) from previous orchestrator lifecycle")
     end
+
+    if live_issue_ids != [] do
+      Logger.info("Preserved #{length(live_issue_ids)} running session(s) with active agent tasks")
+    end
+  end
+
+  defp live_session_issue_ids do
+    Registry.select(SymphonyElixir.SessionLogRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+    |> Enum.map(fn {issue_id, _session_id} -> issue_id end)
+    |> Enum.uniq()
   end
 
   defp notify_dashboard do
@@ -1767,6 +1833,52 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp finalize_db_session(_running_entry, _reason), do: :ok
+
+  defp sync_session_to_db(%{db_session_id: db_session_id}, attrs)
+       when is_integer(db_session_id) do
+    clean_attrs = attrs |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
+
+    if map_size(clean_attrs) > 0 do
+      Store.update_session_live_by_id(db_session_id, clean_attrs)
+    end
+  end
+
+  defp sync_session_to_db(%{session_id: session_id}, attrs)
+       when is_binary(session_id) and session_id != "n/a" do
+    clean_attrs = attrs |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
+
+    if map_size(clean_attrs) > 0 do
+      Store.update_session_live(session_id, clean_attrs)
+    end
+  end
+
+  defp sync_session_to_db(_running_entry, _attrs), do: :ok
+
+  # Only sync token/turn stats when there's an actual change to avoid
+  # hammering the DB on every engine event.
+  defp maybe_sync_engine_stats_to_db(running_entry, token_delta) do
+    has_token_change =
+      token_delta.input_tokens > 0 or
+        token_delta.output_tokens > 0 or
+        token_delta.total_tokens > 0
+
+    turn_count = Map.get(running_entry, :turn_count, 0)
+    prev_turn_count = Map.get(running_entry, :synced_turn_count, 0)
+    has_turn_change = turn_count != prev_turn_count
+
+    if has_token_change or has_turn_change do
+      sync_session_to_db(running_entry, %{
+        input_tokens: Map.get(running_entry, :engine_input_tokens, 0),
+        output_tokens: Map.get(running_entry, :engine_output_tokens, 0),
+        total_tokens: Map.get(running_entry, :engine_total_tokens, 0),
+        turn_count: turn_count
+      })
+
+      Map.put(running_entry, :synced_turn_count, turn_count)
+    else
+      running_entry
+    end
+  end
 
   defp compute_estimated_cost(input_tokens, output_tokens) do
     model = Config.settings!().claude.model

@@ -1,5 +1,6 @@
 defmodule SymphonyElixir.Claude.CommandBuilderTest do
-  use SymphonyElixir.TestSupport
+  use SymphonyElixir.DataCase, async: true
+
   alias SymphonyElixir.Claude.CommandBuilder
 
   defp default_config do

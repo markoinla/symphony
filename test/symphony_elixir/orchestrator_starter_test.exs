@@ -12,11 +12,8 @@ defmodule SymphonyElixir.OrchestratorStarterTest do
       {:ok, _} = Store.upsert_agent(%{name: workflow_name})
       {:ok, _} = Store.update_agent(workflow_name, %{enabled: false})
 
-      # Start the OrchestratorStarter — it should NOT start the disabled workflow
+      # Start the OrchestratorStarter — init runs ensure_orchestrators synchronously
       start_supervised!({SymphonyElixir.OrchestratorStarter, []})
-
-      # Give it a moment to run ensure_orchestrators
-      Process.sleep(100)
 
       # Verify no orchestrators are running for the disabled workflow
       running = Orchestrator.workflow_servers()
@@ -31,7 +28,7 @@ defmodule SymphonyElixir.OrchestratorStarterTest do
       {:ok, _} = Store.upsert_agent(%{name: workflow_name})
 
       start_supervised!({SymphonyElixir.OrchestratorStarter, []})
-      Process.sleep(100)
+      Process.sleep(50)
 
       running = Orchestrator.workflow_servers()
       running_keys = Enum.map(running, fn {key, _server} -> key end)
@@ -43,8 +40,7 @@ defmodule SymphonyElixir.OrchestratorStarterTest do
 
       # Start with disabled agent
       {:ok, _} = Store.upsert_agent(%{name: workflow_name, enabled: false})
-      start_supervised!({SymphonyElixir.OrchestratorStarter, []})
-      Process.sleep(100)
+      pid = start_supervised!({SymphonyElixir.OrchestratorStarter, []})
 
       # Verify it's not running
       running_before = Orchestrator.workflow_servers() |> Enum.map(fn {k, _} -> k end)
@@ -53,7 +49,8 @@ defmodule SymphonyElixir.OrchestratorStarterTest do
       # Re-enable and broadcast
       {:ok, _} = Store.update_agent(workflow_name, %{enabled: true})
       SymphonyElixirWeb.ObservabilityPubSub.broadcast_agents_changed()
-      Process.sleep(200)
+      # Force the GenServer to process the broadcast message
+      :sys.get_state(pid)
 
       # Now it should be running
       running_after = Orchestrator.workflow_servers() |> Enum.map(fn {k, _} -> k end)
@@ -99,7 +96,6 @@ defmodule SymphonyElixir.OrchestratorStarterTest do
       {:ok, project2} = Store.create_project(%{name: "Project B", linear_project_slug: "proj-b"})
 
       start_supervised!({SymphonyElixir.OrchestratorStarter, []})
-      Process.sleep(200)
 
       running_keys = Orchestrator.workflow_servers() |> Enum.map(fn {k, _} -> k end)
 
@@ -148,7 +144,6 @@ defmodule SymphonyElixir.OrchestratorStarterTest do
       {:ok, project} = Store.create_project(%{name: "Test Project", linear_project_slug: "test-proj"})
 
       start_supervised!({SymphonyElixir.OrchestratorStarter, []})
-      Process.sleep(200)
 
       running_keys = Orchestrator.workflow_servers() |> Enum.map(fn {k, _} -> k end)
 

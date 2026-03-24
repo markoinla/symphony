@@ -1,7 +1,5 @@
 defmodule SymphonyElixir.PricingTest do
-  use SymphonyElixir.TestSupport
-
-  import ExUnit.CaptureLog
+  use SymphonyElixir.DataCase, async: true
 
   alias SymphonyElixir.Pricing
 

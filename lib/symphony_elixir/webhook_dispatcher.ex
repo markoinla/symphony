@@ -9,7 +9,7 @@ defmodule SymphonyElixir.WebhookDispatcher do
   require Logger
 
   alias SymphonyElixir.{AgentSession, Config, Orchestrator, Settings, Store, Workflow}
-  alias SymphonyElixir.Linear.{AgentAPI, Client}
+  alias SymphonyElixir.Linear.{AgentAPI, Client, Issue}
 
   @spec dispatch_created(map(), keyword()) :: :ok | {:error, term()}
   def dispatch_created(payload, opts \\ []) when is_map(payload) do
@@ -172,7 +172,7 @@ defmodule SymphonyElixir.WebhookDispatcher do
   defp spawn_agent_runner(issue, prompt_context) do
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
            try do
-             resolve_and_set_project()
+             resolve_and_set_project(issue)
              {workflow_name, config} = resolve_mention_workflow()
 
              Workflow.with_workflow(workflow_name, fn ->
@@ -279,7 +279,25 @@ defmodule SymphonyElixir.WebhookDispatcher do
     end
   end
 
-  defp resolve_and_set_project do
+  defp resolve_and_set_project(%Issue{project_slug_id: slug_id})
+       when is_binary(slug_id) and slug_id != "" do
+    case Store.find_project_by_slug_id(slug_id) do
+      %Store.Project{} = project ->
+        Logger.info("Resolved project=#{project.name} for webhook issue slug_id=#{slug_id}")
+        Settings.put_current_project(project)
+
+      nil ->
+        Logger.warning("No project found matching slug_id=#{slug_id}, falling back to first project")
+        fallback_to_first_project()
+    end
+  end
+
+  defp resolve_and_set_project(_issue) do
+    Logger.warning("Issue has no project_slug_id, falling back to first project")
+    fallback_to_first_project()
+  end
+
+  defp fallback_to_first_project do
     case Store.list_projects() do
       [%Store.Project{} = project | _] ->
         Settings.put_current_project(project)

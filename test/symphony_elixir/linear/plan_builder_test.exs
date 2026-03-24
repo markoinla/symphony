@@ -1,5 +1,5 @@
 defmodule SymphonyElixir.Linear.PlanBuilderTest do
-  use SymphonyElixir.TestSupport
+  use SymphonyElixir.DataCase, async: true
 
   alias SymphonyElixir.Linear.PlanBuilder
 
