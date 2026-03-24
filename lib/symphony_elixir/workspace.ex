@@ -378,6 +378,15 @@ defmodule SymphonyElixir.Workspace do
           []
       end
 
+    base =
+      case project do
+        %{github_branch: branch} when is_binary(branch) and branch != "" ->
+          base ++ [{"GITHUB_BRANCH", branch}]
+
+        _ ->
+          base
+      end
+
     project_env_vars =
       case project do
         %{env_vars: env_text} -> SymphonyElixir.Settings.parse_env_vars(env_text)

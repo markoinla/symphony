@@ -44,6 +44,7 @@ function normalizeProjectDraft(project: ProjectDraft): ProjectDraft {
     linear_filter_by: project.linear_filter_by ?? 'project',
     linear_label_name: nilIfBlank(project.linear_label_name),
     github_repo: nilIfBlank(project.github_repo),
+    github_branch: nilIfBlank(project.github_branch),
     workspace_root: nilIfBlank(project.workspace_root),
     env_vars: nilIfBlank(project.env_vars),
   }
@@ -57,6 +58,7 @@ function projectToDraft(project: Project): ProjectDraft {
     linear_filter_by: project.linear_filter_by,
     linear_label_name: project.linear_label_name,
     github_repo: project.github_repo,
+    github_branch: project.github_branch,
     workspace_root: project.workspace_root,
     env_vars: project.env_vars,
   }
@@ -255,6 +257,7 @@ function ProjectFormDialog({
     setDraft((current) => ({
       ...current,
       github_repo: repo.full_name,
+      github_branch: repo.default_branch,
     }))
   }
 
@@ -311,6 +314,16 @@ function ProjectFormDialog({
               />
             </Field>
           )}
+
+          <Field label="Branch" hint="Leave blank to use the repository default branch">
+            <Input
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, github_branch: event.target.value }))
+              }
+              placeholder="main"
+              value={draft.github_branch ?? ''}
+            />
+          </Field>
 
           <Collapsible.Root open={showAdvanced} onOpenChange={setShowAdvanced}>
             <Collapsible.Trigger className="group flex w-full items-center gap-1.5 rounded-md py-1.5 text-xs font-medium text-th-text-3 transition hover:text-th-text-1">
@@ -453,7 +466,12 @@ function ProjectCard({
                 <span className="inline-flex shrink-0 items-center gap-1 rounded bg-th-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-th-text-3">
                   <Github className="h-2.5 w-2.5" />
                 </span>
-                <span className="truncate text-xs text-th-text-2">{project.github_repo}</span>
+                <span className="truncate text-xs text-th-text-2">
+                  {project.github_repo}
+                  {project.github_branch ? (
+                    <span className="text-th-text-4"> @ {project.github_branch}</span>
+                  ) : null}
+                </span>
               </div>
             ) : null}
 
