@@ -15,6 +15,7 @@ docs/
 !TRIAGE.md
 !MENTION.md
 !REVIEW.md
+!EPIC_SPLITTER.md
 .env
 .env.*
 log/
