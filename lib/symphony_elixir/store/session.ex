@@ -21,11 +21,11 @@ defmodule SymphonyElixir.Store.Session do
     field(:worker_host, :string)
     field(:workspace_path, :string)
     field(:error, :string)
-    field(:stderr, :string)
     field(:project_id, :integer)
     field(:agent_session_id, :string)
     field(:dispatch_source, :string, default: "orchestrator")
     field(:hook_results, {:array, :map})
+    field(:stderr, :string)
     field(:config_snapshot, :map)
     field(:workflow_name, :string)
 

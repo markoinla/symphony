@@ -1713,6 +1713,7 @@ defmodule SymphonyElixir.Orchestrator do
       status = if reason == :normal, do: "completed", else: "failed"
       error = if reason != :normal, do: inspect(reason)
       hook_results = Map.get(running_entry, :hook_results)
+
       stderr = read_and_cleanup_stderr(running_entry)
 
       completion_attrs = %{
