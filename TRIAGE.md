@@ -231,7 +231,9 @@ After posting the triage comment and updating the issue state, stop. Do not take
 
 ## Linear GraphQL reference
 
-Use these exact queries and mutations with the Linear MCP tools.
+Use these exact queries and mutations with the Linear MCP tools. For creating and
+updating comments, prefer the dedicated `linear_create_comment` and `linear_update_comment`
+tools over raw GraphQL when available — they handle variables internally and avoid common mistakes.
 
 ### Resolve state ID (required before updating state)
 
@@ -259,7 +261,13 @@ mutation UpdateIssueState($issueId: String!, $stateId: String!) {
 }
 ```
 
+Variables: `{"issueId": "<issue-uuid>", "stateId": "<state-uuid-from-resolve>"}`
+
 ### Create comment
+
+**Preferred:** Use the dedicated `linear_create_comment` tool with `issue_id` and `body` parameters directly.
+
+If you must use raw GraphQL:
 
 ```graphql
 mutation CreateComment($issueId: String!, $body: String!) {
@@ -269,6 +277,8 @@ mutation CreateComment($issueId: String!, $body: String!) {
   }
 }
 ```
+
+Variables: `{"issueId": "<issue-uuid>", "body": "## Triage\n..."}`
 
 ### Fetch issue details (if needed)
 
@@ -306,8 +316,11 @@ query GetIssue($id: String!) {
 }
 ```
 
+Variables: `{"id": "<issue-uuid>"}`
+
 ### Common pitfalls
 
+- **Always pass `variables`**: When calling `linear_graphql`, pass query variables via the `variables` parameter — do not inline values into the query string. Omitting `variables` causes HTTP 400 errors.
 - `issue(id:)` takes the **UUID**, not the identifier like `"MT-32"`. The UUID is provided in the issue context above as `ID (UUID)`.
 - State updates are a **two-step** process: resolve state ID first, then update.
 - All mutations return `{ success }` — check this field.

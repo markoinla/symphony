@@ -137,6 +137,8 @@ mutation AddLabel($issueId: String!, $labelIds: [String!]!) {
 }
 ```
 
+Variables: `{"issueId": "<issue-uuid>", "labelIds": ["<label-uuid-1>", "<label-uuid-2>"]}`
+
 To find label IDs:
 
 ```graphql
@@ -149,6 +151,8 @@ query FindLabel($teamId: String!, $labelName: String!) {
 }
 ```
 
+Variables: `{"teamId": "<team-uuid>", "labelName": "enriched"}`
+
 To get the team ID and current labels:
 
 ```graphql
@@ -159,6 +163,10 @@ query GetIssueContext($id: String!) {
   }
 }
 ```
+
+Variables: `{"id": "<issue-uuid>"}`
+
+**Important:** When calling `linear_graphql`, always pass query variables via the `variables` parameter — do not inline values into the query string. Omitting `variables` causes HTTP 400 errors.
 
 ### Step 6: Done
 
