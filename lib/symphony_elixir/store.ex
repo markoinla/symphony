@@ -288,7 +288,7 @@ defmodule SymphonyElixir.Store do
 
           Session
           |> where([s], s.issue_identifier == ^identifier and s.status == "running")
-          |> order_by([s], desc: s.started_at)
+          |> order_by([s], asc: s.started_at)
           |> limit(1)
           |> Repo.one()
 
