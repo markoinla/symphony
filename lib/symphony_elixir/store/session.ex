@@ -37,6 +37,6 @@ defmodule SymphonyElixir.Store.Session do
     session
     |> cast(attrs, @required_fields ++ @optional_fields)
     |> validate_required(@required_fields)
-    |> validate_inclusion(:status, ~w(running completed failed cancelled))
+    |> validate_inclusion(:status, ~w(running completed failed cancelled stopped))
   end
 end

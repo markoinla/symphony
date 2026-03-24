@@ -24,6 +24,7 @@ defmodule SymphonyElixir.AgentSession do
             pending_prompts: :queue.queue(String.t()),
             external_urls: [map()],
             dispatch_source: :webhook | :orchestrator,
+            runner_pid: pid() | nil,
             last_activity_at: integer()
           }
 
@@ -34,6 +35,7 @@ defmodule SymphonyElixir.AgentSession do
       pending_prompts: :queue.new(),
       external_urls: [],
       dispatch_source: :orchestrator,
+      runner_pid: nil,
       last_activity_at: 0
     ]
   end
@@ -98,9 +100,22 @@ defmodule SymphonyElixir.AgentSession do
     end
   end
 
-  @spec complete(String.t(), :completed | :failed) :: :ok
+  @spec set_runner_pid(String.t(), pid()) :: :ok
+  def set_runner_pid(issue_id, pid) when is_binary(issue_id) and is_pid(pid) do
+    safe_cast(issue_id, {:set_runner_pid, pid})
+  end
+
+  @spec get_runner_pid(String.t()) :: pid() | nil
+  def get_runner_pid(issue_id) when is_binary(issue_id) do
+    case Registry.lookup(@registry, issue_id) do
+      [{pid, _value}] -> GenServer.call(pid, :get_runner_pid)
+      [] -> nil
+    end
+  end
+
+  @spec complete(String.t(), :completed | :failed | :stopped) :: :ok
   def complete(issue_id, outcome)
-      when is_binary(issue_id) and outcome in [:completed, :failed] do
+      when is_binary(issue_id) and outcome in [:completed, :failed, :stopped] do
     case Registry.lookup(@registry, issue_id) do
       [{pid, _value}] ->
         agent_session_id = GenServer.call(pid, :get_agent_session_id)
@@ -184,6 +199,10 @@ defmodule SymphonyElixir.AgentSession do
     {:noreply, state}
   end
 
+  def handle_cast({:set_runner_pid, pid}, state) do
+    {:noreply, %{state | runner_pid: pid}}
+  end
+
   def handle_cast({:set_external_urls, urls}, state) do
     do_set_external_urls(state.agent_session_id, urls)
     {:noreply, %{state | external_urls: urls}}
@@ -197,6 +216,10 @@ defmodule SymphonyElixir.AgentSession do
 
   def handle_call(:get_agent_session_id, _from, state) do
     {:reply, state.agent_session_id, state}
+  end
+
+  def handle_call(:get_runner_pid, _from, state) do
+    {:reply, state.runner_pid, state}
   end
 
   # -- Internal --

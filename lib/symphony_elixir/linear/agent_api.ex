@@ -70,13 +70,14 @@ defmodule SymphonyElixir.Linear.AgentAPI do
     end
   end
 
-  @spec complete_session(String.t(), :completed | :failed) :: :ok | {:error, term()}
+  @spec complete_session(String.t(), :completed | :failed | :stopped) :: :ok | {:error, term()}
   def complete_session(agent_session_id, outcome)
-      when is_binary(agent_session_id) and outcome in [:completed, :failed] do
+      when is_binary(agent_session_id) and outcome in [:completed, :failed, :stopped] do
     body =
       case outcome do
         :completed -> "Agent session completed successfully."
         :failed -> "Agent session ended with errors."
+        :stopped -> "Agent session stopped by user."
       end
 
     # Note: Linear's API restricts `signal: "stop"` to prompt-type activities,
