@@ -26,6 +26,10 @@ defmodule SymphonyElixirWeb.AnalyticsControllerTest do
       Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
     end)
 
+    # Clear pre-existing sessions so analytics tests start from a clean slate.
+    # This runs inside the sandbox transaction and is rolled back after the test.
+    SymphonyElixir.Repo.delete_all(SymphonyElixir.Store.Session)
+
     # Disable auth so we can reach authenticated routes
     original = System.get_env("SYMPHONY_AUTH_PASSWORD")
     System.delete_env("SYMPHONY_AUTH_PASSWORD")
@@ -178,6 +182,55 @@ defmodule SymphonyElixirWeb.AnalyticsControllerTest do
       assert length(body["daily"]) == 1
       assert length(body["by_workflow"]) == 1
       assert hd(body["by_workflow"])["workflow"] == "DEPLOY"
+    end
+
+    test "running sessions are excluded from all queries" do
+      create_session(%{
+        status: "running",
+        workflow: "DEPLOY",
+        estimated_cost_cents: nil,
+        input_tokens: 0,
+        output_tokens: 0,
+        started_at: ~U[2026-03-20 10:00:00Z]
+      })
+
+      create_session(%{
+        status: "completed",
+        workflow: "DEPLOY",
+        estimated_cost_cents: 100,
+        input_tokens: 500,
+        output_tokens: 200,
+        started_at: ~U[2026-03-20 10:00:00Z]
+      })
+
+      conn = get(build_conn(), "/api/v1/analytics/cost?range=30d")
+      body = json_response(conn, 200)
+
+      # Summary counts only the completed session
+      assert body["summary"]["total_sessions"] == 1
+      assert body["summary"]["total_cost_cents"] == 100
+
+      # Daily/by_workflow also exclude the running session
+      assert length(body["by_workflow"]) == 1
+      assert hd(body["by_workflow"])["sessions"] == 1
+    end
+
+    test "completed sessions without cost are included in summary" do
+      create_session(%{
+        status: "completed",
+        workflow: "DEPLOY",
+        estimated_cost_cents: nil,
+        input_tokens: 500,
+        output_tokens: 200,
+        started_at: ~U[2026-03-20 10:00:00Z]
+      })
+
+      conn = get(build_conn(), "/api/v1/analytics/cost?range=30d")
+      body = json_response(conn, 200)
+
+      assert body["summary"]["total_sessions"] == 1
+      assert body["summary"]["total_input_tokens"] == 500
+      assert body["summary"]["total_output_tokens"] == 200
     end
 
     test "daily entries contain expected fields" do
