@@ -144,6 +144,14 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp send_hook_results(_recipient, _issue, _results), do: :ok
 
+  defp send_session_stderr_info(recipient, %Issue{id: issue_id}, stderr_file)
+       when is_binary(issue_id) and is_pid(recipient) and is_binary(stderr_file) do
+    send(recipient, {:worker_runtime_info, issue_id, %{stderr_file: stderr_file}})
+    :ok
+  end
+
+  defp send_session_stderr_info(_recipient, _issue, _stderr_file), do: :ok
+
   defp send_comment_watch_update(recipient, %Issue{id: issue_id}, comment_watch_state)
        when is_binary(issue_id) and is_pid(recipient) do
     send(recipient, {:comment_watch_state, issue_id, comment_watch_state})
@@ -266,6 +274,7 @@ defmodule SymphonyElixir.AgentRunner do
       session_id = session[:session_id] || "session_#{System.unique_integer([:positive])}"
       start_session_log(issue, session_id, project_id)
       send_comment_watch_update(engine_update_recipient, issue, comment_watch_state)
+      send_session_stderr_info(engine_update_recipient, issue, session[:stderr_file])
 
       try do
         do_run_engine_turns(

@@ -19,6 +19,8 @@ defmodule SymphonyElixir.Engine do
 
   @callback stop_session(session()) :: :ok
 
+  @callback read_stderr(session()) :: {:ok, String.t() | nil}
+
   @spec engine_module() :: module()
   def engine_module do
     case Config.settings!().engine do

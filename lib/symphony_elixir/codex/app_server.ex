@@ -147,7 +147,8 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  @spec read_stderr(session()) :: {:ok, String.t()} | {:ok, nil}
+  @impl SymphonyElixir.Engine
+  @spec read_stderr(session()) :: {:ok, String.t() | nil}
   def read_stderr(%{stderr_file: stderr_file}), do: StderrBuffer.read(stderr_file)
   def read_stderr(_session), do: {:ok, nil}
 

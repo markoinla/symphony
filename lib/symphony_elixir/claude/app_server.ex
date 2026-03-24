@@ -59,6 +59,10 @@ defmodule SymphonyElixir.Claude.AppServer do
   end
 
   @impl SymphonyElixir.Engine
+  @spec read_stderr(session()) :: {:ok, nil}
+  def read_stderr(_session), do: {:ok, nil}
+
+  @impl SymphonyElixir.Engine
   @spec stop_session(session()) :: :ok
   def stop_session(_session), do: :ok
 
