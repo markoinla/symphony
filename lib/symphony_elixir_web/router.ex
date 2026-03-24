@@ -56,8 +56,8 @@ defmodule SymphonyElixirWeb.Router do
     pipe_through(:authenticated_stream)
     get("/stream/dashboard", StreamController, :dashboard)
     get("/stream/session/:issue_id", StreamController, :session)
-    match(:*, "/stream/dashboard", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/stream/session/:issue_id", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/stream/dashboard", FallbackController, :method_not_allowed)
+    match(:*, "/stream/session/:issue_id", FallbackController, :method_not_allowed)
   end
 
   # Authenticated: main API
@@ -84,23 +84,23 @@ defmodule SymphonyElixirWeb.Router do
     get("/oauth/github/status", GitHubOAuthController, :status)
     post("/oauth/github/revoke", GitHubOAuthController, :revoke)
 
-    match(:*, "/state", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/refresh", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/sessions", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/projects", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/projects/:id", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/settings", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/settings/:key", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/state", FallbackController, :method_not_allowed)
+    match(:*, "/refresh", FallbackController, :method_not_allowed)
+    match(:*, "/sessions", FallbackController, :method_not_allowed)
+    match(:*, "/projects", FallbackController, :method_not_allowed)
+    match(:*, "/projects/:id", FallbackController, :method_not_allowed)
+    match(:*, "/settings", FallbackController, :method_not_allowed)
+    match(:*, "/settings/:key", FallbackController, :method_not_allowed)
     get("/:issue_identifier/messages", ObservabilityApiController, :messages)
-    match(:*, "/:issue_identifier/messages", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/:issue_identifier/messages", FallbackController, :method_not_allowed)
     get("/:issue_identifier", ObservabilityApiController, :issue)
-    match(:*, "/:issue_identifier", ObservabilityApiController, :method_not_allowed)
-    match(:*, "/*path", ObservabilityApiController, :not_found)
+    match(:*, "/:issue_identifier", FallbackController, :method_not_allowed)
+    match(:*, "/*path", FallbackController, :not_found)
   end
 
   # SPA catch-all (auth checked client-side via /api/v1/auth/status)
   scope "/", SymphonyElixirWeb do
     get("/*path", SpaController, :index)
-    match(:*, "/*path", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/*path", FallbackController, :method_not_allowed)
   end
 end

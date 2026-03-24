@@ -61,16 +61,6 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
     json(conn, %{status: "ok"})
   end
 
-  @spec method_not_allowed(Conn.t(), map()) :: Conn.t()
-  def method_not_allowed(conn, _params) do
-    error_response(conn, 405, "method_not_allowed", "Method not allowed")
-  end
-
-  @spec not_found(Conn.t(), map()) :: Conn.t()
-  def not_found(conn, _params) do
-    error_response(conn, 404, "not_found", "Route not found")
-  end
-
   defp maybe_put_issue_identifier(opts, issue_identifier)
        when is_binary(issue_identifier) and issue_identifier != "" do
     Keyword.put(opts, :issue_identifier, issue_identifier)
