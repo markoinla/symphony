@@ -24,6 +24,7 @@ defmodule SymphonyElixir.OrchestratorStarter do
   def init(:ok) do
     Process.monitor(SymphonyElixir.OrchestratorSupervisor)
     ObservabilityPubSub.subscribe_projects()
+    ObservabilityPubSub.subscribe_agents()
     SymphonyElixir.Store.clear_all_issue_claims()
     ensure_orchestrators()
     schedule_reconcile()
@@ -68,6 +69,13 @@ defmodule SymphonyElixir.OrchestratorStarter do
   end
 
   @impl true
+  def handle_info(:agents_changed, state) do
+    Logger.info("Agents changed, reconciling orchestrators")
+    ensure_orchestrators()
+    {:noreply, state}
+  end
+
+  @impl true
   def handle_info(_msg, state), do: {:noreply, state}
 
   defp schedule_reconcile do
@@ -76,17 +84,31 @@ defmodule SymphonyElixir.OrchestratorStarter do
 
   defp ensure_orchestrators do
     projects = SymphonyElixir.Store.list_projects()
+    named_workflows = SymphonyElixir.Workflow.named_workflow_paths()
 
+    # Auto-sync: upsert an agent row for every loaded workflow
+    Enum.each(named_workflows, fn {workflow_name, _path} ->
+      SymphonyElixir.Store.upsert_agent(%{name: workflow_name})
+    end)
+
+    # Build a set of disabled workflow names
+    disabled =
+      SymphonyElixir.Store.list_agents()
+      |> Enum.reject(& &1.enabled)
+      |> MapSet.new(& &1.name)
+
+    # Only start orchestrators for enabled workflows
     expected_keys =
-      SymphonyElixir.Workflow.named_workflow_paths()
+      named_workflows
+      |> Enum.reject(fn {workflow_name, _path} -> MapSet.member?(disabled, workflow_name) end)
       |> Enum.flat_map(&ensure_workflow_orchestrators(&1, projects))
       |> MapSet.new()
 
     stop_stale_orchestrators(expected_keys)
   end
 
-  defp ensure_workflow_orchestrators({workflow_name, path}, projects) do
-    if workflow_uses_project_filter?(path) and projects != [] do
+  defp ensure_workflow_orchestrators({workflow_name, _path}, projects) do
+    if projects != [] do
       Enum.each(projects, fn project ->
         ensure_started(workflow_name: workflow_name, project_id: project.id)
       end)
@@ -134,13 +156,6 @@ defmodule SymphonyElixir.OrchestratorStarter do
         {:error, reason} ->
           Logger.warning("Failed to start orchestrator #{workflow_name}:#{project_id || "default"}: #{inspect(reason)}")
       end
-    end
-  end
-
-  defp workflow_uses_project_filter?(path) do
-    case SymphonyElixir.Workflow.load(path) do
-      {:ok, %{config: %{"tracker" => %{"filter_by" => "label"}}}} -> false
-      _ -> true
     end
   end
 end

@@ -40,6 +40,16 @@ export const agentsRoute = createRoute({
   path: '/agents',
 })
 
+export const analyticsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/analytics',
+})
+
+export const reliabilityRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reliability',
+})
+
 export const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/login',
@@ -52,6 +62,8 @@ export const routeTree = rootRoute.addChildren([
   projectsRoute,
   settingsRoute,
   agentsRoute,
+  analyticsRoute,
+  reliabilityRoute,
   loginRoute,
 ])
 

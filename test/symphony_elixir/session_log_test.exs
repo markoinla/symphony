@@ -186,6 +186,99 @@ defmodule SymphonyElixir.SessionLogTest do
     ])
   end
 
+  test "session creation populates workflow field" do
+    issue_id = unique_id("issue")
+    session_id = unique_id("session")
+
+    start_session_log!(issue_id, session_id, workflow_name: "MY_WORKFLOW")
+
+    sessions = SymphonyElixir.Store.list_sessions(limit: 100)
+    session = Enum.find(sessions, &(&1.issue_id == issue_id))
+
+    assert session != nil
+    assert session.workflow == "MY_WORKFLOW"
+    assert session.workflow_name == "MY_WORKFLOW"
+  end
+
+  test "finalize computes estimated_cost_cents using Pricing when model is configured" do
+    issue_id = unique_id("issue")
+    session_id = unique_id("session")
+
+    # Write workflow with claude.model so Pricing can compute a real cost
+    workflow_root = Path.join(System.tmp_dir!(), "sym-173-cost-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(workflow_root)
+    workflow_file = Path.join(workflow_root, "WORKFLOW.md")
+    write_workflow_file!(workflow_file)
+    content = File.read!(workflow_file)
+    # Insert claude section before closing "---" delimiter
+    [front, rest] = String.split(content, "\n---\n", parts: 2)
+    File.write!(workflow_file, front <> "\nclaude:\n  model: \"claude-sonnet-4-6\"\n---\n" <> rest)
+    SymphonyElixir.Workflow.set_workflow_file_path(workflow_file)
+    if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
+
+    start_session_log!(issue_id, session_id)
+
+    # 500K input at 300/MTok = 150, 200K output at 1500/MTok = 300 → 450 cents
+    assert :ok =
+             SessionLog.finalize(issue_id, session_id, :completed, %{
+               input_tokens: 500_000,
+               output_tokens: 200_000
+             })
+
+    sessions = SymphonyElixir.Store.list_sessions(limit: 100)
+    session = Enum.find(sessions, &(&1.issue_id == issue_id))
+
+    assert session != nil
+    assert session.estimated_cost_cents == 450
+    assert session.status == "completed"
+
+    on_exit(fn -> File.rm_rf(workflow_root) end)
+  end
+
+  test "finalize defaults estimated_cost_cents to 0 and logs warning when model unavailable" do
+    issue_id = unique_id("issue")
+    session_id = unique_id("session")
+
+    start_session_log!(issue_id, session_id)
+
+    # Default test workflow has no claude.model configured
+    log =
+      capture_log(fn ->
+        assert :ok =
+                 SessionLog.finalize(issue_id, session_id, :completed, %{
+                   input_tokens: 500_000,
+                   output_tokens: 200_000
+                 })
+      end)
+
+    assert log =~ "Model name unavailable"
+
+    sessions = SymphonyElixir.Store.list_sessions(limit: 100)
+    session = Enum.find(sessions, &(&1.issue_id == issue_id))
+
+    assert session != nil
+    assert session.estimated_cost_cents == 0
+    assert session.status == "completed"
+  end
+
+  test "finalize preserves caller-provided estimated_cost_cents" do
+    issue_id = unique_id("issue")
+    session_id = unique_id("session")
+
+    start_session_log!(issue_id, session_id)
+
+    assert :ok =
+             SessionLog.finalize(issue_id, session_id, :completed, %{
+               estimated_cost_cents: 999
+             })
+
+    sessions = SymphonyElixir.Store.list_sessions(limit: 100)
+    session = Enum.find(sessions, &(&1.issue_id == issue_id))
+
+    assert session != nil
+    assert session.estimated_cost_cents == 999
+  end
+
   test "finalize passes stderr to Store.complete_session" do
     issue_id = unique_id("issue")
     session_id = unique_id("session")
@@ -195,7 +288,7 @@ defmodule SymphonyElixir.SessionLogTest do
     stderr_content = "error: something went wrong\nstack trace here"
     assert :ok = SessionLog.finalize(issue_id, session_id, :completed, %{stderr: stderr_content})
 
-    # Verify stderr was persisted via Store
+    # Verify stderr was persisted via Store — list sessions and find ours by issue_id
     sessions = SymphonyElixir.Store.list_sessions(limit: 100)
     session = Enum.find(sessions, &(&1.issue_id == issue_id))
 
@@ -204,14 +297,36 @@ defmodule SymphonyElixir.SessionLogTest do
     assert session.status == "completed"
   end
 
-  defp start_session_log!(issue_id, session_id) do
+  test "store_stderr persists stderr without changing session status" do
+    issue_id = unique_id("issue")
+    session_id = unique_id("session")
+
+    start_session_log!(issue_id, session_id)
+
+    stderr_content = "warning: deprecation notice\nsome debug output"
+    assert :ok = SessionLog.store_stderr(issue_id, session_id, stderr_content)
+
+    # Verify stderr was persisted but status remains "running" (not completed)
+    sessions = SymphonyElixir.Store.list_sessions(limit: 100)
+    session = Enum.find(sessions, &(&1.issue_id == issue_id))
+
+    assert session != nil
+    assert session.stderr == stderr_content
+    assert session.status == "running"
+  end
+
+  defp start_session_log!(issue_id, session_id, opts \\ []) do
+    workflow_name = Keyword.get(opts, :workflow_name)
+
     {:ok, _pid} =
       SessionLog.start_link(
-        issue_id: issue_id,
-        session_id: session_id,
-        issue_identifier: unique_id("SYM-26"),
-        issue_title: "Session log test",
-        project_id: nil
+        [
+          issue_id: issue_id,
+          session_id: session_id,
+          issue_identifier: unique_id("SYM-26"),
+          issue_title: "Session log test",
+          project_id: nil
+        ] ++ if(workflow_name, do: [workflow_name: workflow_name], else: [])
       )
 
     on_exit(fn ->

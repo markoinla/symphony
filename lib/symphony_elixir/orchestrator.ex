@@ -13,6 +13,8 @@ defmodule SymphonyElixir.Orchestrator do
     Codex.StderrBuffer,
     Config,
     DashboardLinks,
+    ErrorClassifier,
+    Pricing,
     Settings,
     StatusDashboard,
     Store,
@@ -178,11 +180,17 @@ defmodule SymphonyElixir.Orchestrator do
       session_id = running_entry_session_id(running_entry)
 
       if session_id != "n/a" do
+        input_tokens = Map.get(running_entry, :engine_input_tokens, 0)
+        output_tokens = Map.get(running_entry, :engine_output_tokens, 0)
+        estimated_cost_cents = compute_estimated_cost(input_tokens, output_tokens)
+
         Store.complete_session_by_engine_session_id(session_id, %{
           status: "cancelled",
           issue_identifier: running_entry.identifier,
           issue_title: Map.get(running_entry, :issue, %{}) |> Map.get(:title),
-          error: "orchestrator shutdown"
+          error: "orchestrator shutdown",
+          estimated_cost_cents: estimated_cost_cents,
+          error_category: nil
         })
       end
     end)
@@ -1716,18 +1724,29 @@ defmodule SymphonyElixir.Orchestrator do
 
       stderr = read_and_cleanup_stderr(running_entry)
 
+      input_tokens = Map.get(running_entry, :engine_input_tokens, 0)
+      output_tokens = Map.get(running_entry, :engine_output_tokens, 0)
+      estimated_cost_cents = compute_estimated_cost(input_tokens, output_tokens)
+
+      error_category =
+        if reason != :normal,
+          do: reason |> ErrorClassifier.classify() |> Atom.to_string(),
+          else: nil
+
       completion_attrs = %{
         status: status,
         issue_identifier: running_entry.identifier,
         issue_title: Map.get(running_entry, :issue, %{}) |> Map.get(:title),
         turn_count: Map.get(running_entry, :turn_count, 0),
-        input_tokens: Map.get(running_entry, :engine_input_tokens, 0),
-        output_tokens: Map.get(running_entry, :engine_output_tokens, 0),
+        input_tokens: input_tokens,
+        output_tokens: output_tokens,
         total_tokens: Map.get(running_entry, :engine_total_tokens, 0),
         worker_host: Map.get(running_entry, :worker_host),
         workspace_path: Map.get(running_entry, :workspace_path),
         error: error,
-        stderr: stderr
+        stderr: stderr,
+        estimated_cost_cents: estimated_cost_cents,
+        error_category: error_category
       }
 
       completion_attrs =
@@ -1746,6 +1765,15 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp finalize_db_session(_running_entry, _reason), do: :ok
+
+  defp compute_estimated_cost(input_tokens, output_tokens) do
+    model = Config.settings!().claude.model
+    Pricing.cost_cents(model, input_tokens, output_tokens)
+  rescue
+    e ->
+      Logger.warning("Failed to compute estimated cost: #{inspect(e)}")
+      0
+  end
 
   defp hook_results_to_map(results) when is_list(results) do
     Enum.map(results, fn result ->

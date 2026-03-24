@@ -83,6 +83,14 @@ defmodule SymphonyElixir.SessionLog do
     end
   end
 
+  @spec store_stderr(String.t(), String.t(), String.t()) :: :ok
+  def store_stderr(issue_id, session_id, content) when is_binary(content) do
+    case lookup(issue_id, session_id) do
+      nil -> :ok
+      pid -> GenServer.call(pid, {:store_stderr, content})
+    end
+  end
+
   @spec stop(String.t(), String.t()) :: :ok
   def stop(issue_id, session_id) do
     case lookup(issue_id, session_id) do
@@ -105,7 +113,8 @@ defmodule SymphonyElixir.SessionLog do
              started_at: DateTime.utc_now(),
              project_id: project_id,
              config_snapshot: config_snapshot,
-             workflow_name: workflow_name
+             workflow_name: workflow_name,
+             workflow: workflow_name
            }) do
         {:ok, session} ->
           session.id
@@ -168,6 +177,8 @@ defmodule SymphonyElixir.SessionLog do
         attrs
         |> Map.put(:status, to_string(status))
         |> Map.put(:ended_at, DateTime.utc_now())
+        |> maybe_put_estimated_cost()
+        |> maybe_put_error_category(status)
 
       case Store.complete_session(state.db_session_id, completion_attrs) do
         {:ok, _session} ->
@@ -175,6 +186,21 @@ defmodule SymphonyElixir.SessionLog do
 
         {:error, reason} ->
           Logger.warning("Failed to finalize DB session #{state.db_session_id}: #{inspect(reason)}")
+      end
+    end
+
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:store_stderr, content}, _from, state) do
+    if state.db_session_id do
+      case Store.update_session_stderr(state.db_session_id, content) do
+        {:ok, _session} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Failed to store stderr for DB session #{state.db_session_id}: #{inspect(reason)}")
       end
     end
 
@@ -735,6 +761,44 @@ defmodule SymphonyElixir.SessionLog do
     do: inspect(params)
 
   defp extract_failure_reason(_msg), do: "unknown"
+
+  # ── Cost estimation ───────────────────────────────────────────────────
+
+  defp maybe_put_estimated_cost(%{estimated_cost_cents: _} = attrs), do: attrs
+
+  defp maybe_put_estimated_cost(attrs) do
+    input_tokens = Map.get(attrs, :input_tokens, 0)
+    output_tokens = Map.get(attrs, :output_tokens, 0)
+
+    model =
+      try do
+        SymphonyElixir.Config.settings!().claude.model
+      rescue
+        _ -> nil
+      end
+
+    cost =
+      if is_binary(model) do
+        SymphonyElixir.Pricing.cost_cents(model, input_tokens, output_tokens)
+      else
+        Logger.warning("Model name unavailable at session finalization, defaulting estimated_cost_cents to 0")
+        0
+      end
+
+    Map.put(attrs, :estimated_cost_cents, cost)
+  end
+
+  # ── Error category ────────────────────────────────────────────────────
+
+  defp maybe_put_error_category(%{error_category: _} = attrs, _status), do: attrs
+
+  defp maybe_put_error_category(attrs, :failed) do
+    Map.put(attrs, :error_category, "infra")
+  end
+
+  defp maybe_put_error_category(attrs, _status) do
+    Map.put(attrs, :error_category, nil)
+  end
 
   # ── Helpers ─────────────────────────────────────────────────────────
 

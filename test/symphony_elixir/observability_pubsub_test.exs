@@ -9,6 +9,12 @@ defmodule SymphonyElixir.ObservabilityPubSubTest do
     assert_receive :observability_updated
   end
 
+  test "subscribe_agents and broadcast_agents_changed deliver agent updates" do
+    assert :ok = ObservabilityPubSub.subscribe_agents()
+    assert :ok = ObservabilityPubSub.broadcast_agents_changed()
+    assert_receive :agents_changed
+  end
+
   test "broadcast_update is a no-op when pubsub is unavailable" do
     pubsub_child_id = Phoenix.PubSub.Supervisor
 

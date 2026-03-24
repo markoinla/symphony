@@ -69,6 +69,7 @@ export type TimelineSession = {
   total_tokens: number | null
   worker_host: string | null
   error: string | null
+  error_category: string | null
   workflow_name: string | null
   live: boolean
   messages: TimelineMessage[]
@@ -89,6 +90,7 @@ export type SessionsPayload = {
     total_tokens: number
     worker_host: string | null
     error: string | null
+    error_category: string | null
     workflow_name: string | null
   }>
 }
@@ -305,6 +307,31 @@ export function deleteSetting(key: string) {
   })
 }
 
+export type AgentWorkflow = {
+  name: string
+  enabled: boolean
+  loaded: boolean
+  description: string | null
+  config: {
+    max_concurrent_agents?: number
+    polling_interval_ms?: number
+    max_turns?: number
+    engine?: string
+  }
+  raw_config: Record<string, unknown>
+}
+
+export function getAgents() {
+  return requestJson<{ agents: AgentWorkflow[] }>('/api/v1/agents')
+}
+
+export function updateAgent(name: string, attrs: { enabled: boolean }) {
+  return requestJson<{ agent: AgentWorkflow }>(`/api/v1/agents/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(attrs),
+  })
+}
+
 export type OAuthStatus = {
   status: 'connected' | 'expired' | 'disconnected'
   expires_at: string | null
@@ -360,6 +387,7 @@ export function mergeTimelineMessage(payload: MessagesPayload, incoming: Timelin
       total_tokens: null,
       worker_host: null,
       error: null,
+      error_category: null,
       workflow_name: null,
       live: true,
       messages: [incoming],
@@ -447,6 +475,91 @@ export function searchGitHubRepos(query: string) {
   const params = new URLSearchParams()
   if (query) params.set('q', query)
   return requestJson<{ repos: GitHubRepo[] }>(`/api/v1/github/repos?${params.toString()}`)
+}
+
+// --- Session Stats ---
+
+export type SessionStatsRange = '24h' | '7d' | '30d'
+
+export type FailureCountBucket = {
+  bucket: string
+  infra: number
+  agent: number
+  config: number
+  timeout: number
+}
+
+export type DeadLetterSession = {
+  id: number
+  issue_identifier: string | null
+  issue_title: string | null
+  workflow_name: string | null
+  error_category: string | null
+  error: string | null
+  ended_at: string | null
+}
+
+export type WorkerHostStats = {
+  host: string
+  total_runs: number
+  failures: number
+  failure_rate: number
+}
+
+export type SessionStats = {
+  failure_counts: FailureCountBucket[]
+  dead_letters: DeadLetterSession[]
+  worker_health: WorkerHostStats[]
+}
+
+export async function getSessionStats(
+  range: SessionStatsRange,
+  filters?: { project_id?: string; workflow_name?: string },
+): Promise<SessionStats> {
+  const params = new URLSearchParams({ range, ...filters })
+  const res = await fetch(`/api/v1/sessions/stats?${params}`)
+  if (!res.ok) throw new Error(`Stats fetch failed: ${res.status}`)
+  return res.json()
+}
+
+// --- Cost Analytics ---
+
+export type CostRange = '7d' | '30d' | '90d'
+
+export type AnalyticsSummary = {
+  total_cost_cents: number
+  total_sessions: number
+  total_input_tokens: number
+  total_output_tokens: number
+}
+
+export type DailyCostEntry = {
+  date: string
+  workflow: string
+  cost_cents: number
+  sessions: number
+  input_tokens: number
+  output_tokens: number
+}
+
+export type WorkflowBreakdown = {
+  workflow: string
+  cost_cents: number
+  sessions: number
+  input_tokens: number
+  output_tokens: number
+  avg_cost_cents_per_session: number
+}
+
+export type CostAnalyticsResponse = {
+  range: CostRange
+  summary: AnalyticsSummary
+  daily: DailyCostEntry[]
+  by_workflow: WorkflowBreakdown[]
+}
+
+export function getCostAnalytics(range: CostRange) {
+  return requestJson<CostAnalyticsResponse>(`/api/v1/analytics/cost?range=${encodeURIComponent(range)}`)
 }
 
 export function emptyProject(): ProjectBody {
