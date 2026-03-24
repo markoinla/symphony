@@ -189,7 +189,8 @@ defmodule SymphonyElixir.Orchestrator do
           issue_identifier: running_entry.identifier,
           issue_title: Map.get(running_entry, :issue, %{}) |> Map.get(:title),
           error: "orchestrator shutdown",
-          estimated_cost_cents: estimated_cost_cents
+          estimated_cost_cents: estimated_cost_cents,
+          error_category: nil
         })
       end
     end)
