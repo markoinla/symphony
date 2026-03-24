@@ -46,10 +46,16 @@ defmodule SymphonyElixirWeb.GithubApiController do
   defp filter_repos(repos, ""), do: Enum.take(repos, 20)
 
   defp filter_repos(repos, query) do
+    words = query |> String.split(~r/\s+/, trim: true)
+
     repos
     |> Enum.filter(fn repo ->
       full_name = String.downcase(repo["full_name"] || "")
-      String.contains?(full_name, query)
+      name = String.downcase(repo["name"] || "")
+
+      Enum.all?(words, fn word ->
+        String.contains?(full_name, word) or String.contains?(name, word)
+      end)
     end)
     |> Enum.take(20)
   end
