@@ -18,6 +18,7 @@ import {
   Settings,
   Bot,
   BarChart2,
+  HeartPulse,
   LogOut,
   Sun,
   Moon,
@@ -44,6 +45,7 @@ import {
   settingsRoute,
   agentsRoute,
   analyticsRoute,
+  reliabilityRoute,
   loginRoute,
 } from './router'
 
@@ -54,6 +56,7 @@ import { ProjectsView } from './pages/projects'
 import { SettingsView } from './pages/settings'
 import { AgentsView } from './pages/agents'
 import { AnalyticsView } from './pages/analytics'
+import { ReliabilityView } from './pages/reliability'
 import { LoginView } from './pages/login'
 
 const queryClient = new QueryClient({
@@ -84,6 +87,7 @@ projectsRoute.update({ component: ProjectsView })
 settingsRoute.update({ component: SettingsView })
 agentsRoute.update({ component: AgentsView })
 analyticsRoute.update({ component: AnalyticsView })
+reliabilityRoute.update({ component: ReliabilityView })
 loginRoute.update({ component: LoginView })
 
 export default function App() {
@@ -101,6 +105,7 @@ const navItems = [
   { to: '/settings' as const, label: 'Settings', icon: Settings, match: (p: string) => p.startsWith('/settings') },
   { to: '/agents' as const, label: 'Agents', icon: Bot, match: (p: string) => p.startsWith('/agents') },
   { to: '/analytics' as const, label: 'Analytics', icon: BarChart2, match: (p: string) => p.startsWith('/analytics') },
+  { to: '/reliability' as const, label: 'Reliability', icon: HeartPulse, match: (p: string) => p.startsWith('/reliability') },
 ]
 
 function RootLayout() {

@@ -269,8 +269,15 @@ function SessionBlock({ now, session }: { now: number; session: TimelineSession 
   return (
     <div>
       <div className="chat-divider my-5 text-[11px] sm:text-xs">
-        {session.live ? 'Live' : 'Session'} {session.session_id} · {formatDateTime(session.started_at)}
-        {session.live ? ` · ${runtimeSince(session.started_at, now)}` : ''}
+        <span>
+          {session.live ? 'Live' : 'Session'} {session.session_id} · {formatDateTime(session.started_at)}
+          {session.live ? ` · ${runtimeSince(session.started_at, now)}` : ''}
+        </span>
+        {session.status === 'failed' && session.error_category ? (
+          <Badge className="ml-2" tone={session.error_category === 'infra' ? 'danger' : session.error_category === 'agent' ? 'retrying' : 'neutral'}>
+            {session.error_category}
+          </Badge>
+        ) : null}
       </div>
 
       <div className="space-y-1">

@@ -350,6 +350,11 @@ export function HistoryCard({ index, session }: { index: number; session: Sessio
             </span>
             {issueIdentifier ? <LinearIssueBadge identifier={issueIdentifier} /> : null}
             {failed ? <Badge tone="danger">Failed</Badge> : null}
+            {failed && session.error_category ? (
+              <Badge tone={session.error_category === 'infra' ? 'danger' : session.error_category === 'agent' ? 'retrying' : 'neutral'}>
+                {session.error_category}
+              </Badge>
+            ) : null}
           </div>
           <p className="mt-2 line-clamp-1 text-[13px] leading-5 text-th-text-3">
             {session.issue_title ?? 'No title'}
