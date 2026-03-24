@@ -1,59 +1,54 @@
 defmodule SymphonyElixir.ErrorClassifier do
   @moduledoc """
-  Classifies session failure reasons into broad error categories.
+  Classifies session failure reasons into one of four categories.
 
-  Categories:
-  - `:infra` — infrastructure failures (port exits, SSH, workspace prep/removal, hooks, unknown)
-  - `:agent` — agent-level failures (turn failures, cancellations, approval/input required)
-  - `:config` — configuration errors (invalid workspace cwd, workflow config parse failures)
-  - `:timeout` — timeout conditions (turn, response, hook timeouts, stall detection)
+  Pure, stateless module with no side effects or DB interaction.
   """
 
   @type category :: :infra | :agent | :config | :timeout
 
-  @spec classify(term()) :: category()
+  # --- timeout ---
 
-  # Timeout patterns
+  @spec classify(term()) :: category()
   def classify(:turn_timeout), do: :timeout
   def classify(:response_timeout), do: :timeout
-  def classify({:response_timeout}), do: :timeout
   def classify({:workspace_hook_timeout, _hook_name, _timeout_ms}), do: :timeout
+  def classify("stalled" <> _rest), do: :timeout
 
-  def classify(reason) when is_binary(reason) do
-    if String.contains?(reason, "stalled for") do
-      :timeout
-    else
-      :infra
-    end
-  end
+  # --- agent ---
 
-  # Agent patterns
   def classify({:turn_failed, _params}), do: :agent
   def classify({:turn_cancelled, _params}), do: :agent
   def classify({:approval_required, _payload}), do: :agent
   def classify({:turn_input_required, _payload}), do: :agent
 
-  # Config patterns
-  def classify({:invalid_workspace_cwd, :symlink_escape, _expanded, _root}), do: :config
-  def classify({:invalid_workspace_cwd, :symlink_escape, _expanded}), do: :config
-  def classify({:invalid_workspace_cwd, :outside_workspace_root, _canonical, _root}), do: :config
-  def classify({:invalid_workspace_cwd, :outside_workspace_root, _canonical}), do: :config
-  def classify({:invalid_workspace_cwd, :workspace_root, _canonical}), do: :config
-  def classify({:invalid_workspace_cwd, :path_unreadable, _path, _reason}), do: :config
-  def classify({:invalid_workspace_cwd, :empty_remote_workspace, _host}), do: :config
-  def classify({:invalid_workspace_cwd, :invalid_remote_workspace, _host, _workspace}), do: :config
+  # --- config ---
+
+  def classify({:invalid_workspace_cwd, _reason}), do: :config
+  def classify({:invalid_workspace_cwd, _reason, _a}), do: :config
+  def classify({:invalid_workspace_cwd, _reason, _a, _b}), do: :config
   def classify({:invalid_workflow_config, _message}), do: :config
-  def classify({:missing_workflow_file, _path, _reason}), do: :config
+  def classify({:unsafe_turn_sandbox_policy, _details}), do: :config
+  def classify({:workspace_equals_root, _path, _root}), do: :config
+  def classify({:workspace_symlink_escape, _expanded, _root}), do: :config
+  def classify({:workspace_outside_root, _path, _root}), do: :config
+  def classify({:workspace_path_unreadable, _path, _reason}), do: :config
+  def classify({:path_canonicalize_failed, _path, _reason}), do: :config
 
-  # Infra patterns
+  # --- infra (explicit known patterns) ---
+
   def classify({:port_exit, _status}), do: :infra
-  def classify(:no_worker_hosts_available), do: :infra
-  def classify({:workspace_prepare_failed, _host, _status, _output}), do: :infra
-  def classify({:workspace_remove_failed, _host, _status, _output}), do: :infra
-  def classify({:workspace_hook_failed, _hook_name, _status, _output}), do: :infra
   def classify(:bash_not_found), do: :infra
+  def classify({:workspace_prepare_failed, _host, _status, _output}), do: :infra
+  def classify({:workspace_prepare_failed, _reason, _output}), do: :infra
+  def classify({:workspace_remove_failed, _host, _status, _output}), do: :infra
+  def classify(:no_worker_hosts_available), do: :infra
+  def classify({:workspace_hook_failed, _hook, _status, _output}), do: :infra
   def classify({:response_error, _error}), do: :infra
+  def classify({:invalid_thread_payload, _payload}), do: :infra
+  def classify({:issue_state_refresh_failed, _reason}), do: :infra
 
-  # Catch-all: anything unmatched is infra
-  def classify(_reason), do: :infra
+  # --- infra (catch-all for unknown errors) ---
+
+  def classify(_unknown), do: :infra
 end
