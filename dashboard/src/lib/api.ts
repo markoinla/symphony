@@ -227,8 +227,12 @@ async function requestJson<T>(input: string, init?: RequestInit) {
   return payload as T
 }
 
-export function getState() {
-  return requestJson<StatePayload>('/api/v1/state')
+export async function getState() {
+  const payload = await requestJson<StatePayload>('/api/v1/state')
+  if (payload?.error) {
+    throw new ApiError(200, { error: payload.error }, payload.error.message)
+  }
+  return payload
 }
 
 export async function getIssue(issueIdentifier: string) {
