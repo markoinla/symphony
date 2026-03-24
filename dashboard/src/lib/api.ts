@@ -387,6 +387,7 @@ export function mergeTimelineMessage(payload: MessagesPayload, incoming: Timelin
       total_tokens: null,
       worker_host: null,
       error: null,
+      error_category: null,
       workflow_name: null,
       live: true,
       messages: [incoming],
