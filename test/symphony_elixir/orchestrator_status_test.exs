@@ -718,6 +718,102 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     assert snapshot_entry.engine_total_tokens == 0
   end
 
+  test "orchestrator token accounting extracts EventTranslator normalized flat usage maps" do
+    issue_id = "issue-normalized-usage"
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-209",
+      title: "Normalized usage extraction",
+      description: "Verify direct_token_usage handles EventTranslator atom-keyed maps",
+      state: "In Progress",
+      url: "https://example.org/issues/MT-209"
+    }
+
+    orchestrator_name = Module.concat(__MODULE__, :NormalizedUsageOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
+
+    on_exit(fn ->
+      if Process.alive?(pid) do
+        Process.exit(pid, :normal)
+      end
+    end)
+
+    initial_state = :sys.get_state(pid)
+    process_ref = make_ref()
+    started_at = DateTime.utc_now()
+
+    running_entry = %{
+      pid: self(),
+      ref: process_ref,
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: nil,
+      turn_count: 0,
+      last_engine_message: nil,
+      last_engine_timestamp: nil,
+      last_engine_event: nil,
+      engine_input_tokens: 0,
+      engine_output_tokens: 0,
+      engine_total_tokens: 0,
+      engine_last_reported_input_tokens: 0,
+      engine_last_reported_output_tokens: 0,
+      engine_last_reported_total_tokens: 0,
+      started_at: started_at
+    }
+
+    :sys.replace_state(pid, fn _ ->
+      initial_state
+      |> Map.put(:running, %{issue_id => running_entry})
+      |> Map.put(:claimed, MapSet.put(initial_state.claimed, issue_id))
+    end)
+
+    now = DateTime.utc_now()
+
+    # Simulate EventTranslator-produced usage event with flat atom-keyed map.
+    # This is the format normalize_usage/1 returns: %{input_tokens: N, output_tokens: M, total_tokens: T}.
+    # Before PR #99 this format was silently dropped, causing 0 tokens for all workflows.
+    send(
+      pid,
+      {:engine_worker_update, issue_id,
+       %{
+         event: :notification,
+         usage: %{input_tokens: 150, output_tokens: 60, total_tokens: 210},
+         timestamp: now
+       }}
+    )
+
+    snapshot = GenServer.call(pid, :snapshot)
+    assert %{running: [snapshot_entry]} = snapshot
+    assert snapshot_entry.engine_input_tokens == 150
+    assert snapshot_entry.engine_output_tokens == 60
+    assert snapshot_entry.engine_total_tokens == 210
+
+    # Send a second event with higher totals to verify delta accumulation
+    send(
+      pid,
+      {:engine_worker_update, issue_id,
+       %{
+         event: :notification,
+         usage: %{input_tokens: 300, output_tokens: 120, total_tokens: 420},
+         timestamp: now
+       }}
+    )
+
+    snapshot = GenServer.call(pid, :snapshot)
+    assert %{running: [snapshot_entry]} = snapshot
+    assert snapshot_entry.engine_input_tokens == 300
+    assert snapshot_entry.engine_output_tokens == 120
+    assert snapshot_entry.engine_total_tokens == 420
+
+    # Verify engine_totals are recorded on session completion
+    send(pid, {:DOWN, process_ref, :process, self(), :normal})
+    completed_state = :sys.get_state(pid)
+    assert completed_state.engine_totals.input_tokens == 300
+    assert completed_state.engine_totals.output_tokens == 120
+    assert completed_state.engine_totals.total_tokens == 420
+  end
+
   test "orchestrator snapshot includes retry backoff entries" do
     orchestrator_name = Module.concat(__MODULE__, :RetryOrchestrator)
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
