@@ -8,7 +8,7 @@ defmodule SymphonyElixir.WebhookDispatcher do
 
   require Logger
 
-  alias SymphonyElixir.{AgentSession, Config, Settings, Store, Workflow}
+  alias SymphonyElixir.{AgentSession, Config, Orchestrator, Settings, Store, Workflow}
   alias SymphonyElixir.Linear.{AgentAPI, Client}
 
   @spec dispatch_created(map(), keyword()) :: :ok | {:error, term()}
@@ -39,6 +39,16 @@ defmodule SymphonyElixir.WebhookDispatcher do
 
   @spec dispatch_prompted(map()) :: :ok | {:error, term()}
   def dispatch_prompted(payload) when is_map(payload) do
+    case extract_signal(payload) do
+      "stop" ->
+        dispatch_stop(payload)
+
+      _other ->
+        dispatch_prompt_message(payload)
+    end
+  end
+
+  defp dispatch_prompt_message(payload) do
     with {:ok, agent_session_id} <- extract_agent_session_id(payload),
          {:ok, message} <- extract_prompt_message(payload) do
       Logger.info("Webhook dispatch_prompted agent_session_id=#{agent_session_id}")
@@ -65,6 +75,61 @@ defmodule SymphonyElixir.WebhookDispatcher do
         Logger.warning("Failed to dispatch webhook prompted: #{inspect(reason)}")
         {:error, reason}
     end
+  end
+
+  defp dispatch_stop(payload) do
+    case extract_agent_session_id(payload) do
+      {:ok, agent_session_id} ->
+        Logger.info("Webhook dispatch_stop agent_session_id=#{agent_session_id}")
+
+        case find_issue_id_for_session(agent_session_id) do
+          {:ok, issue_id} ->
+            terminate_agent_for_issue(issue_id)
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("No active session for stop signal agent_session_id=#{agent_session_id}: #{inspect(reason)}")
+            {:error, reason}
+        end
+
+      {:error, reason} ->
+        Logger.warning("Failed to dispatch webhook stop: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  defp terminate_agent_for_issue(issue_id) do
+    # Try orchestrator path first — it handles its own state cleanup
+    case Orchestrator.stop_issue(issue_id) do
+      :ok ->
+        Logger.info("Stopped orchestrator-dispatched issue_id=#{issue_id}")
+
+      {:error, :not_found} ->
+        # Webhook-dispatched task — terminate directly via stored runner PID
+        terminate_webhook_runner(issue_id)
+    end
+  end
+
+  defp terminate_webhook_runner(issue_id) do
+    runner_pid = AgentSession.get_runner_pid(issue_id)
+    AgentSession.complete(issue_id, :stopped)
+    kill_runner_task(issue_id, runner_pid)
+    Store.release_issue_claim(issue_id)
+  end
+
+  defp kill_runner_task(issue_id, pid) when is_pid(pid) do
+    case Task.Supervisor.terminate_child(SymphonyElixir.TaskSupervisor, pid) do
+      :ok ->
+        Logger.info("Terminated webhook runner task for issue_id=#{issue_id}")
+
+      {:error, :not_found} ->
+        Process.exit(pid, :shutdown)
+        Logger.info("Sent shutdown to webhook runner process for issue_id=#{issue_id}")
+    end
+  end
+
+  defp kill_runner_task(issue_id, _pid) do
+    Logger.warning("No runner PID found for issue_id=#{issue_id}")
   end
 
   # -- Internal --
@@ -105,28 +170,35 @@ defmodule SymphonyElixir.WebhookDispatcher do
   end
 
   defp spawn_agent_runner(issue, prompt_context) do
-    Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-      try do
-        resolve_and_set_project()
-        {workflow_name, config} = resolve_mention_workflow()
+    case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
+           try do
+             resolve_and_set_project()
+             {workflow_name, config} = resolve_mention_workflow()
 
-        Workflow.with_workflow(workflow_name, fn ->
-          SymphonyElixir.AgentRunner.run(issue, nil,
-            max_turns: config.agent.max_turns,
-            prompt_context: prompt_context
-          )
-        end)
-      rescue
-        e ->
-          Logger.error("Webhook-dispatched agent run failed for #{issue.id}: #{Exception.message(e)}")
-      after
-        Store.release_issue_claim(issue.id)
+             Workflow.with_workflow(workflow_name, fn ->
+               SymphonyElixir.AgentRunner.run(issue, nil,
+                 max_turns: config.agent.max_turns,
+                 prompt_context: prompt_context
+               )
+             end)
+           rescue
+             e ->
+               Logger.error("Webhook-dispatched agent run failed for #{issue.id}: #{Exception.message(e)}")
+           after
+             Store.release_issue_claim(issue.id)
 
-        if AgentSession.active?(issue.id) do
-          AgentSession.complete(issue.id, :failed)
-        end
-      end
-    end)
+             if AgentSession.active?(issue.id) do
+               AgentSession.complete(issue.id, :failed)
+             end
+           end
+         end) do
+      {:ok, pid} ->
+        AgentSession.set_runner_pid(issue.id, pid)
+        {:ok, pid}
+
+      error ->
+        error
+    end
   end
 
   defp resolve_mention_workflow do
@@ -177,14 +249,22 @@ defmodule SymphonyElixir.WebhookDispatcher do
   end
 
   defp maybe_associate_session(issue_id, agent_session_id) do
-    # If there's already an AgentSession for this issue, update it;
-    # otherwise start a new one that will track the existing run
-    unless AgentSession.active?(issue_id) do
-      AgentSession.start_link(
-        issue_id: issue_id,
-        agent_session_id: agent_session_id,
-        dispatch_source: :webhook
-      )
+    # Use start_link as atomic guard — :already_started means a session exists,
+    # preventing the race where a non-atomic active? + start_link could spawn duplicates.
+    case AgentSession.start_link(
+           issue_id: issue_id,
+           agent_session_id: agent_session_id,
+           dispatch_source: :webhook
+         ) do
+      {:ok, _pid} ->
+        :ok
+
+      {:error, {:already_started, _pid}} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("Failed to associate session for issue_id=#{issue_id}: #{inspect(reason)}")
+        {:error, reason}
     end
   end
 
@@ -235,5 +315,11 @@ defmodule SymphonyElixir.WebhookDispatcher do
       body when is_binary(body) -> {:ok, body}
       _ -> {:error, :missing_prompt_message}
     end
+  end
+
+  defp extract_signal(payload) do
+    get_in(payload, ["agentSession", "signal"]) ||
+      get_in(payload, ["data", "signal"]) ||
+      get_in(payload, ["signal"])
   end
 end

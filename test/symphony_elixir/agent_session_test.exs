@@ -153,8 +153,51 @@ defmodule SymphonyElixir.AgentSessionTest do
       refute AgentSession.active?(issue_id)
     end
 
+    test "sends stop signal and stops the GenServer on :stopped" do
+      issue_id = "test-issue-#{System.unique_integer([:positive])}"
+      Application.put_env(:symphony_elixir, :linear_client_module, __MODULE__.StubClient)
+
+      {:ok, _pid} =
+        AgentSession.start_link(
+          issue_id: issue_id,
+          agent_session_id: "agent-sess-stopped"
+        )
+
+      assert AgentSession.active?(issue_id)
+      AgentSession.complete(issue_id, :stopped)
+
+      :timer.sleep(10)
+      refute AgentSession.active?(issue_id)
+    end
+
     test "complete on nonexistent session is a no-op" do
       assert AgentSession.complete("nonexistent", :completed) == :ok
+    end
+  end
+
+  describe "runner_pid tracking" do
+    test "set_runner_pid/2 and get_runner_pid/1 store and retrieve the runner PID" do
+      issue_id = "test-issue-#{System.unique_integer([:positive])}"
+      Application.put_env(:symphony_elixir, :linear_client_module, __MODULE__.StubClient)
+
+      {:ok, pid} =
+        AgentSession.start_link(
+          issue_id: issue_id,
+          agent_session_id: "agent-sess-runner"
+        )
+
+      assert AgentSession.get_runner_pid(issue_id) == nil
+
+      AgentSession.set_runner_pid(issue_id, self())
+      :timer.sleep(10)
+
+      assert AgentSession.get_runner_pid(issue_id) == self()
+
+      GenServer.stop(pid)
+    end
+
+    test "get_runner_pid returns nil when no session exists" do
+      assert AgentSession.get_runner_pid("nonexistent") == nil
     end
   end
 

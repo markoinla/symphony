@@ -121,6 +121,21 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  @spec stop_issue(String.t()) :: :ok | {:error, :not_found}
+  def stop_issue(issue_id) when is_binary(issue_id) do
+    workflow_servers()
+    |> Enum.find_value({:error, :not_found}, fn {_key, server} ->
+      case GenServer.call(server, {:stop_issue, issue_id}) do
+        :ok -> {:ok, :stopped}
+        {:error, :not_found} -> false
+      end
+    end)
+    |> case do
+      {:ok, :stopped} -> :ok
+      {:error, :not_found} -> {:error, :not_found}
+    end
+  end
+
   @impl true
   def init(opts) do
     workflow_name = Keyword.get(opts, :workflow_name, Workflow.default_workflow_name())
@@ -1523,6 +1538,18 @@ defmodule SymphonyElixir.Orchestrator do
          poll_interval_ms: state.poll_interval_ms
        }
      }, state}
+  end
+
+  def handle_call({:stop_issue, issue_id}, _from, state) do
+    case Map.get(state.running, issue_id) do
+      nil ->
+        {:reply, {:error, :not_found}, state}
+
+      _running_entry ->
+        state = terminate_running_issue(state, issue_id, false, :stopped)
+        notify_dashboard()
+        {:reply, :ok, state}
+    end
   end
 
   def handle_call(:request_refresh, _from, state) do

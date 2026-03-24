@@ -143,6 +143,103 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
 
       assert {:error, :session_not_found} = WebhookDispatcher.dispatch_prompted(payload)
     end
+
+    test "stop signal dispatches stop instead of prompt injection" do
+      issue_id = "test-issue-#{System.unique_integer([:positive])}"
+      agent_session_id = "agent-sess-stop-#{System.unique_integer([:positive])}"
+
+      # Create a DB session so find_session_by_agent_session_id works
+      Store.create_session(%{
+        issue_id: issue_id,
+        agent_session_id: agent_session_id,
+        session_id: "engine-#{System.unique_integer([:positive])}",
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+      # Start an AgentSession GenServer
+      {:ok, _pid} =
+        SymphonyElixir.AgentSession.start_link(
+          issue_id: issue_id,
+          agent_session_id: agent_session_id,
+          dispatch_source: :webhook
+        )
+
+      assert SymphonyElixir.AgentSession.active?(issue_id)
+
+      payload = %{
+        "data" => %{
+          "id" => agent_session_id
+        },
+        "signal" => "stop"
+      }
+
+      assert :ok = WebhookDispatcher.dispatch_prompted(payload)
+
+      # Give time for async stop to process
+      :timer.sleep(50)
+
+      # AgentSession should be stopped
+      refute SymphonyElixir.AgentSession.active?(issue_id)
+    end
+
+    test "non-stop signal proceeds with normal prompt injection" do
+      payload = %{
+        "data" => %{
+          "id" => "nonexistent-session",
+          "agentActivity" => %{"body" => "Do something"}
+        },
+        "signal" => nil
+      }
+
+      # Without a stop signal, it proceeds with normal flow (and fails because session doesn't exist)
+      assert {:error, :session_not_found} = WebhookDispatcher.dispatch_prompted(payload)
+    end
+
+    test "stop signal returns error when no session exists" do
+      payload = %{
+        "data" => %{
+          "id" => "nonexistent-session"
+        },
+        "signal" => "stop"
+      }
+
+      assert {:error, :session_not_found} = WebhookDispatcher.dispatch_prompted(payload)
+    end
+  end
+
+  describe "maybe_associate_session race condition" do
+    test "concurrent associate calls do not create duplicate sessions" do
+      issue_id = "test-issue-#{System.unique_integer([:positive])}"
+
+      # Pre-claim the issue
+      Store.claim_issue(issue_id, "orchestrator")
+
+      # Simulate two concurrent dispatch_created calls for the same issue
+      payload = %{
+        "data" => %{
+          "id" => "agent-sess-dup-1",
+          "issueId" => issue_id
+        }
+      }
+
+      payload2 = %{
+        "data" => %{
+          "id" => "agent-sess-dup-2",
+          "issueId" => issue_id
+        }
+      }
+
+      # Both should succeed without error
+      assert :ok = WebhookDispatcher.dispatch_created(payload)
+      assert :ok = WebhookDispatcher.dispatch_created(payload2)
+
+      # Only one AgentSession should be active
+      assert SymphonyElixir.AgentSession.active?(issue_id)
+
+      # Clean up
+      SymphonyElixir.AgentSession.stop(issue_id)
+    end
   end
 
   defmodule StubClient do
