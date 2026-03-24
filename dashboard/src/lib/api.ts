@@ -305,6 +305,31 @@ export function deleteSetting(key: string) {
   })
 }
 
+export type AgentWorkflow = {
+  name: string
+  enabled: boolean
+  loaded: boolean
+  description: string | null
+  config: {
+    max_concurrent_agents?: number
+    polling_interval_ms?: number
+    max_turns?: number
+    engine?: string
+  }
+  raw_config: Record<string, unknown>
+}
+
+export function getAgents() {
+  return requestJson<{ agents: AgentWorkflow[] }>('/api/v1/agents')
+}
+
+export function updateAgent(name: string, attrs: { enabled: boolean }) {
+  return requestJson<{ agent: AgentWorkflow }>(`/api/v1/agents/${encodeURIComponent(name)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(attrs),
+  })
+}
+
 export type OAuthStatus = {
   status: 'connected' | 'expired' | 'disconnected'
   expires_at: string | null
@@ -447,6 +472,46 @@ export function searchGitHubRepos(query: string) {
   const params = new URLSearchParams()
   if (query) params.set('q', query)
   return requestJson<{ repos: GitHubRepo[] }>(`/api/v1/github/repos?${params.toString()}`)
+}
+
+// --- Cost Analytics ---
+
+export type CostRange = '7d' | '30d' | '90d'
+
+export type AnalyticsSummary = {
+  total_cost_cents: number
+  total_sessions: number
+  total_input_tokens: number
+  total_output_tokens: number
+}
+
+export type DailyCostEntry = {
+  date: string
+  workflow: string
+  cost_cents: number
+  sessions: number
+  input_tokens: number
+  output_tokens: number
+}
+
+export type WorkflowBreakdown = {
+  workflow: string
+  cost_cents: number
+  sessions: number
+  input_tokens: number
+  output_tokens: number
+  avg_cost_cents_per_session: number
+}
+
+export type CostAnalyticsResponse = {
+  range: CostRange
+  summary: AnalyticsSummary
+  daily: DailyCostEntry[]
+  by_workflow: WorkflowBreakdown[]
+}
+
+export function getCostAnalytics(range: CostRange) {
+  return requestJson<CostAnalyticsResponse>(`/api/v1/analytics/cost?range=${encodeURIComponent(range)}`)
 }
 
 export function emptyProject(): ProjectBody {

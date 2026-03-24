@@ -467,7 +467,8 @@ defmodule SymphonyElixirWeb.Presenter do
              config_snapshot: session.config_snapshot,
              hook_results: session.hook_results,
              dispatch_source: session.dispatch_source,
-             project_id: session.project_id
+             project_id: session.project_id,
+             error_category: session.error_category
            },
            messages: messages,
            summary: %{
@@ -762,7 +763,8 @@ defmodule SymphonyElixirWeb.Presenter do
       total_tokens: session.total_tokens,
       worker_host: session.worker_host,
       error: session.error,
-      workflow_name: session.workflow_name
+      workflow_name: session.workflow_name,
+      error_category: session.error_category
     }
   end
 

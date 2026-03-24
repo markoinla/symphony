@@ -65,4 +65,71 @@ defmodule SymphonyElixir.Store.SessionTest do
       assert completed.status == "completed"
     end
   end
+
+  describe "create_session/1 with workflow" do
+    test "persists workflow field" do
+      attrs = %{
+        issue_id: "issue-#{System.unique_integer([:positive])}",
+        session_id: "session-#{System.unique_integer([:positive])}",
+        status: "running",
+        started_at: DateTime.utc_now(),
+        workflow: "WORKFLOW"
+      }
+
+      assert {:ok, session} = Store.create_session(attrs)
+      assert session.workflow == "WORKFLOW"
+    end
+
+    test "workflow is nullable" do
+      attrs = %{
+        issue_id: "issue-#{System.unique_integer([:positive])}",
+        session_id: "session-#{System.unique_integer([:positive])}",
+        status: "running",
+        started_at: DateTime.utc_now()
+      }
+
+      assert {:ok, session} = Store.create_session(attrs)
+      assert is_nil(session.workflow)
+    end
+  end
+
+  describe "complete_session/2 with estimated_cost_cents" do
+    test "persists estimated_cost_cents at finalization" do
+      {:ok, session} =
+        Store.create_session(%{
+          issue_id: "issue-#{System.unique_integer([:positive])}",
+          session_id: "session-#{System.unique_integer([:positive])}",
+          status: "running",
+          started_at: DateTime.utc_now(),
+          workflow: "WORKFLOW"
+        })
+
+      {:ok, completed} =
+        Store.complete_session(session.id, %{
+          status: "completed",
+          input_tokens: 500_000,
+          output_tokens: 200_000,
+          estimated_cost_cents: 450
+        })
+
+      assert completed.estimated_cost_cents == 450
+      assert completed.status == "completed"
+      assert completed.workflow == "WORKFLOW"
+    end
+
+    test "estimated_cost_cents is nullable" do
+      {:ok, session} =
+        Store.create_session(%{
+          issue_id: "issue-#{System.unique_integer([:positive])}",
+          session_id: "session-#{System.unique_integer([:positive])}",
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+
+      {:ok, completed} =
+        Store.complete_session(session.id, %{status: "completed"})
+
+      assert is_nil(completed.estimated_cost_cents)
+    end
+  end
 end

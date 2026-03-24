@@ -113,7 +113,8 @@ defmodule SymphonyElixir.SessionLog do
              started_at: DateTime.utc_now(),
              project_id: project_id,
              config_snapshot: config_snapshot,
-             workflow_name: workflow_name
+             workflow_name: workflow_name,
+             workflow: workflow_name
            }) do
         {:ok, session} ->
           session.id
@@ -176,6 +177,7 @@ defmodule SymphonyElixir.SessionLog do
         attrs
         |> Map.put(:status, to_string(status))
         |> Map.put(:ended_at, DateTime.utc_now())
+        |> maybe_put_estimated_cost()
 
       case Store.complete_session(state.db_session_id, completion_attrs) do
         {:ok, _session} ->
@@ -758,6 +760,32 @@ defmodule SymphonyElixir.SessionLog do
     do: inspect(params)
 
   defp extract_failure_reason(_msg), do: "unknown"
+
+  # ── Cost estimation ───────────────────────────────────────────────────
+
+  defp maybe_put_estimated_cost(%{estimated_cost_cents: _} = attrs), do: attrs
+
+  defp maybe_put_estimated_cost(attrs) do
+    input_tokens = Map.get(attrs, :input_tokens, 0)
+    output_tokens = Map.get(attrs, :output_tokens, 0)
+
+    model =
+      try do
+        SymphonyElixir.Config.settings!().claude.model
+      rescue
+        _ -> nil
+      end
+
+    cost =
+      if is_binary(model) do
+        SymphonyElixir.Pricing.cost_cents(model, input_tokens, output_tokens)
+      else
+        Logger.warning("Model name unavailable at session finalization, defaulting estimated_cost_cents to 0")
+        0
+      end
+
+    Map.put(attrs, :estimated_cost_cents, cost)
+  end
 
   # ── Helpers ─────────────────────────────────────────────────────────
 
