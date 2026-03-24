@@ -1,9 +1,15 @@
 defmodule SymphonyElixir.Repo.Migrations.AddWorkflowNameToSessions do
   use Ecto.Migration
 
-  def change do
+  def up do
+    execute """
+    ALTER TABLE sessions ADD COLUMN IF NOT EXISTS workflow_name varchar(255)
+    """
+  end
+
+  def down do
     alter table(:sessions) do
-      add :workflow_name, :string
+      remove :workflow_name
     end
   end
 end

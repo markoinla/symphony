@@ -178,6 +178,7 @@ Sub-issues flow from "Staged" into the normal triage pipeline.
 
 Post a single comment on the parent epic issue summarizing the decomposition:
 
+{% raw %}
 ```markdown
 ## Epic Decomposition
 
@@ -193,6 +194,7 @@ Post a single comment on the parent epic issue summarizing the decomposition:
 
 Sub-issues have been staged for triage. The parent epic remains in Backlog as a coordination container.
 ```
+{% endraw %}
 
 ### Step 9: Mark decomposition complete
 
