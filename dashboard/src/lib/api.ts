@@ -512,6 +512,16 @@ export type SessionStats = {
   worker_health: WorkerHostStats[]
 }
 
+export async function getSessionStats(
+  range: SessionStatsRange,
+  filters?: { project_id?: string; workflow_name?: string },
+): Promise<SessionStats> {
+  const params = new URLSearchParams({ range, ...filters })
+  const res = await fetch(`/api/v1/sessions/stats?${params}`)
+  if (!res.ok) throw new Error(`Stats fetch failed: ${res.status}`)
+  return res.json()
+}
+
 // --- Cost Analytics ---
 
 export type CostRange = '7d' | '30d' | '90d'
