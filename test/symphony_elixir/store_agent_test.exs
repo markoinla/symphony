@@ -54,4 +54,25 @@ defmodule SymphonyElixir.StoreAgentTest do
   test "get_agent_by_name/1 returns nil when not found" do
     assert Store.get_agent_by_name("NONEXISTENT") == nil
   end
+
+  test "update_agent/2 updates enabled field" do
+    {:ok, _} = Store.upsert_agent(%{name: "TOGGLE_AGENT", enabled: true})
+
+    {:ok, updated} = Store.update_agent("TOGGLE_AGENT", %{enabled: false})
+    assert updated.name == "TOGGLE_AGENT"
+    assert updated.enabled == false
+    assert updated.updated_at
+  end
+
+  test "update_agent/2 returns not_found for missing agent" do
+    assert {:error, :not_found} = Store.update_agent("MISSING", %{enabled: false})
+  end
+
+  test "update_agent/2 sets updated_at timestamp" do
+    {:ok, original} = Store.upsert_agent(%{name: "TIMESTAMP_AGENT"})
+    Process.sleep(1_000)
+
+    {:ok, updated} = Store.update_agent("TIMESTAMP_AGENT", %{enabled: false})
+    assert DateTime.compare(updated.updated_at, original.updated_at) == :gt
+  end
 end

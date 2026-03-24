@@ -25,6 +25,20 @@ defmodule SymphonyElixir.Store do
     Repo.get_by(Agent, name: name)
   end
 
+  @spec update_agent(String.t(), map()) :: {:ok, Agent.t()} | {:error, Ecto.Changeset.t() | :not_found}
+  def update_agent(name, attrs) when is_binary(name) and is_map(attrs) do
+    case Repo.get_by(Agent, name: name) do
+      nil ->
+        {:error, :not_found}
+
+      agent ->
+        agent
+        |> Agent.changeset(attrs)
+        |> Ecto.Changeset.put_change(:updated_at, DateTime.truncate(DateTime.utc_now(), :second))
+        |> Repo.update()
+    end
+  end
+
   @spec upsert_agent(map()) :: {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
   def upsert_agent(attrs) when is_map(attrs) do
     now = DateTime.utc_now() |> DateTime.truncate(:second)
