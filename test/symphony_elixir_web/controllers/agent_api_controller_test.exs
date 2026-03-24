@@ -2,6 +2,7 @@ defmodule SymphonyElixirWeb.AgentApiControllerTest do
   use SymphonyElixir.TestSupport
 
   import Phoenix.ConnTest
+  import Plug.Conn
 
   alias SymphonyElixir.Store
 
@@ -82,6 +83,28 @@ defmodule SymphonyElixirWeb.AgentApiControllerTest do
       agent = List.first(loaded_agents)
       assert is_map(agent["config"])
     end
+  end
+
+  test "PATCH /api/v1/agents/:name updates enabled and returns agent" do
+    {:ok, _} = Store.upsert_agent(%{name: "TOGGLE_ME", enabled: true})
+
+    conn =
+      build_conn()
+      |> put_req_header("content-type", "application/json")
+      |> patch("/api/v1/agents/TOGGLE_ME", Jason.encode!(%{enabled: false}))
+
+    assert %{"agent" => agent} = json_response(conn, 200)
+    assert agent["name"] == "TOGGLE_ME"
+    assert agent["enabled"] == false
+  end
+
+  test "PATCH /api/v1/agents/:name returns 404 for unknown agent" do
+    conn =
+      build_conn()
+      |> put_req_header("content-type", "application/json")
+      |> patch("/api/v1/agents/NONEXISTENT", Jason.encode!(%{enabled: false}))
+
+    assert json_response(conn, 404)
   end
 
   test "GET /api/v1/agents redacts sensitive config fields" do

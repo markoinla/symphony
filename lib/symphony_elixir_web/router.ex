@@ -78,6 +78,7 @@ defmodule SymphonyElixirWeb.Router do
     put("/settings/:key", SettingsApiController, :upsert)
     delete("/settings/:key", SettingsApiController, :delete)
     get("/agents", AgentApiController, :index)
+    patch("/agents/:name", AgentApiController, :update)
     get("/linear/projects", LinearApiController, :search_projects)
     get("/github/repos", GithubApiController, :search_repos)
     get("/oauth/linear/authorize", OAuthController, :authorize)

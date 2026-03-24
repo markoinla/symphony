@@ -1,15 +1,17 @@
 defmodule SymphonyElixirWeb.AgentApiController do
   @moduledoc """
-  Read-only JSON API for agent workflows.
+  JSON API for agent workflows.
 
   Merges persisted agent rows with live WorkflowStore data to produce
-  the agents list consumed by the dashboard.
+  the agents list consumed by the dashboard. Supports toggling agent
+  enabled/disabled state via PATCH.
   """
 
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
   alias SymphonyElixir.{Config, Store, WorkflowStore}
+  alias SymphonyElixirWeb.ObservabilityPubSub
 
   @redacted_keys ~w(api_key webhook_signing_secret)
 
@@ -34,6 +36,33 @@ defmodule SymphonyElixirWeb.AgentApiController do
       end)
 
     json(conn, %{agents: agents})
+  end
+
+  @spec update(Conn.t(), map()) :: Conn.t()
+  def update(conn, %{"name" => name} = params) do
+    attrs = Map.take(params, ["enabled"])
+
+    case Store.update_agent(name, atomize_keys(attrs)) do
+      {:ok, agent} ->
+        ObservabilityPubSub.broadcast_agents_changed()
+        workflows = workflow_data()
+        workflow = Map.get(workflows, agent.name)
+        json(conn, %{agent: build_agent_payload(agent.name, agent, workflow)})
+
+      {:error, :not_found} ->
+        conn |> put_status(404) |> json(%{error: %{message: "Agent not found"}})
+
+      {:error, changeset} ->
+        conn |> put_status(422) |> json(%{error: %{message: "Validation failed", details: changeset_errors(changeset)}})
+    end
+  end
+
+  defp atomize_keys(map) do
+    Map.new(map, fn {k, v} -> {String.to_existing_atom(k), v} end)
+  end
+
+  defp changeset_errors(changeset) do
+    Ecto.Changeset.traverse_errors(changeset, fn {msg, _opts} -> msg end)
   end
 
   defp build_agent_payload(name, db_agent, workflow) do
