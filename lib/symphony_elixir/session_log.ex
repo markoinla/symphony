@@ -83,6 +83,14 @@ defmodule SymphonyElixir.SessionLog do
     end
   end
 
+  @spec store_stderr(String.t(), String.t(), String.t()) :: :ok
+  def store_stderr(issue_id, session_id, content) when is_binary(content) do
+    case lookup(issue_id, session_id) do
+      nil -> :ok
+      pid -> GenServer.call(pid, {:store_stderr, content})
+    end
+  end
+
   @spec stop(String.t(), String.t()) :: :ok
   def stop(issue_id, session_id) do
     case lookup(issue_id, session_id) do
@@ -175,6 +183,21 @@ defmodule SymphonyElixir.SessionLog do
 
         {:error, reason} ->
           Logger.warning("Failed to finalize DB session #{state.db_session_id}: #{inspect(reason)}")
+      end
+    end
+
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:store_stderr, content}, _from, state) do
+    if state.db_session_id do
+      case Store.update_session_stderr(state.db_session_id, content) do
+        {:ok, _session} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Failed to store stderr for DB session #{state.db_session_id}: #{inspect(reason)}")
       end
     end
 

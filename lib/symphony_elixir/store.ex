@@ -209,6 +209,15 @@ defmodule SymphonyElixir.Store do
     end
   end
 
+  @spec update_session_stderr(integer(), String.t()) ::
+          {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t() | :not_found}
+  def update_session_stderr(db_session_id, stderr) when is_binary(stderr) do
+    case Repo.get(Session, db_session_id) do
+      nil -> {:error, :not_found}
+      session -> session |> Ecto.Changeset.change(stderr: stderr) |> Repo.update()
+    end
+  end
+
   @spec complete_session_by_engine_session_id(String.t(), map()) ::
           {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t() | :not_found}
   def complete_session_by_engine_session_id(session_id, attrs) do

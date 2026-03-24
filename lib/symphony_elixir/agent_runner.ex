@@ -350,7 +350,7 @@ defmodule SymphonyElixir.AgentRunner do
   defp finalize_session_stderr(session, %Issue{id: issue_id}, session_id)
        when is_binary(issue_id) and is_binary(session_id) do
     with {:ok, content} when is_binary(content) <- Engine.engine_module().read_stderr(session) do
-      SessionLog.finalize(issue_id, session_id, :completed, %{stderr: content})
+      SessionLog.store_stderr(issue_id, session_id, content)
     end
   catch
     :exit, _ -> :ok
