@@ -73,6 +73,7 @@ defmodule SymphonyElixirWeb.Router do
     get("/projects/:id", ProjectApiController, :show)
     put("/projects/:id", ProjectApiController, :update)
     delete("/projects/:id", ProjectApiController, :delete)
+    get("/analytics/cost", AnalyticsController, :cost)
     get("/settings", SettingsApiController, :index)
     put("/settings/:key", SettingsApiController, :upsert)
     delete("/settings/:key", SettingsApiController, :delete)
