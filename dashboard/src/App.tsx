@@ -17,6 +17,7 @@ import {
   FolderKanban,
   Settings,
   Bot,
+  BarChart2,
   LogOut,
   Sun,
   Moon,
@@ -42,6 +43,7 @@ import {
   projectsRoute,
   settingsRoute,
   agentsRoute,
+  analyticsRoute,
   loginRoute,
 } from './router'
 
@@ -51,6 +53,7 @@ import { HistoryView } from './pages/history'
 import { ProjectsView } from './pages/projects'
 import { SettingsView } from './pages/settings'
 import { AgentsView } from './pages/agents'
+import { AnalyticsView } from './pages/analytics'
 import { LoginView } from './pages/login'
 
 const queryClient = new QueryClient({
@@ -80,6 +83,7 @@ historyRoute.update({ component: HistoryView })
 projectsRoute.update({ component: ProjectsView })
 settingsRoute.update({ component: SettingsView })
 agentsRoute.update({ component: AgentsView })
+analyticsRoute.update({ component: AnalyticsView })
 loginRoute.update({ component: LoginView })
 
 export default function App() {
@@ -96,6 +100,7 @@ const navItems = [
   { to: '/projects' as const, label: 'Projects', icon: FolderKanban, match: (p: string) => p.startsWith('/projects') },
   { to: '/settings' as const, label: 'Settings', icon: Settings, match: (p: string) => p.startsWith('/settings') },
   { to: '/agents' as const, label: 'Agents', icon: Bot, match: (p: string) => p.startsWith('/agents') },
+  { to: '/analytics' as const, label: 'Analytics', icon: BarChart2, match: (p: string) => p.startsWith('/analytics') },
 ]
 
 function RootLayout() {

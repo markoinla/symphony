@@ -467,6 +467,46 @@ export function searchGitHubRepos(query: string) {
   return requestJson<{ repos: GitHubRepo[] }>(`/api/v1/github/repos?${params.toString()}`)
 }
 
+// --- Cost Analytics ---
+
+export type CostRange = '7d' | '30d' | '90d'
+
+export type AnalyticsSummary = {
+  total_cost_cents: number
+  total_sessions: number
+  total_input_tokens: number
+  total_output_tokens: number
+}
+
+export type DailyCostEntry = {
+  date: string
+  workflow: string
+  cost_cents: number
+  sessions: number
+  input_tokens: number
+  output_tokens: number
+}
+
+export type WorkflowBreakdown = {
+  workflow: string
+  cost_cents: number
+  sessions: number
+  input_tokens: number
+  output_tokens: number
+  avg_cost_cents_per_session: number
+}
+
+export type CostAnalyticsResponse = {
+  range: CostRange
+  summary: AnalyticsSummary
+  daily: DailyCostEntry[]
+  by_workflow: WorkflowBreakdown[]
+}
+
+export function getCostAnalytics(range: CostRange) {
+  return requestJson<CostAnalyticsResponse>(`/api/v1/analytics/cost?range=${encodeURIComponent(range)}`)
+}
+
 export function emptyProject(): ProjectBody {
   return {
     name: '',
