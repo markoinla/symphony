@@ -10,6 +10,7 @@ defmodule SymphonyElixir.Orchestrator do
   alias SymphonyElixir.{
     AgentRunner,
     AgentSession,
+    Codex.StderrBuffer,
     Config,
     DashboardLinks,
     Settings,
@@ -301,6 +302,7 @@ defmodule SymphonyElixir.Orchestrator do
           running_entry
           |> maybe_put_runtime_value(:worker_host, runtime_info[:worker_host])
           |> maybe_put_runtime_value(:workspace_path, runtime_info[:workspace_path])
+          |> maybe_put_runtime_value(:stderr_file, runtime_info[:stderr_file])
 
         notify_dashboard()
         {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
@@ -1712,6 +1714,8 @@ defmodule SymphonyElixir.Orchestrator do
       error = if reason != :normal, do: inspect(reason)
       hook_results = Map.get(running_entry, :hook_results)
 
+      stderr = read_and_cleanup_stderr(running_entry)
+
       completion_attrs = %{
         status: status,
         issue_identifier: running_entry.identifier,
@@ -1722,7 +1726,8 @@ defmodule SymphonyElixir.Orchestrator do
         total_tokens: Map.get(running_entry, :engine_total_tokens, 0),
         worker_host: Map.get(running_entry, :worker_host),
         workspace_path: Map.get(running_entry, :workspace_path),
-        error: error
+        error: error,
+        stderr: stderr
       }
 
       completion_attrs =
@@ -1748,6 +1753,19 @@ defmodule SymphonyElixir.Orchestrator do
       |> Map.take([:hook_name, :status, :output])
       |> Map.new(fn {k, v} -> {to_string(k), v} end)
     end)
+  end
+
+  defp read_and_cleanup_stderr(running_entry) do
+    case Map.get(running_entry, :stderr_file) do
+      nil ->
+        nil
+
+      stderr_file ->
+        case StderrBuffer.read_and_cleanup(stderr_file) do
+          {:ok, content} -> content
+          _ -> nil
+        end
+    end
   end
 
   defp refresh_runtime_config(%State{} = state) do
