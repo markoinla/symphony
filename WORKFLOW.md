@@ -416,7 +416,15 @@ Use this only when completion is blocked by missing required tools or missing au
 2.  If current issue state is `Todo`, move it to `In Progress`; otherwise leave the current state unchanged.
 3.  Load the existing workpad comment and treat it as the active execution checklist.
     - Edit it liberally whenever reality changes (scope, risks, validation approach, discovered tasks).
-4.  **Turn scoping:** each turn, pick 1–3 unchecked plan items to focus on. Complete them, check them off in the workpad, and commit progress before moving to the next batch. Do not attempt the entire plan in a single turn — small, verified increments are preferred. If the turn is running long or approaching tool/context limits, update the workpad with current status and yield; the next turn will resume from the workpad state.
+4.  **Turn scoping — ONE item per turn (mandatory):**
+    Each turn is a single CLI invocation. When you end your response, the orchestrator will re-invoke you for the next turn. This means:
+    - Pick **one** unchecked plan item. Only exception: trivially small items (config tweaks, renaming) that take under a minute can be batched.
+    - Implement it and verify it compiles/works.
+    - Commit the changes.
+    - Check the item off in the workpad and update the workpad comment on Linear (via comment update tool).
+    - Add a `### Handoff notes` section in the workpad with anything the next turn needs: file paths modified, patterns discovered, conventions to follow, test commands that worked, gotchas encountered, and decisions made. The next turn starts with a blank context — the workpad is its only briefing.
+    - **Then end your response. Do not start the next plan item.** The orchestrator will call you again with fresh context, and you will read the workpad to pick up where you left off.
+    - If the turn is running long or approaching tool/context limits, commit what you have, update the workpad with current status and handoff notes, and end your response.
 5.  Implement against the hierarchical TODOs and keep the comment current:
     - Check off completed items.
     - Add newly discovered items in the appropriate section.

@@ -82,7 +82,22 @@ defmodule SymphonyElixir.MCP.LinearTools do
 
   defp execute_graphql(arguments, opts) do
     query = Map.get(arguments, "query", "")
-    variables = Map.get(arguments, "variables", %{})
+    raw_variables = Map.get(arguments, "variables", %{})
+
+    variables =
+      case raw_variables do
+        v when is_binary(v) ->
+          case Jason.decode(v) do
+            {:ok, decoded} -> decoded
+            {:error, _} -> %{}
+          end
+
+        v when is_map(v) ->
+          v
+
+        _ ->
+          %{}
+      end
 
     if String.trim(query) == "" do
       {:error, "`linear_graphql` requires a non-empty `query` string."}
@@ -233,8 +248,9 @@ defmodule SymphonyElixir.MCP.LinearTools do
       {:ok, {{_, status, _}, _headers, response_body}} when status in 200..299 ->
         {:ok, List.to_string(response_body)}
 
-      {:ok, {{_, status, _}, _headers, _response_body}} ->
-        {:error, "Linear API returned HTTP #{status}."}
+      {:ok, {{_, status, _}, _headers, response_body}} ->
+        detail = List.to_string(response_body)
+        {:error, "Linear API returned HTTP #{status}. Body: #{detail}"}
 
       {:error, reason} ->
         {:error, "Linear API request failed: #{inspect(reason)}"}
