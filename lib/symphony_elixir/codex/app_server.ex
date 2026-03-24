@@ -6,7 +6,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   @behaviour SymphonyElixir.Engine
 
   require Logger
-  alias SymphonyElixir.{Codex.DynamicTool, Config, PathSafety, SSH}
+  alias SymphonyElixir.{Codex.DynamicTool, Codex.StderrBuffer, Config, PathSafety, SSH}
 
   @initialize_id 1
   @thread_start_id 2
@@ -24,7 +24,8 @@ defmodule SymphonyElixir.Codex.AppServer do
           turn_sandbox_policy: map(),
           thread_id: String.t(),
           workspace: Path.t(),
-          worker_host: String.t() | nil
+          worker_host: String.t() | nil,
+          stderr_file: Path.t() | nil
         }
 
   @spec run(Path.t(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
@@ -43,8 +44,10 @@ defmodule SymphonyElixir.Codex.AppServer do
   def start_session(workspace, opts \\ []) do
     worker_host = Keyword.get(opts, :worker_host)
 
+    stderr_file = if is_nil(worker_host), do: StderrBuffer.generate_path()
+
     with {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host),
-         {:ok, port} <- start_port(expanded_workspace, worker_host) do
+         {:ok, port} <- start_port(expanded_workspace, worker_host, stderr_file) do
       metadata = port_metadata(port, worker_host)
 
       with {:ok, session_policies} <- session_policies(expanded_workspace, worker_host),
@@ -59,7 +62,8 @@ defmodule SymphonyElixir.Codex.AppServer do
            turn_sandbox_policy: session_policies.turn_sandbox_policy,
            thread_id: thread_id,
            workspace: expanded_workspace,
-           worker_host: worker_host
+           worker_host: worker_host,
+           stderr_file: stderr_file
          }}
       else
         {:error, reason} ->
@@ -144,6 +148,11 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   @impl SymphonyElixir.Engine
+  @spec read_stderr(session()) :: {:ok, String.t() | nil}
+  def read_stderr(%{stderr_file: stderr_file}), do: StderrBuffer.read(stderr_file)
+  def read_stderr(_session), do: {:ok, nil}
+
+  @impl SymphonyElixir.Engine
   @spec stop_session(session()) :: :ok
   def stop_session(%{port: port}) when is_port(port) do
     stop_port(port)
@@ -191,7 +200,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp start_port(workspace, nil) do
+  defp start_port(workspace, nil, stderr_file) do
     executable = System.find_executable("bash")
 
     if is_nil(executable) do
@@ -200,14 +209,20 @@ defmodule SymphonyElixir.Codex.AppServer do
       env = project_env_vars()
       codex_command = namespace_wrap(Config.settings!().codex.command)
 
+      command_with_stderr =
+        if stderr_file do
+          "#{codex_command} 2>#{shell_escape(stderr_file)}"
+        else
+          codex_command
+        end
+
       port =
         Port.open(
           {:spawn_executable, String.to_charlist(executable)},
           [
             :binary,
             :exit_status,
-            :stderr_to_stdout,
-            args: [~c"-c", String.to_charlist(codex_command)],
+            args: [~c"-c", String.to_charlist(command_with_stderr)],
             cd: String.to_charlist(workspace),
             env: Enum.map(env, fn {k, v} -> {String.to_charlist(k), String.to_charlist(v)} end),
             line: @port_line_bytes
@@ -218,7 +233,9 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp start_port(workspace, worker_host) when is_binary(worker_host) do
+  # TODO(SYM-168): Capture stderr separately for remote workers.
+  # Currently SSH sessions still merge stderr to stdout via SSH.start_port.
+  defp start_port(workspace, worker_host, _stderr_file) when is_binary(worker_host) do
     remote_command = remote_launch_command(workspace)
     SSH.start_port(worker_host, remote_command, line: @port_line_bytes)
   end

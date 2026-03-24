@@ -144,6 +144,14 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp send_hook_results(_recipient, _issue, _results), do: :ok
 
+  defp send_session_stderr_info(recipient, %Issue{id: issue_id}, stderr_file)
+       when is_binary(issue_id) and is_pid(recipient) and is_binary(stderr_file) do
+    send(recipient, {:worker_runtime_info, issue_id, %{stderr_file: stderr_file}})
+    :ok
+  end
+
+  defp send_session_stderr_info(_recipient, _issue, _stderr_file), do: :ok
+
   defp send_comment_watch_update(recipient, %Issue{id: issue_id}, comment_watch_state)
        when is_binary(issue_id) and is_pid(recipient) do
     send(recipient, {:comment_watch_state, issue_id, comment_watch_state})
@@ -266,6 +274,7 @@ defmodule SymphonyElixir.AgentRunner do
       session_id = session[:session_id] || "session_#{System.unique_integer([:positive])}"
       start_session_log(issue, session_id, project_id)
       send_comment_watch_update(engine_update_recipient, issue, comment_watch_state)
+      send_session_stderr_info(engine_update_recipient, issue, session[:stderr_file])
 
       try do
         do_run_engine_turns(
@@ -282,6 +291,7 @@ defmodule SymphonyElixir.AgentRunner do
           []
         )
       after
+        finalize_session_stderr(session, issue, session_id)
         stop_session_log(issue, session_id)
         Engine.engine_module().stop_session(session)
       end
@@ -336,6 +346,17 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp stop_session_log(_issue, _session_id), do: :ok
+
+  defp finalize_session_stderr(session, %Issue{id: issue_id}, session_id)
+       when is_binary(issue_id) and is_binary(session_id) do
+    with {:ok, content} when is_binary(content) <- Engine.engine_module().read_stderr(session) do
+      SessionLog.finalize(issue_id, session_id, :completed, %{stderr: content})
+    end
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp finalize_session_stderr(_session, _issue, _session_id), do: :ok
 
   # credo:disable-for-next-line
   defp do_run_engine_turns(
