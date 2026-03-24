@@ -5,6 +5,7 @@ import { Bot, ChevronRight } from 'lucide-react'
 
 import { cn } from '../lib/utils'
 import { type AgentWorkflow, getAgents, updateAgent } from '../lib/api'
+import { useDashboardStream } from '../lib/streams'
 import {
   Badge,
   Button,
@@ -151,14 +152,21 @@ function AgentCard({
 // ---------------------------------------------------------------------------
 
 export function AgentsView() {
+  const queryClient = useQueryClient()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [selectedAgent, setSelectedAgent] = useState<AgentWorkflow | null>(null)
-  const queryClient = useQueryClient()
+
+  useDashboardStream(
+    () => {},
+    true,
+    () => {
+      void queryClient.invalidateQueries({ queryKey: ['agents'] })
+    },
+  )
 
   const { data, isLoading } = useQuery({
     queryKey: ['agents'],
     queryFn: getAgents,
-    refetchInterval: 30_000,
   })
 
   const toggleMutation = useMutation({
