@@ -18,10 +18,15 @@ polling:
 hooks:
   timeout_ms: 300000
   after_create: |
-    if [ -n "$GITHUB_BRANCH" ]; then
-      git clone --depth 1 --branch "$GITHUB_BRANCH" "https://github.com/$GITHUB_REPO" .
+    if [ -n "$GITHUB_TOKEN" ]; then
+      CLONE_URL="https://x-access-token:${GITHUB_TOKEN}@github.com/$GITHUB_REPO"
     else
-      git clone --depth 1 "https://github.com/$GITHUB_REPO" .
+      CLONE_URL="https://github.com/$GITHUB_REPO"
+    fi
+    if [ -n "$GITHUB_BRANCH" ]; then
+      git clone --depth 1 --branch "$GITHUB_BRANCH" "$CLONE_URL" .
+    else
+      git clone --depth 1 "$CLONE_URL" .
     fi
   before_remove: |
     echo "Cleaning up workspace"

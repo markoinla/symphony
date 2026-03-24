@@ -4,7 +4,7 @@ defmodule SymphonyElixir.Workspace do
   """
 
   require Logger
-  alias SymphonyElixir.{Config, PathSafety, SSH}
+  alias SymphonyElixir.{Config, GitHub, PathSafety, SSH}
 
   @remote_workspace_marker "__SYMPHONY_WORKSPACE__"
 
@@ -392,6 +392,15 @@ defmodule SymphonyElixir.Workspace do
       case project do
         %{github_branch: branch} when is_binary(branch) and branch != "" ->
           base ++ [{"GITHUB_BRANCH", branch}]
+
+        _ ->
+          base
+      end
+
+    base =
+      case GitHub.OAuth.current_access_token() do
+        token when is_binary(token) and token != "" ->
+          base ++ [{"GITHUB_TOKEN", token}]
 
         _ ->
           base
