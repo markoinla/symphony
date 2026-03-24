@@ -414,6 +414,71 @@ defmodule SymphonyElixirWeb.Presenter do
   defp maybe_put_workflow_name_payload(payload, nil), do: payload
   defp maybe_put_workflow_name_payload(payload, workflow_name), do: Map.put(payload, :workflow_name, workflow_name)
 
+  @spec session_debug_payload(integer()) :: {:ok, map()} | {:error, :not_found}
+  def session_debug_payload(db_session_id) do
+    case Store.get_session_debug(db_session_id) do
+      nil ->
+        {:error, :not_found}
+
+      session ->
+        messages =
+          Enum.map(session.messages, fn m ->
+            %{
+              seq: m.seq,
+              type: m.type,
+              content: m.content,
+              metadata: decode_metadata(m.metadata),
+              timestamp: iso8601(m.timestamp)
+            }
+          end)
+
+        error_message_count =
+          Enum.count(session.messages, fn m -> m.type == "error" end)
+
+        duration_seconds =
+          case {session.started_at, session.ended_at} do
+            {%DateTime{} = started, %DateTime{} = ended} ->
+              DateTime.diff(ended, started, :second)
+
+            _ ->
+              nil
+          end
+
+        {:ok,
+         %{
+           session: %{
+             id: session.id,
+             issue_id: session.issue_id,
+             issue_identifier: session.issue_identifier,
+             issue_title: session.issue_title,
+             session_id: session.session_id,
+             workflow_name: session.workflow_name,
+             status: session.status,
+             error: session.error,
+             stderr: session.stderr,
+             started_at: iso8601(session.started_at),
+             ended_at: iso8601(session.ended_at),
+             turn_count: session.turn_count,
+             input_tokens: session.input_tokens,
+             output_tokens: session.output_tokens,
+             total_tokens: session.total_tokens,
+             worker_host: session.worker_host,
+             workspace_path: session.workspace_path,
+             config_snapshot: session.config_snapshot,
+             hook_results: session.hook_results,
+             dispatch_source: session.dispatch_source,
+             project_id: session.project_id
+           },
+           messages: messages,
+           summary: %{
+             message_count: length(session.messages),
+             error_message_count: error_message_count,
+             duration_seconds: duration_seconds
+           }
+         }}
+    end
+  end
+
   @spec history_payload(keyword()) :: map()
   def history_payload(opts \\ []) do
     sessions = Store.list_sessions(Keyword.take(opts, [:limit, :offset, :issue_identifier, :status, :project_id, :workflow_name]))

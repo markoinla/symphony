@@ -67,6 +67,7 @@ defmodule SymphonyElixirWeb.Router do
     get("/state", ObservabilityApiController, :state)
     post("/refresh", ObservabilityApiController, :refresh)
     get("/sessions", ObservabilityApiController, :sessions)
+    get("/sessions/:id/debug", ObservabilityApiController, :session_debug)
     get("/projects", ProjectApiController, :index)
     post("/projects", ProjectApiController, :create)
     get("/projects/:id", ProjectApiController, :show)
@@ -86,6 +87,7 @@ defmodule SymphonyElixirWeb.Router do
 
     match(:*, "/state", FallbackController, :method_not_allowed)
     match(:*, "/refresh", FallbackController, :method_not_allowed)
+    match(:*, "/sessions/:id/debug", FallbackController, :method_not_allowed)
     match(:*, "/sessions", FallbackController, :method_not_allowed)
     match(:*, "/projects", FallbackController, :method_not_allowed)
     match(:*, "/projects/:id", FallbackController, :method_not_allowed)

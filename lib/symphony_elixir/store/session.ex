@@ -25,6 +25,7 @@ defmodule SymphonyElixir.Store.Session do
     field(:agent_session_id, :string)
     field(:dispatch_source, :string, default: "orchestrator")
     field(:hook_results, {:array, :map})
+    field(:stderr, :string)
     field(:config_snapshot, :map)
     field(:workflow_name, :string)
 
@@ -33,7 +34,7 @@ defmodule SymphonyElixir.Store.Session do
   end
 
   @required_fields ~w(issue_id session_id status started_at)a
-  @optional_fields ~w(issue_identifier issue_title ended_at turn_count input_tokens output_tokens total_tokens worker_host workspace_path error project_id agent_session_id dispatch_source hook_results config_snapshot workflow_name)a
+  @optional_fields ~w(issue_identifier issue_title ended_at turn_count input_tokens output_tokens total_tokens worker_host workspace_path error project_id agent_session_id dispatch_source hook_results config_snapshot workflow_name stderr)a
 
   @spec changeset(%__MODULE__{} | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
   def changeset(session, attrs) do
