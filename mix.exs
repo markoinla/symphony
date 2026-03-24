@@ -55,6 +55,7 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixirWeb.ErrorJSON,
           SymphonyElixirWeb.AuthController,
           SymphonyElixirWeb.ObservabilityApiController,
+          SymphonyElixirWeb.Plugs.RequestLogger,
           SymphonyElixirWeb.Plugs.RequireAuth,
           SymphonyElixirWeb.ProjectApiController,
           SymphonyElixirWeb.Presenter,

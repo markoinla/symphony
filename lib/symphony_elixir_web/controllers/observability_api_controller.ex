@@ -5,6 +5,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   use Phoenix.Controller, formats: [:json]
 
+  alias Ecto.Adapters.SQL
   alias Plug.Conn
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
@@ -56,7 +57,29 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   @spec healthz(Conn.t(), map()) :: Conn.t()
   def healthz(conn, _params) do
-    json(conn, %{status: "ok"})
+    db_status = check_database()
+
+    components = %{app: "ok", database: db_status}
+    all_healthy = db_status == "ok"
+
+    status_code = if all_healthy, do: 200, else: 503
+    overall = if all_healthy, do: "ok", else: "degraded"
+
+    conn
+    |> put_status(status_code)
+    |> json(%{status: overall, components: components})
+  end
+
+  @git_sha (case System.cmd("git", ["rev-parse", "--short", "HEAD"], stderr_to_stdout: true) do
+              {sha, 0} -> String.trim(sha)
+              _ -> "unknown"
+            end)
+
+  @app_version Mix.Project.config()[:version]
+
+  @spec version(Conn.t(), map()) :: Conn.t()
+  def version(conn, _params) do
+    json(conn, %{version: @app_version, git_sha: @git_sha})
   end
 
   @spec method_not_allowed(Conn.t(), map()) :: Conn.t()
@@ -67,6 +90,15 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   @spec not_found(Conn.t(), map()) :: Conn.t()
   def not_found(conn, _params) do
     error_response(conn, 404, "not_found", "Route not found")
+  end
+
+  defp check_database do
+    case SQL.query(SymphonyElixir.Repo, "SELECT 1", []) do
+      {:ok, _result} -> "ok"
+      {:error, _reason} -> "degraded"
+    end
+  rescue
+    _ -> "degraded"
   end
 
   defp error_response(conn, status, code, message) do

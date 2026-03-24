@@ -7,10 +7,12 @@ defmodule SymphonyElixirWeb.Router do
 
   pipeline :api do
     plug(:accepts, ["json"])
+    plug(SymphonyElixirWeb.Plugs.RequestLogger)
   end
 
   pipeline :authenticated_api do
     plug(:accepts, ["json"])
+    plug(SymphonyElixirWeb.Plugs.RequestLogger)
     plug(SymphonyElixirWeb.Plugs.RequireAuth)
   end
 
@@ -22,10 +24,11 @@ defmodule SymphonyElixirWeb.Router do
     plug(SymphonyElixirWeb.Plugs.RequireAuth)
   end
 
-  # Public: health check (no auth required)
+  # Public: health check and version (no auth required)
   scope "/", SymphonyElixirWeb do
     pipe_through(:api)
     get("/healthz", ObservabilityApiController, :healthz)
+    get("/api/v1/version", ObservabilityApiController, :version)
   end
 
   # Public: auth endpoints (no auth required)

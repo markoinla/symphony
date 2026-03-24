@@ -219,6 +219,34 @@ The observability UI now runs as a React SPA on a minimal Phoenix stack:
 - JSON API endpoints power dashboard, history, projects, settings, and session data under `/api/v1/*`
 - Bandit serves both the API and the built SPA assets
 
+### Public endpoints (no auth required)
+
+**`GET /healthz`** — Health check with component-level statuses.
+
+Returns HTTP 200 when all components are healthy, 503 when any are degraded:
+
+```json
+{
+  "status": "ok",
+  "components": {
+    "app": "ok",
+    "database": "ok"
+  }
+}
+```
+
+When a component is unhealthy, `status` changes to `"degraded"` and the failing
+component shows `"degraded"` instead of `"ok"`.
+
+**`GET /api/v1/version`** — Application version and build metadata.
+
+```json
+{
+  "version": "0.1.0",
+  "git_sha": "45a9045"
+}
+```
+
 Development:
 
 ```bash
