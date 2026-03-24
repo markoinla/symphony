@@ -170,7 +170,8 @@ After posting the review comment and optionally updating the issue state, stop. 
 
 ## Linear GraphQL reference
 
-Use these exact queries and mutations with the Linear MCP tools.
+Use these exact queries and mutations with the Linear MCP tools. For creating and
+updating comments, prefer the dedicated comment tools over raw GraphQL when available.
 
 ### Resolve state ID (required before updating state)
 
@@ -198,7 +199,13 @@ mutation UpdateIssueState($issueId: String!, $stateId: String!) {
 }
 ```
 
+Variables: `{"issueId": "<issue-uuid>", "stateId": "<state-uuid-from-resolve>"}`
+
 ### Create comment
+
+Prefer the dedicated `linear_create_comment` tool (which accepts `issue_id` and `body`
+directly) over this raw GraphQL mutation. Use GraphQL only when the dedicated tool is
+unavailable.
 
 ```graphql
 mutation CreateComment($issueId: String!, $body: String!) {
@@ -208,6 +215,8 @@ mutation CreateComment($issueId: String!, $body: String!) {
   }
 }
 ```
+
+Variables: `{"issueId": "<issue-uuid>", "body": "Comment text here"}`
 
 ### Fetch issue details (if needed)
 
@@ -239,6 +248,7 @@ query GetIssue($id: String!) {
 - `issue(id:)` takes the **UUID**, not the identifier like `"MT-32"`. The UUID is provided in the issue context above as `ID (UUID)`.
 - State updates are a **two-step** process: resolve state ID first, then update.
 - All mutations return `{ success }` — check this field.
+- Always pass `variables` as a separate parameter when using `$variable` syntax in queries/mutations. Inlining values into the query string or omitting `variables` causes HTTP 400 errors.
 
 ## Guardrails
 

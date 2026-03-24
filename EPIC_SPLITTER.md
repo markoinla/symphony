@@ -146,6 +146,8 @@ mutation CreateBlockingRelation($issueId: String!, $relatedIssueId: String!) {
 }
 ```
 
+Variables: `{"issueId": "<blocking-issue-uuid>", "relatedIssueId": "<dependent-issue-uuid>"}`
+
 2. Set `issueId` to the blocking issue (must be done first) and `relatedIssueId` to the dependent issue (must wait).
 
 ### Step 7: Move sub-issues to Todo
@@ -162,6 +164,8 @@ query ResolveTodoState($teamId: String!) {
 }
 ```
 
+Variables: `{"teamId": "<team-uuid>"}`
+
 2. For each created sub-issue, use `issueUpdate` to move it to "Todo":
 
 ```graphql
@@ -171,6 +175,8 @@ mutation MoveToTodo($issueId: String!, $stateId: String!) {
   }
 }
 ```
+
+Variables: `{"issueId": "<sub-issue-uuid>", "stateId": "<todo-state-uuid>"}`
 
 Sub-issues flow from "Todo" into the normal pipeline.
 
