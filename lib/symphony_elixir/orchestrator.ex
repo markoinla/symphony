@@ -192,8 +192,9 @@ defmodule SymphonyElixir.Orchestrator do
           input_tokens: input_tokens,
           output_tokens: output_tokens,
           total_tokens: Map.get(running_entry, :engine_total_tokens, 0),
+          worker_host: Map.get(running_entry, :worker_host) || "local",
           estimated_cost_cents: estimated_cost_cents,
-          error_category: nil
+          error_category: "infra"
         })
       end
     end)
@@ -1744,7 +1745,7 @@ defmodule SymphonyElixir.Orchestrator do
         input_tokens: input_tokens,
         output_tokens: output_tokens,
         total_tokens: Map.get(running_entry, :engine_total_tokens, 0),
-        worker_host: Map.get(running_entry, :worker_host),
+        worker_host: Map.get(running_entry, :worker_host) || "local",
         workspace_path: Map.get(running_entry, :workspace_path),
         error: error,
         stderr: stderr,
@@ -1759,9 +1760,7 @@ defmodule SymphonyElixir.Orchestrator do
           Map.put(completion_attrs, :hook_results, hook_results_to_map(hook_results))
         end
 
-      Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-        Store.complete_session_by_engine_session_id(session_id, completion_attrs)
-      end)
+      Store.complete_session_by_engine_session_id(session_id, completion_attrs)
     end
 
     :ok

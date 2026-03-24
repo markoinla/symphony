@@ -172,11 +172,7 @@ defmodule SymphonyElixir.Claude.AppServer do
        total_cost_usd: Map.get(msg, "total_cost_usd"),
        duration_ms: Map.get(msg, "duration_ms"),
        num_turns: Map.get(msg, "num_turns"),
-       usage: %{
-         input_tokens: Map.get(usage, "input_tokens", 0),
-         output_tokens: Map.get(usage, "output_tokens", 0),
-         total_tokens: Map.get(usage, "input_tokens", 0) + Map.get(usage, "output_tokens", 0)
-       }
+       usage: EventTranslator.normalize_usage(usage)
      }}
   end
 

@@ -174,6 +174,7 @@ export function ReliabilityView() {
               <thead>
                 <tr className="border-b border-th-border text-th-text-3">
                   <th className="whitespace-nowrap py-2 pr-4 font-medium">Issue</th>
+                  <th className="whitespace-nowrap py-2 pr-4 font-medium">Status</th>
                   <th className="whitespace-nowrap py-2 pr-4 font-medium">Workflow</th>
                   <th className="whitespace-nowrap py-2 pr-4 font-medium">Category</th>
                   <th className="whitespace-nowrap py-2 pr-4 font-medium">Error</th>
@@ -254,6 +255,9 @@ function DeadLetterRow({ session }: { session: DeadLetterSession }) {
   return (
     <tr className="border-b border-th-border/50 text-th-text-2">
       <td className="py-2.5 pr-4 font-medium text-th-text-1">{issueCell}</td>
+      <td className="py-2.5 pr-4">
+        <Badge tone={session.status === 'failed' ? 'danger' : 'neutral'}>{session.status}</Badge>
+      </td>
       <td className="py-2.5 pr-4">{session.workflow_name ?? '—'}</td>
       <td className="py-2.5 pr-4">
         {session.error_category ? (

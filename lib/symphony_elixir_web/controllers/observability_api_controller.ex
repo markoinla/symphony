@@ -66,6 +66,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
             id: dl.id,
             issue_identifier: dl.issue_identifier,
             issue_title: dl.issue_title,
+            status: dl.status,
             workflow_name: dl.workflow_name,
             error_category: dl.error_category,
             error: dl.error,
