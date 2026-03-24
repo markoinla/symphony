@@ -70,9 +70,13 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
     |> json(%{status: overall, components: components})
   end
 
-  @git_sha (case System.cmd("git", ["rev-parse", "--short", "HEAD"], stderr_to_stdout: true) do
-              {sha, 0} -> String.trim(sha)
-              _ -> "unknown"
+  @git_sha (if System.find_executable("git") do
+              case System.cmd("git", ["rev-parse", "--short", "HEAD"], stderr_to_stdout: true) do
+                {sha, 0} -> String.trim(sha)
+                _ -> "unknown"
+              end
+            else
+              "unknown"
             end)
 
   @app_version Mix.Project.config()[:version]
