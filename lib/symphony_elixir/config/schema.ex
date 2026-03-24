@@ -148,6 +148,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:max_concurrent_agents, :integer, default: 10)
       field(:max_turns, :integer, default: 20)
       field(:max_retry_backoff_ms, :integer, default: 300_000)
+      field(:max_failure_retries, :integer, default: 5)
       field(:max_concurrent_agents_by_state, :map, default: %{})
       field(:max_continuations, :integer, default: 10)
     end
@@ -161,6 +162,7 @@ defmodule SymphonyElixir.Config.Schema do
           :max_concurrent_agents,
           :max_turns,
           :max_retry_backoff_ms,
+          :max_failure_retries,
           :max_concurrent_agents_by_state,
           :max_continuations
         ],
@@ -169,6 +171,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:max_concurrent_agents, greater_than: 0)
       |> validate_number(:max_turns, greater_than: 0)
       |> validate_number(:max_retry_backoff_ms, greater_than: 0)
+      |> validate_number(:max_failure_retries, greater_than: 0)
       |> validate_number(:max_continuations, greater_than_or_equal_to: 0)
       |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)
       |> Schema.validate_state_limits(:max_concurrent_agents_by_state)

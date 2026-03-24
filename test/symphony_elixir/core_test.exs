@@ -591,6 +591,33 @@ defmodule SymphonyElixir.CoreTest do
     assert Orchestrator.should_dispatch_issue_for_test(changed_state_issue, state)
   end
 
+  test "issue is re-dispatchable after completed entry is cleared" do
+    issue_id = "issue-completed-cleared"
+
+    state_with_completed = %Orchestrator.State{
+      max_concurrent_agents: 2,
+      completed: %{issue_id => %{state: "In Progress", count: 11}},
+      engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-601",
+      state: "In Progress",
+      title: "Stuck issue",
+      description: "Should be re-dispatchable after completed entry cleared",
+      labels: []
+    }
+
+    # Blocked while completed entry exists for same state
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state_with_completed)
+
+    # After clearing the completed entry (as release_issue_claim now does), dispatch is allowed
+    state_cleared = %{state_with_completed | completed: Map.delete(state_with_completed.completed, issue_id)}
+    assert Orchestrator.should_dispatch_issue_for_test(issue, state_cleared)
+  end
+
   test "DB issue claim blocks dispatch from another orchestrator" do
     issue_id = "issue-cross-orch-claim"
 
