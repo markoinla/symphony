@@ -43,9 +43,11 @@ defmodule SymphonyElixirWeb.GithubApiController do
     end
   end
 
-  defp filter_repos(repos, ""), do: Enum.take(repos, 20)
+  @doc false
+  @spec filter_repos(list(map()), String.t()) :: list(map())
+  def filter_repos(repos, ""), do: Enum.take(repos, 20)
 
-  defp filter_repos(repos, query) do
+  def filter_repos(repos, query) do
     words = query |> String.split(~r/\s+/, trim: true)
 
     repos

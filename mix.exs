@@ -54,6 +54,8 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixirWeb.ErrorHTML,
           SymphonyElixirWeb.ErrorJSON,
           SymphonyElixirWeb.AuthController,
+          SymphonyElixirWeb.GithubApiController,
+          SymphonyElixirWeb.LinearApiController,
           SymphonyElixirWeb.ObservabilityApiController,
           SymphonyElixirWeb.Plugs.RequireAuth,
           SymphonyElixirWeb.ProjectApiController,
