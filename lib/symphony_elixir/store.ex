@@ -432,6 +432,148 @@ defmodule SymphonyElixir.Store do
     |> Path.join("%")
   end
 
+  # ── Session Stats ────────────────────────────────────────────────
+
+  @spec failure_counts_by_bucket(String.t(), keyword()) :: [map()]
+  def failure_counts_by_bucket(range, opts \\ []) when range in ["24h", "7d", "30d"] do
+    {since, _trunc} = stats_range_params(range)
+
+    base =
+      Session
+      |> where([s], s.status == "failed" and s.ended_at >= ^since)
+      |> maybe_filter_project_id(Keyword.get(opts, :project_id))
+      |> maybe_filter_workflow_name(Keyword.get(opts, :workflow_name))
+
+    base
+    |> failure_bucket_query(range)
+    |> Repo.all()
+    |> pivot_failure_buckets()
+  end
+
+  defp failure_bucket_query(query, "24h") do
+    query
+    |> group_by([s], [fragment("date_trunc('hour', ?)", s.ended_at), s.error_category])
+    |> select([s], %{
+      bucket: fragment("date_trunc('hour', ?)", s.ended_at),
+      error_category: s.error_category,
+      count: count(s.id)
+    })
+  end
+
+  defp failure_bucket_query(query, _range) do
+    query
+    |> group_by([s], [fragment("date_trunc('day', ?)", s.ended_at), s.error_category])
+    |> select([s], %{
+      bucket: fragment("date_trunc('day', ?)", s.ended_at),
+      error_category: s.error_category,
+      count: count(s.id)
+    })
+  end
+
+  @spec dead_letter_sessions(keyword()) :: [map()]
+  def dead_letter_sessions(opts \\ []) do
+    sub =
+      Session
+      |> where([s2], s2.issue_id == parent_as(:parent).issue_id and s2.started_at > parent_as(:parent).started_at)
+      |> select([s2], s2.id)
+      |> limit(1)
+
+    Session
+    |> from(as: :parent)
+    |> where([s], s.status == "failed")
+    |> where([s], not exists(sub))
+    |> maybe_filter_project_id(Keyword.get(opts, :project_id))
+    |> maybe_filter_workflow_name(Keyword.get(opts, :workflow_name))
+    |> order_by([s], desc: s.ended_at)
+    |> limit(50)
+    |> select([s], %{
+      id: s.id,
+      issue_id: s.issue_id,
+      issue_identifier: s.issue_identifier,
+      issue_title: s.issue_title,
+      workflow_name: s.workflow_name,
+      error_category: s.error_category,
+      error: s.error,
+      ended_at: s.ended_at
+    })
+    |> Repo.all()
+  end
+
+  @spec worker_host_stats(String.t(), keyword()) :: [map()]
+  def worker_host_stats(range, opts \\ []) when range in ["24h", "7d", "30d"] do
+    {since, _trunc} = stats_range_params(range)
+
+    Session
+    |> where([s], not is_nil(s.worker_host) and s.started_at >= ^since)
+    |> maybe_filter_project_id(Keyword.get(opts, :project_id))
+    |> maybe_filter_workflow_name(Keyword.get(opts, :workflow_name))
+    |> group_by([s], s.worker_host)
+    |> select([s], %{
+      host: s.worker_host,
+      total_runs: count(s.id),
+      failures: fragment("count(*) filter (where ? = 'failed')", s.status)
+    })
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      total = row.total_runs || 0
+      failures = row.failures || 0
+      rate = if total > 0, do: failures / total, else: 0.0
+
+      %{
+        host: row.host,
+        total_runs: total,
+        failures: failures,
+        failure_rate: Float.round(rate * 1.0, 4)
+      }
+    end)
+  end
+
+  defp stats_range_params("24h") do
+    since = DateTime.utc_now() |> DateTime.add(-24, :hour) |> DateTime.truncate(:second)
+    {since, "hour"}
+  end
+
+  defp stats_range_params("7d") do
+    since = DateTime.utc_now() |> DateTime.add(-7, :day) |> DateTime.truncate(:second)
+    {since, "day"}
+  end
+
+  defp stats_range_params("30d") do
+    since = DateTime.utc_now() |> DateTime.add(-30, :day) |> DateTime.truncate(:second)
+    {since, "day"}
+  end
+
+  defp pivot_failure_buckets(rows) do
+    rows
+    |> Enum.group_by(& &1.bucket)
+    |> Enum.sort_by(fn {bucket, _rows} -> bucket end, NaiveDateTime)
+    |> Enum.map(&format_failure_bucket/1)
+  end
+
+  defp format_failure_bucket({bucket, category_rows}) do
+    counts = tally_categories(category_rows)
+
+    %{
+      bucket: bucket |> DateTime.from_naive!("Etc/UTC") |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+      infra: counts.infra,
+      agent: counts.agent,
+      config: counts.config,
+      timeout: counts.timeout
+    }
+  end
+
+  defp tally_categories(category_rows) do
+    Enum.reduce(category_rows, %{infra: 0, agent: 0, config: 0, timeout: 0}, fn row, acc ->
+      case row.error_category do
+        cat when cat in ~w(infra agent config timeout) ->
+          Map.update!(acc, String.to_existing_atom(cat), &(&1 + row.count))
+
+        _ ->
+          acc
+      end
+    end)
+  end
+
   # ── Analytics ─────────────────────────────────────────────────────
 
   @spec analytics_cost(String.t()) :: map()
