@@ -6,6 +6,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
+  alias SymphonyElixir.Store
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
   import SymphonyElixirWeb.ErrorHelpers, only: [error_response: 4]
@@ -42,6 +43,41 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
       |> maybe_put_workflow_name(params["workflow_name"])
 
     json(conn, Presenter.history_payload(opts))
+  end
+
+  @valid_stats_ranges ~w(24h 7d 30d)
+
+  @spec stats(Conn.t(), map()) :: Conn.t()
+  def stats(conn, %{"range" => range} = params) when range in @valid_stats_ranges do
+    opts =
+      []
+      |> maybe_put_project_id(params["project_id"])
+      |> maybe_put_workflow_name(params["workflow_name"])
+
+    failure_counts = Store.failure_counts_by_bucket(range, opts)
+    dead_letters = Store.dead_letter_sessions(opts)
+    worker_health = Store.worker_host_stats(range, opts)
+
+    json(conn, %{
+      failure_counts: failure_counts,
+      dead_letters:
+        Enum.map(dead_letters, fn dl ->
+          %{
+            id: dl.id,
+            issue_identifier: dl.issue_identifier,
+            issue_title: dl.issue_title,
+            workflow_name: dl.workflow_name,
+            error_category: dl.error_category,
+            error: dl.error,
+            ended_at: format_datetime(dl.ended_at)
+          }
+        end),
+      worker_health: worker_health
+    })
+  end
+
+  def stats(conn, _params) do
+    error_response(conn, 400, "invalid_range", "range must be one of: 24h, 7d, 30d")
   end
 
   @spec session_debug(Conn.t(), map()) :: Conn.t()
@@ -115,4 +151,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   defp snapshot_timeout_ms do
     Endpoint.config(:snapshot_timeout_ms) || 15_000
   end
+
+  defp format_datetime(%DateTime{} = dt), do: dt |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+  defp format_datetime(_), do: nil
 end

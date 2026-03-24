@@ -67,6 +67,7 @@ defmodule SymphonyElixirWeb.Router do
     get("/state", ObservabilityApiController, :state)
     post("/refresh", ObservabilityApiController, :refresh)
     get("/sessions", ObservabilityApiController, :sessions)
+    get("/sessions/stats", ObservabilityApiController, :stats)
     get("/sessions/:id/debug", ObservabilityApiController, :session_debug)
     get("/projects", ProjectApiController, :index)
     post("/projects", ProjectApiController, :create)

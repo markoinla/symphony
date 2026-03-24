@@ -474,6 +474,41 @@ export function searchGitHubRepos(query: string) {
   return requestJson<{ repos: GitHubRepo[] }>(`/api/v1/github/repos?${params.toString()}`)
 }
 
+// --- Session Stats ---
+
+export type SessionStatsRange = '24h' | '7d' | '30d'
+
+export type FailureCountBucket = {
+  bucket: string
+  infra: number
+  agent: number
+  config: number
+  timeout: number
+}
+
+export type DeadLetterSession = {
+  id: number
+  issue_identifier: string | null
+  issue_title: string | null
+  workflow_name: string | null
+  error_category: string | null
+  error: string | null
+  ended_at: string | null
+}
+
+export type WorkerHostStats = {
+  host: string
+  total_runs: number
+  failures: number
+  failure_rate: number
+}
+
+export type SessionStats = {
+  failure_counts: FailureCountBucket[]
+  dead_letters: DeadLetterSession[]
+  worker_health: WorkerHostStats[]
+}
+
 // --- Cost Analytics ---
 
 export type CostRange = '7d' | '30d' | '90d'
