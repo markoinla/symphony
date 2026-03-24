@@ -85,7 +85,7 @@ Find the PR associated with this issue:
 
 1. Check the issue comments and description for a GitHub PR URL.
 2. If no URL is found, use the issue's branch name to search: `gh pr list --head <branchName> --json number,url,state --jq '.[] | select(.state == "OPEN")'`.
-3. If no open PR is found, leave the issue in Human Review and post a `## Review` comment noting the missing PR, then stop.
+3. If no open PR is found, post a `## Review` comment noting there is no PR to review, then resolve the "Done" state ID and move the issue to Done, then stop.
 
 ### Step 3: Inspect the diff
 
@@ -255,7 +255,7 @@ query GetIssue($id: String!) {
 - Do NOT modify any files in the workspace.
 - Do NOT create git branches or commits.
 - Do NOT create follow-up issues.
-- Do NOT change the issue state EXCEPT from "Human Review" to "Merging".
+- Do NOT change the issue state EXCEPT from "Human Review" to "Merging" (auto-approve) or from "Human Review" to "Done" (no PR found).
 - Post exactly one review comment, then optionally update state, then stop.
 - If the workspace is empty, the codebase is unavailable, or the PR cannot be found, leave the issue in Human Review and note the limitation in the review comment.
 - If you cannot confidently assess the diff (too large, unfamiliar patterns, complex refactoring), default to keeping the issue in Human Review. When in doubt, defer to humans.
