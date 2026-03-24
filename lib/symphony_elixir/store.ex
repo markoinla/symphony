@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Store do
   storage for historical browsing.
   """
 
+  require Logger
   import Ecto.Query
   alias SymphonyElixir.Repo
   alias SymphonyElixir.Store.{Agent, IssueClaim, Message, Project, Session, Setting}
@@ -268,11 +269,34 @@ defmodule SymphonyElixir.Store do
   @spec complete_session_by_engine_session_id(String.t(), map()) ::
           {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t() | :not_found}
   def complete_session_by_engine_session_id(session_id, attrs) do
-    case Session
-         |> where([s], s.session_id == ^session_id and s.status == "running")
-         |> order_by([s], desc: s.started_at)
-         |> limit(1)
-         |> Repo.one() do
+    session =
+      Session
+      |> where([s], s.session_id == ^session_id and s.status == "running")
+      |> order_by([s], desc: s.started_at)
+      |> limit(1)
+      |> Repo.one()
+
+    # Fallback: if the engine session_id hasn't been synced yet (race with
+    # maybe_sync_engine_session_id), look up by issue_identifier instead.
+    session =
+      case {session, Map.get(attrs, :issue_identifier)} do
+        {nil, identifier} when is_binary(identifier) ->
+          Logger.warning(
+            "Session lookup by engine session_id=#{session_id} failed; " <>
+              "falling back to issue_identifier=#{identifier}"
+          )
+
+          Session
+          |> where([s], s.issue_identifier == ^identifier and s.status == "running")
+          |> order_by([s], asc: s.started_at)
+          |> limit(1)
+          |> Repo.one()
+
+        _ ->
+          session
+      end
+
+    case session do
       nil ->
         {:error, :not_found}
 
@@ -600,7 +624,7 @@ defmodule SymphonyElixir.Store do
   defp summary_query(since) do
     result =
       Session
-      |> where([s], s.started_at >= ^since and not is_nil(s.estimated_cost_cents))
+      |> where([s], s.started_at >= ^since and s.status != "running")
       |> select([s], %{
         total_cost_cents: coalesce(sum(s.estimated_cost_cents), 0),
         total_sessions: count(s.id),
@@ -619,7 +643,7 @@ defmodule SymphonyElixir.Store do
 
   defp daily_query(since) do
     Session
-    |> where([s], s.started_at >= ^since and not is_nil(s.workflow))
+    |> where([s], s.started_at >= ^since and s.status != "running" and not is_nil(s.workflow))
     |> group_by([s], [fragment("date_trunc('day', ?)", s.started_at), s.workflow])
     |> order_by([s], asc: fragment("date_trunc('day', ?)", s.started_at))
     |> select([s], %{
@@ -645,7 +669,7 @@ defmodule SymphonyElixir.Store do
 
   defp by_workflow_query(since) do
     Session
-    |> where([s], s.started_at >= ^since and not is_nil(s.workflow))
+    |> where([s], s.started_at >= ^since and s.status != "running" and not is_nil(s.workflow))
     |> group_by([s], s.workflow)
     |> select([s], %{
       workflow: s.workflow,

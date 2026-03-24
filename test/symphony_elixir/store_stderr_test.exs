@@ -98,4 +98,30 @@ defmodule SymphonyElixir.StoreStderrTest do
 
     assert is_nil(completed.stderr)
   end
+
+  test "complete_session_by_engine_session_id falls back to issue_identifier lookup" do
+    # Simulate the race condition: create a session whose session_id has NOT
+    # been updated to the engine session_id yet (still has the initial value).
+    {:ok, session} =
+      Store.create_session(%{
+        issue_id: "issue-fallback-1",
+        issue_identifier: "SYM-FALLBACK",
+        session_id: "initial-placeholder",
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+
+    # Try to complete using an engine session_id that doesn't match any session.
+    # The fallback should find the session via issue_identifier from attrs.
+    {:ok, completed} =
+      Store.complete_session_by_engine_session_id("unsynced-engine-id", %{
+        status: "completed",
+        issue_identifier: "SYM-FALLBACK",
+        stderr: "fallback stderr"
+      })
+
+    assert completed.id == session.id
+    assert completed.status == "completed"
+    assert completed.stderr == "fallback stderr"
+  end
 end
