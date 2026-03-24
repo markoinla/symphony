@@ -189,8 +189,12 @@ defmodule SymphonyElixir.Orchestrator do
           issue_identifier: running_entry.identifier,
           issue_title: Map.get(running_entry, :issue, %{}) |> Map.get(:title),
           error: "orchestrator shutdown",
+          input_tokens: input_tokens,
+          output_tokens: output_tokens,
+          total_tokens: Map.get(running_entry, :engine_total_tokens, 0),
+          worker_host: Map.get(running_entry, :worker_host) || "local",
           estimated_cost_cents: estimated_cost_cents,
-          error_category: nil
+          error_category: "infra"
         })
       end
     end)
@@ -1741,7 +1745,7 @@ defmodule SymphonyElixir.Orchestrator do
         input_tokens: input_tokens,
         output_tokens: output_tokens,
         total_tokens: Map.get(running_entry, :engine_total_tokens, 0),
-        worker_host: Map.get(running_entry, :worker_host),
+        worker_host: Map.get(running_entry, :worker_host) || "local",
         workspace_path: Map.get(running_entry, :workspace_path),
         error: error,
         stderr: stderr,
@@ -1756,9 +1760,7 @@ defmodule SymphonyElixir.Orchestrator do
           Map.put(completion_attrs, :hook_results, hook_results_to_map(hook_results))
         end
 
-      Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-        Store.complete_session_by_engine_session_id(session_id, completion_attrs)
-      end)
+      Store.complete_session_by_engine_session_id(session_id, completion_attrs)
     end
 
     :ok
@@ -1921,19 +1923,35 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp extract_token_usage(update) do
-    payloads = [
-      update[:usage],
-      Map.get(update, "usage"),
-      Map.get(update, :usage),
-      update[:payload],
-      Map.get(update, "payload"),
-      update
-    ]
+    # First, check if the update has a direct usage map with integer token values
+    # (e.g. from EventTranslator's normalize_usage producing %{input_tokens: N, ...}).
+    direct_usage =
+      (update[:usage] || Map.get(update, "usage") || Map.get(update, :usage))
+      |> direct_token_usage()
 
-    Enum.find_value(payloads, &absolute_token_usage_from_payload/1) ||
-      Enum.find_value(payloads, &turn_completed_usage_from_payload/1) ||
-      %{}
+    if direct_usage do
+      direct_usage
+    else
+      payloads = [
+        update[:usage],
+        Map.get(update, "usage"),
+        Map.get(update, :usage),
+        update[:payload],
+        Map.get(update, "payload"),
+        update
+      ]
+
+      Enum.find_value(payloads, &absolute_token_usage_from_payload/1) ||
+        Enum.find_value(payloads, &turn_completed_usage_from_payload/1) ||
+        %{}
+    end
   end
+
+  defp direct_token_usage(usage) when is_map(usage) do
+    if integer_token_map?(usage), do: usage
+  end
+
+  defp direct_token_usage(_), do: nil
 
   defp extract_rate_limits(update) do
     rate_limits_from_payload(update[:rate_limits]) ||

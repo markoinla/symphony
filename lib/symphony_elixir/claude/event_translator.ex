@@ -206,15 +206,23 @@ defmodule SymphonyElixir.Claude.EventTranslator do
 
   # -- Helpers --
 
-  defp normalize_usage(usage) when is_map(usage) do
+  @spec normalize_usage(map()) ::
+          %{input_tokens: non_neg_integer(), output_tokens: non_neg_integer(), total_tokens: non_neg_integer()}
+  def normalize_usage(usage) when is_map(usage) do
+    input = Map.get(usage, "input_tokens", 0)
+    cache_read = Map.get(usage, "cache_read_input_tokens", 0)
+    cache_creation = Map.get(usage, "cache_creation_input_tokens", 0)
+    output = Map.get(usage, "output_tokens", 0)
+    total_input = input + cache_read + cache_creation
+
     %{
-      input_tokens: Map.get(usage, "input_tokens", 0),
-      output_tokens: Map.get(usage, "output_tokens", 0),
-      total_tokens: Map.get(usage, "input_tokens", 0) + Map.get(usage, "output_tokens", 0)
+      input_tokens: total_input,
+      output_tokens: output,
+      total_tokens: total_input + output
     }
   end
 
-  defp normalize_usage(_), do: %{input_tokens: 0, output_tokens: 0, total_tokens: 0}
+  def normalize_usage(_), do: %{input_tokens: 0, output_tokens: 0, total_tokens: 0}
 
   defp extract_tool_result_text(%{"content" => content}) when is_binary(content), do: content
 

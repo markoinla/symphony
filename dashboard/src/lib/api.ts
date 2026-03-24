@@ -497,6 +497,7 @@ export type DeadLetterSession = {
   id: number
   issue_identifier: string | null
   issue_title: string | null
+  status: string
   workflow_name: string | null
   error_category: string | null
   error: string | null

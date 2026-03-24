@@ -269,10 +269,13 @@ defmodule SymphonyElixir.Store do
   @spec complete_session_by_engine_session_id(String.t(), map()) ::
           {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t() | :not_found}
   def complete_session_by_engine_session_id(session_id, attrs) do
+    # Look for running sessions first, then fall back to cancelled ones
+    # (which may have been prematurely marked by finalize_stale_sessions
+    # while the agent was still active).
     session =
       Session
-      |> where([s], s.session_id == ^session_id and s.status == "running")
-      |> order_by([s], desc: s.started_at)
+      |> where([s], s.session_id == ^session_id and s.status in ["running", "cancelled"])
+      |> order_by([s], fragment("CASE WHEN ? = 'running' THEN 0 ELSE 1 END", s.status))
       |> limit(1)
       |> Repo.one()
 
@@ -287,8 +290,8 @@ defmodule SymphonyElixir.Store do
           )
 
           Session
-          |> where([s], s.issue_identifier == ^identifier and s.status == "running")
-          |> order_by([s], asc: s.started_at)
+          |> where([s], s.issue_identifier == ^identifier and s.status in ["running", "cancelled"])
+          |> order_by([s], fragment("CASE WHEN ? = 'running' THEN 0 ELSE 1 END", s.status))
           |> limit(1)
           |> Repo.one()
 
@@ -426,7 +429,15 @@ defmodule SymphonyElixir.Store do
     Session
     |> where([s], s.status == "running")
     |> maybe_filter_project_id(project_id)
-    |> Repo.update_all(set: [status: "cancelled", ended_at: now, error: "orchestrator restarted", error_category: nil])
+    |> Repo.update_all(
+      set: [
+        status: "cancelled",
+        ended_at: now,
+        error: "orchestrator restarted",
+        error_category: "infra",
+        worker_host: "local"
+      ]
+    )
   end
 
   defp maybe_filter_project_id(query, nil), do: query
@@ -464,7 +475,7 @@ defmodule SymphonyElixir.Store do
 
     base =
       Session
-      |> where([s], s.status == "failed" and s.ended_at >= ^since)
+      |> where([s], s.status in ["failed", "cancelled"] and s.ended_at >= ^since)
       |> maybe_filter_project_id(Keyword.get(opts, :project_id))
       |> maybe_filter_workflow_name(Keyword.get(opts, :workflow_name))
 
@@ -504,7 +515,7 @@ defmodule SymphonyElixir.Store do
 
     Session
     |> from(as: :parent)
-    |> where([s], s.status == "failed")
+    |> where([s], s.status in ["failed", "cancelled"])
     |> where([s], not exists(sub))
     |> maybe_filter_project_id(Keyword.get(opts, :project_id))
     |> maybe_filter_workflow_name(Keyword.get(opts, :workflow_name))
@@ -515,6 +526,7 @@ defmodule SymphonyElixir.Store do
       issue_id: s.issue_id,
       issue_identifier: s.issue_identifier,
       issue_title: s.issue_title,
+      status: s.status,
       workflow_name: s.workflow_name,
       error_category: s.error_category,
       error: s.error,
@@ -535,7 +547,7 @@ defmodule SymphonyElixir.Store do
     |> select([s], %{
       host: s.worker_host,
       total_runs: count(s.id),
-      failures: fragment("count(*) filter (where ? = 'failed')", s.status)
+      failures: fragment("count(*) filter (where ? in ('failed', 'cancelled'))", s.status)
     })
     |> Repo.all()
     |> Enum.map(fn row ->
