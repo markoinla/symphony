@@ -203,6 +203,28 @@ Stage the individual sub-issues for triage instead of this parent issue. If the 
 2. Add the `triage-rejected` label to the issue (create the label on the team if it doesn't exist).
 3. Move the issue to "Backlog" status.
 
+#### Outcome D: Detected as epic — delegate to splitter
+
+If the issue is an epic or PRD (too large for a single agent pass, contains multiple distinct work items, or describes a multi-step initiative):
+
+1. Post a comment with the `## Triage` header using this structure:
+
+```markdown
+## Triage
+
+**Decision**: Detected as epic — delegating to epic splitter
+
+### Scope assessment
+- This issue contains multiple distinct work items that should be broken into sub-issues.
+- <Brief explanation of why this is an epic and what the major work areas are.>
+
+### Notes
+<Any context about how the issue might be decomposed.>
+```
+
+2. Add the `epic-split` label to the issue (create the label on the team if it doesn't exist).
+3. Move the issue to "Backlog" status.
+
 ### Step 6: Done
 
 After posting the triage comment and updating the issue state, stop. Do not take any further action.
