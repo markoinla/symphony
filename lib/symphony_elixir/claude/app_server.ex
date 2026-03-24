@@ -10,7 +10,8 @@ defmodule SymphonyElixir.Claude.AppServer do
   @behaviour SymphonyElixir.Engine
 
   require Logger
-  alias SymphonyElixir.{Claude.CommandBuilder, Claude.EventTranslator, Config, Linear.OAuth, MCP.ConfigWriter}
+  alias SymphonyElixir.Claude.{CommandBuilder, EventTranslator, SandboxConfigWriter}
+  alias SymphonyElixir.{Config, Linear.OAuth, MCP.ConfigWriter}
 
   @port_line_bytes 1_048_576
 
@@ -48,6 +49,7 @@ defmodule SymphonyElixir.Claude.AppServer do
     timeout_ms = claude_config.turn_timeout_ms
 
     with {:ok, mcp_config_path} <- write_mcp_config(workspace),
+         :ok <- write_sandbox_config(workspace, claude_config.sandbox),
          command <- CommandBuilder.build(claude_config, mcp_config_path, prompt),
          {:ok, port} <- start_port(command, workspace, session.worker_host) do
       try do
@@ -177,6 +179,12 @@ defmodule SymphonyElixir.Claude.AppServer do
   end
 
   # -- Helpers --
+
+  defp write_sandbox_config(workspace, %{enabled: true} = sandbox_config) do
+    SandboxConfigWriter.write(workspace, sandbox_config)
+  end
+
+  defp write_sandbox_config(_workspace, _sandbox_config), do: :ok
 
   defp write_mcp_config(workspace) do
     settings = Config.settings!()

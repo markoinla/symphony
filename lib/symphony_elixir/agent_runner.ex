@@ -359,6 +359,7 @@ defmodule SymphonyElixir.AgentRunner do
       max_continuations: settings.agent.max_continuations,
       max_concurrent_agents: settings.agent.max_concurrent_agents,
       permission_mode: settings.claude.permission_mode,
+      sandbox_enabled: settings.claude.sandbox && settings.claude.sandbox.enabled,
       github_repo: project && project.github_repo,
       github_branch: project && project.github_branch
     }

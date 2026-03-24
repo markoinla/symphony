@@ -232,6 +232,30 @@ defmodule SymphonyElixir.Config.Schema do
     use Ecto.Schema
     import Ecto.Changeset
 
+    defmodule Sandbox do
+      @moduledoc false
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @primary_key false
+      embedded_schema do
+        field(:enabled, :boolean, default: false)
+        field(:allowed_domains, {:array, :string}, default: [])
+        field(:additional_read_paths, {:array, :string}, default: [])
+        field(:additional_write_paths, {:array, :string}, default: [])
+      end
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        cast(
+          schema,
+          attrs,
+          [:enabled, :allowed_domains, :additional_read_paths, :additional_write_paths],
+          empty_values: []
+        )
+      end
+    end
+
     @primary_key false
     embedded_schema do
       field(:command, :string, default: "claude")
@@ -241,6 +265,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:disallowed_tools, {:array, :string}, default: [])
       field(:turn_timeout_ms, :integer, default: 3_600_000)
       field(:append_system_prompt, :string)
+      embeds_one(:sandbox, Sandbox, on_replace: :update, defaults_to_struct: true)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -261,6 +286,7 @@ defmodule SymphonyElixir.Config.Schema do
       )
       |> validate_number(:turn_timeout_ms, greater_than: 0)
       |> validate_inclusion(:permission_mode, ["bypassPermissions", "default"])
+      |> cast_embed(:sandbox, with: &Sandbox.changeset/2)
     end
   end
 

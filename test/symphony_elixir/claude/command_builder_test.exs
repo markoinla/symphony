@@ -76,4 +76,10 @@ defmodule SymphonyElixir.Claude.CommandBuilderTest do
 
     assert cmd =~ "| /usr/local/bin/claude"
   end
+
+  test "always includes --dangerously-skip-permissions for unattended operation" do
+    cmd = CommandBuilder.build(default_config(), "/tmp/mcp.json", "hello")
+
+    assert cmd =~ "--dangerously-skip-permissions"
+  end
 end
