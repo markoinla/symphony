@@ -26,9 +26,17 @@ defmodule SymphonyElixirWeb.FallbackController do
     error_response(conn, 405, "method_not_allowed", "Method not allowed")
   end
 
+  # -- Router dispatch (required because custom call/2 clauses below prevent
+  #    Phoenix.Controller from generating the default atom dispatcher) --
+
+  @doc false
+  @spec call(Plug.Conn.t(), atom() | {:error, atom() | Ecto.Changeset.t()}) :: Plug.Conn.t()
+  def call(conn, action) when is_atom(action) do
+    apply(__MODULE__, action, [conn, conn.params])
+  end
+
   # -- action_fallback handlers --
 
-  @spec call(Plug.Conn.t(), {:error, atom() | Ecto.Changeset.t()}) :: Plug.Conn.t()
   def call(conn, {:error, :not_found}) do
     error_response(conn, 404, "not_found", "Resource not found")
   end
