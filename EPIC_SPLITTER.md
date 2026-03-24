@@ -69,12 +69,12 @@ This is an unattended decomposition session. You must NOT modify any code in the
 
 ### Step 1: Signal that decomposition is in progress
 
-Immediately swap the `epic-split` label to `epic-splitting` so other observers can see work is underway. You may need to create the `epic-splitting` label if it doesn't exist on the team.
+Add the `epic-splitting` label alongside the existing `epic-split` label so other observers can see work is underway. **Keep `epic-split` in place** — if the agent crashes mid-run, the orchestrator re-polls for `epic-split` and will retry automatically. You may need to create the `epic-splitting` label if it doesn't exist on the team.
 
-To swap labels:
+To add the signal label:
 1. Fetch the issue's team ID and current labels using the Linear MCP tools.
-2. Find the IDs for both `epic-split` and `epic-splitting` labels (create `epic-splitting` if needed).
-3. Use `issueUpdate` to replace all labels: remove `epic-split`, add `epic-splitting`, keep all others.
+2. Find the ID for the `epic-splitting` label (create it if needed).
+3. Use `issueUpdate` to add `epic-splitting` while keeping all existing labels (including `epic-split`).
 
 ### Step 2: Understand the epic
 
@@ -189,11 +189,11 @@ Sub-issues have been staged for triage. The parent epic remains in Backlog as a 
 
 ### Step 9: Mark decomposition complete
 
-After posting the summary comment, swap the `epic-splitting` label back to `epic-split-complete`:
+After posting the summary comment, swap both processing labels to `epic-split-complete`:
 
 1. Fetch current labels on the issue.
 2. Find the ID for the `epic-split-complete` label (create if needed).
-3. Use `issueUpdate` to replace labels: remove `epic-splitting`, add `epic-split-complete`, keep all others.
+3. Use `issueUpdate` to replace labels: remove both `epic-split` and `epic-splitting`, add `epic-split-complete`, keep all others.
 
 ### Step 10: Done
 
@@ -203,10 +203,10 @@ After the label swap, stop. Do not modify the parent issue's state (it remains i
 
 | Scenario | Action |
 |----------|--------|
-| **Partial failure** — agent dies after creating some sub-issues | The `epic-splitting` label remains. On next poll, this agent will retry. Check for existing children before creating new ones to avoid duplicates. |
+| **Partial failure** — agent dies after creating some sub-issues | The `epic-split` label remains (never removed until completion), so the orchestrator retries on next poll. Check for existing children before creating new ones to avoid duplicates. |
 | **Recursive epics** — a sub-issue is itself too large | This is fine. The sub-issue flows through normal triage. If triage detects it as an epic, it gets the `epic-split` label and this splitter handles it on the next poll. |
 | **Very large epics** (10+ sub-issues) | `max_turns: 15` is sufficient for up to ~10 sub-issues. For larger epics, consider breaking them into phases or using `max_continuations: 1` to allow resuming after turn limit. |
-| **Label stuck on `epic-splitting`** | If the agent crashes before swapping to `epic-split-complete`, the issue remains in "Backlog" with `epic-splitting`. The orchestrator's retry mechanism will pick it up again; this splitter will detect the label and resume decomposition. |
+| **Label stuck on `epic-splitting`** | If the agent crashes before completion, `epic-split` is still present so the orchestrator retries automatically. The `epic-splitting` label is a visual signal only and does not affect dispatch. |
 
 ## Guardrails
 
@@ -214,6 +214,6 @@ After the label swap, stop. Do not modify the parent issue's state (it remains i
 - Do NOT create git branches or commits.
 - Do NOT move the parent epic issue out of "Backlog" — it is a coordination container.
 - Do NOT create sub-issues without a `parentId` pointing to this epic.
-- Label progression must be: `epic-split` → `epic-splitting` → `epic-split-complete`. Do not skip steps.
+- Label progression: `epic-split` is kept throughout; `epic-splitting` is added as a signal during work; on completion both are removed and replaced with `epic-split-complete`. Do not remove `epic-split` until the final step.
 - Post exactly one summary comment, then swap the label to `epic-split-complete`, then stop.
 - If the codebase is not available, decompose based on the issue description alone and note the limitation.
