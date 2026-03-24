@@ -1206,7 +1206,21 @@ defmodule SymphonyElixir.Orchestrator do
     case retry_limit_reached(state, issue, attempt, metadata) do
       {:exhausted, reason} ->
         Logger.info("#{reason}: #{issue_context(issue)}; releasing claim")
-        {:noreply, release_issue_claim(state, issue.id)}
+        state = release_issue_claim(state, issue.id)
+
+        # For failure exhaustion, add a completed guard so the issue is not
+        # immediately re-dispatched into another crash loop.  Continuation
+        # exhaustion intentionally leaves the entry cleared so the issue can
+        # be retried on the next poll (e.g. a "Merging" issue whose PR is
+        # now ready).
+        state =
+          if metadata[:delay_type] != :continuation do
+            complete_issue(state, issue.id, issue.state)
+          else
+            state
+          end
+
+        {:noreply, state}
 
       :ok ->
         dispatch_or_reschedule_retry(state, issue, attempt, metadata)
@@ -1243,7 +1257,7 @@ defmodule SymphonyElixir.Orchestrator do
        schedule_issue_retry(
          state,
          issue.id,
-         attempt + 1,
+         attempt,
          Map.merge(metadata, %{
            identifier: issue.identifier,
            error: "no available orchestrator slots"
