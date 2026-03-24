@@ -37,7 +37,9 @@ defmodule SymphonyElixir.SessionLog do
     workflow_name = Keyword.get(opts, :workflow_name)
     github_branch = Keyword.get(opts, :github_branch)
     name = via(issue_id, session_id)
-    init_arg = {issue_id, session_id, issue_identifier, issue_title, project_id, config_snapshot, workflow_name, github_branch}
+    init_arg =
+      {issue_id, session_id, issue_identifier, issue_title, project_id,
+       config_snapshot, workflow_name, github_branch}
     GenServer.start_link(__MODULE__, init_arg, name: name)
   end
 

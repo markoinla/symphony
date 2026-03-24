@@ -342,6 +342,8 @@ defmodule SymphonyElixir.Orchestrator do
           |> apply_engine_token_delta(token_delta)
           |> apply_engine_rate_limits(update)
 
+        maybe_sync_engine_stats_to_db(updated_running_entry, token_delta)
+
         notify_dashboard()
         {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
     end
@@ -1799,6 +1801,39 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp finalize_db_session(_running_entry, _reason), do: :ok
+
+  defp sync_session_to_db(%{session_id: session_id}, attrs)
+       when is_binary(session_id) and session_id != "n/a" do
+    clean_attrs = attrs |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
+
+    if map_size(clean_attrs) > 0 do
+      Store.update_session_live(session_id, clean_attrs)
+    end
+  end
+
+  defp sync_session_to_db(_running_entry, _attrs), do: :ok
+
+  # Only sync token/turn stats when there's an actual change to avoid
+  # hammering the DB on every engine event.
+  defp maybe_sync_engine_stats_to_db(running_entry, token_delta) do
+    has_token_change =
+      token_delta.input_tokens > 0 or
+        token_delta.output_tokens > 0 or
+        token_delta.total_tokens > 0
+
+    turn_count = Map.get(running_entry, :turn_count, 0)
+    prev_turn_count = Map.get(running_entry, :synced_turn_count, 0)
+    has_turn_change = turn_count != prev_turn_count
+
+    if has_token_change or has_turn_change do
+      sync_session_to_db(running_entry, %{
+        input_tokens: Map.get(running_entry, :engine_input_tokens, 0),
+        output_tokens: Map.get(running_entry, :engine_output_tokens, 0),
+        total_tokens: Map.get(running_entry, :engine_total_tokens, 0),
+        turn_count: turn_count
+      })
+    end
+  end
 
   defp compute_estimated_cost(input_tokens, output_tokens) do
     model = Config.settings!().claude.model

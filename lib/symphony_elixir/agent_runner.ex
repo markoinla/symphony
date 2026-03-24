@@ -303,10 +303,12 @@ defmodule SymphonyElixir.AgentRunner do
   defp start_session_log(%Issue{id: issue_id} = issue, session_id, project_id) when is_binary(issue_id) and is_binary(session_id) do
     config_snapshot = build_config_snapshot()
     workflow_name = SymphonyElixir.Workflow.current_workflow_name()
-    github_branch = case SymphonyElixir.Settings.current_project() do
-      %{github_branch: branch} when is_binary(branch) -> branch
-      _ -> nil
-    end
+
+    github_branch =
+      case SymphonyElixir.Settings.current_project() do
+        %{github_branch: branch} when is_binary(branch) -> branch
+        _ -> nil
+      end
 
     case SessionLog.start_link(
            issue_id: issue_id,
