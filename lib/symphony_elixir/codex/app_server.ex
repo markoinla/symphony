@@ -233,8 +233,8 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  # TODO(SYM-168): Capture stderr separately for remote workers.
-  # Currently SSH sessions still merge stderr to stdout via SSH.start_port.
+  # Remote workers still merge stderr to stdout via SSH.start_port.
+  # Separate capture for SSH sessions tracked in a follow-up issue.
   defp start_port(workspace, worker_host, _stderr_file) when is_binary(worker_host) do
     remote_command = remote_launch_command(workspace)
     SSH.start_port(worker_host, remote_command, line: @port_line_bytes)

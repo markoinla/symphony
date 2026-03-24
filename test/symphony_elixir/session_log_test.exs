@@ -195,13 +195,31 @@ defmodule SymphonyElixir.SessionLogTest do
     stderr_content = "error: something went wrong\nstack trace here"
     assert :ok = SessionLog.finalize(issue_id, session_id, :completed, %{stderr: stderr_content})
 
-    # Verify stderr was persisted via Store
+    # Verify stderr was persisted via Store — list sessions and find ours by issue_id
     sessions = SymphonyElixir.Store.list_sessions(limit: 100)
     session = Enum.find(sessions, &(&1.issue_id == issue_id))
 
     assert session != nil
     assert session.stderr == stderr_content
     assert session.status == "completed"
+  end
+
+  test "store_stderr persists stderr without changing session status" do
+    issue_id = unique_id("issue")
+    session_id = unique_id("session")
+
+    start_session_log!(issue_id, session_id)
+
+    stderr_content = "warning: deprecation notice\nsome debug output"
+    assert :ok = SessionLog.store_stderr(issue_id, session_id, stderr_content)
+
+    # Verify stderr was persisted but status remains "running" (not completed)
+    sessions = SymphonyElixir.Store.list_sessions(limit: 100)
+    session = Enum.find(sessions, &(&1.issue_id == issue_id))
+
+    assert session != nil
+    assert session.stderr == stderr_content
+    assert session.status == "running"
   end
 
   defp start_session_log!(issue_id, session_id) do
