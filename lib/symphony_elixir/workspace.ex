@@ -388,17 +388,14 @@ defmodule SymphonyElixir.Workspace do
   end
 
   defp project_fields(%{github_repo: repo, github_branch: branch})
-       when is_binary(repo) and repo != "" and is_binary(branch) and branch != "" do
-    [{"GITHUB_REPO", repo}, {"GITHUB_BRANCH", branch}]
-  end
+       when is_binary(repo) and repo != "" and is_binary(branch) and branch != "",
+       do: [{"GITHUB_REPO", repo}, {"GITHUB_BRANCH", branch}]
 
-  defp project_fields(%{github_repo: repo}) when is_binary(repo) and repo != "" do
-    [{"GITHUB_REPO", repo}]
-  end
+  defp project_fields(%{github_repo: repo}) when is_binary(repo) and repo != "",
+    do: [{"GITHUB_REPO", repo}]
 
-  defp project_fields(%{github_branch: branch}) when is_binary(branch) and branch != "" do
-    [{"GITHUB_BRANCH", branch}]
-  end
+  defp project_fields(%{github_branch: branch}) when is_binary(branch) and branch != "",
+    do: [{"GITHUB_BRANCH", branch}]
 
   defp project_fields(_), do: []
 
@@ -409,7 +406,9 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  defp project_env_vars(%{env_vars: env_text}), do: SymphonyElixir.Settings.parse_env_vars(env_text)
+  defp project_env_vars(%{env_vars: env_text}),
+    do: SymphonyElixir.Settings.parse_env_vars(env_text)
+
   defp project_env_vars(_), do: []
 
   defp hook_env_export do
