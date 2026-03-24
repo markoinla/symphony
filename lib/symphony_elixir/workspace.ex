@@ -240,10 +240,11 @@ defmodule SymphonyElixir.Workspace do
       {:ok, _result} ->
         :ok
 
-      {:error, reason, _result} ->
-        Logger.warning(
+      {:error, reason, result} ->
+        Logger.error(
           "after_create hook failed, removing workspace to allow re-creation on next attempt " <>
-            "#{issue_log_context(issue_context)} workspace=#{workspace} reason=#{inspect(reason)}"
+            "#{issue_log_context(issue_context)} workspace=#{workspace} reason=#{inspect(reason)} " <>
+            "output=#{inspect(Map.get(result, :output, ""))}"
         )
 
         cleanup_failed_workspace(workspace, worker_host)
@@ -335,7 +336,9 @@ defmodule SymphonyElixir.Workspace do
     timeout_ms = Config.settings!().hooks.timeout_ms
     env = hook_env()
 
-    Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local")
+    env_keys = Enum.map_join(env, ", ", fn {k, _v} -> k end)
+    Logger.info("Running workspace hook hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local env_keys=[#{env_keys}]")
+    Logger.debug("Hook command hook=#{hook_name}: #{command}")
 
     task =
       Task.async(fn ->
@@ -432,13 +435,16 @@ defmodule SymphonyElixir.Workspace do
     binary_output = IO.iodata_to_binary(output)
     sanitized_output = sanitize_hook_output_for_log(binary_output)
 
-    Logger.warning("Workspace hook failed hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} status=#{status} output=#{inspect(sanitized_output)}")
+    Logger.error(
+      "Workspace hook failed hook=#{hook_name} #{issue_log_context(issue_context)} " <>
+        "workspace=#{workspace} exit_status=#{status}\n--- hook output ---\n#{sanitized_output}\n--- end hook output ---"
+    )
 
     result = %{hook_name: hook_name, status: "failed", output: binary_output}
     {:error, {:workspace_hook_failed, hook_name, status, binary_output}, result}
   end
 
-  defp sanitize_hook_output_for_log(output, max_bytes \\ 2_048) do
+  defp sanitize_hook_output_for_log(output, max_bytes \\ 8_192) do
     binary_output = IO.iodata_to_binary(output)
 
     case byte_size(binary_output) <= max_bytes do

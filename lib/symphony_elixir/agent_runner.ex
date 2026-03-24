@@ -57,6 +57,7 @@ defmodule SymphonyElixir.AgentRunner do
         run_on_worker_hosts(issue, engine_update_recipient, opts, rest)
 
       {:error, reason} ->
+        Logger.error("Workspace creation failed for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)} reason=#{inspect(reason)}")
         {:error, reason}
     end
   end
