@@ -186,6 +186,24 @@ defmodule SymphonyElixir.SessionLogTest do
     ])
   end
 
+  test "finalize passes stderr to Store.complete_session" do
+    issue_id = unique_id("issue")
+    session_id = unique_id("session")
+
+    start_session_log!(issue_id, session_id)
+
+    stderr_content = "error: something went wrong\nstack trace here"
+    assert :ok = SessionLog.finalize(issue_id, session_id, :completed, %{stderr: stderr_content})
+
+    # Verify stderr was persisted via Store — list sessions and find ours by issue_id
+    sessions = SymphonyElixir.Store.list_sessions(limit: 100)
+    session = Enum.find(sessions, &(&1.issue_id == issue_id))
+
+    assert session != nil
+    assert session.stderr == stderr_content
+    assert session.status == "completed"
+  end
+
   defp start_session_log!(issue_id, session_id) do
     {:ok, _pid} =
       SessionLog.start_link(

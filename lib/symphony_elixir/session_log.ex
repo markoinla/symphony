@@ -79,7 +79,7 @@ defmodule SymphonyElixir.SessionLog do
   def finalize(issue_id, session_id, status, attrs) do
     case lookup(issue_id, session_id) do
       nil -> :ok
-      pid -> GenServer.cast(pid, {:finalize, status, attrs})
+      pid -> GenServer.call(pid, {:finalize, status, attrs})
     end
   end
 
@@ -162,7 +162,7 @@ defmodule SymphonyElixir.SessionLog do
   end
 
   @impl true
-  def handle_cast({:finalize, status, attrs}, state) do
+  def handle_call({:finalize, status, attrs}, _from, state) do
     if state.db_session_id do
       completion_attrs =
         attrs
@@ -178,7 +178,7 @@ defmodule SymphonyElixir.SessionLog do
       end
     end
 
-    {:noreply, state}
+    {:reply, :ok, state}
   end
 
   @impl true

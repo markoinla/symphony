@@ -291,6 +291,7 @@ defmodule SymphonyElixir.AgentRunner do
           []
         )
       after
+        finalize_session_stderr(session, issue, session_id)
         stop_session_log(issue, session_id)
         Engine.engine_module().stop_session(session)
       end
@@ -345,6 +346,17 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp stop_session_log(_issue, _session_id), do: :ok
+
+  defp finalize_session_stderr(session, %Issue{id: issue_id}, session_id)
+       when is_binary(issue_id) and is_binary(session_id) do
+    with {:ok, content} when is_binary(content) <- Engine.engine_module().read_stderr(session) do
+      SessionLog.finalize(issue_id, session_id, :completed, %{stderr: content})
+    end
+  catch
+    :exit, _ -> :ok
+  end
+
+  defp finalize_session_stderr(_session, _issue, _session_id), do: :ok
 
   # credo:disable-for-next-line
   defp do_run_engine_turns(
