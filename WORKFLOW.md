@@ -416,39 +416,40 @@ Use this only when completion is blocked by missing required tools or missing au
 2.  If current issue state is `Todo`, move it to `In Progress`; otherwise leave the current state unchanged.
 3.  Load the existing workpad comment and treat it as the active execution checklist.
     - Edit it liberally whenever reality changes (scope, risks, validation approach, discovered tasks).
-4.  Implement against the hierarchical TODOs and keep the comment current:
+4.  **Turn scoping:** each turn, pick 1–3 unchecked plan items to focus on. Complete them, check them off in the workpad, and commit progress before moving to the next batch. Do not attempt the entire plan in a single turn — small, verified increments are preferred. If the turn is running long or approaching tool/context limits, update the workpad with current status and yield; the next turn will resume from the workpad state.
+5.  Implement against the hierarchical TODOs and keep the comment current:
     - Check off completed items.
     - Add newly discovered items in the appropriate section.
     - Keep parent/child structure intact as scope evolves.
     - Update the workpad immediately after each meaningful milestone (for example: reproduction complete, code change landed, validation run, review feedback addressed).
     - Never leave completed work unchecked in the plan.
     - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
-5.  After all implementation is complete, run validation **once**:
+6.  After all implementation is complete, run validation **once**:
     - Execute ticket-provided `Validation`/`Test Plan`/`Testing` requirements when present; treat unmet items as incomplete work.
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
     - If app-touching, run `launch-app` validation and capture/upload media via `github-pr-media` before handoff.
     - You may make temporary local proof edits to validate assumptions; revert them before commit.
     - Document validation steps and outcomes in the workpad `Validation`/`Notes` sections.
     - If validation fails, fix the issue and rerun only the failing checks — do not rerun the entire suite.
-6.  Verify acceptance criteria are met. If gaps exist, fix them and rerun only the affected validation.
-7.  Commit, push, and create/update the PR.
+7.  Verify acceptance criteria are met. If gaps exist, fix them and rerun only the affected validation.
+8.  Commit, push, and create/update the PR.
     - Ensure the GitHub PR has label `symphony` (add it if missing).
     - Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
-8.  Merge latest `origin/main` into branch and resolve conflicts. Only rerun checks if the merge introduced conflicts in code you changed.
-9.  Update the workpad comment with final checklist status and validation notes.
+9.  Merge latest `origin/main` into branch and resolve conflicts. Only rerun checks if the merge introduced conflicts in code you changed.
+10. Update the workpad comment with final checklist status and validation notes.
     - Mark completed plan/acceptance/validation checklist items as checked.
     - Add final handoff notes (commit + validation summary) in the same workpad comment.
     - Do not include PR URL in the workpad comment; keep PR linkage on the issue via attachment/link fields.
     - Add a short `### Confusions` section at the bottom when any part of task execution was unclear/confusing, with concise bullets.
     - Do not post any additional completion summary comment.
-10. Before moving to `Human Review`, run the PR feedback sweep protocol:
+11. Before moving to `Human Review`, run the PR feedback sweep protocol:
     - Address or push back on all actionable comments.
     - Poll CI checks — do not re-run locally what CI already covers.
     - Confirm every required ticket-provided validation/test-plan item is explicitly marked complete in the workpad.
     - Re-open and refresh the workpad before state transition so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
-11. Only then move issue to `Human Review`.
+12. Only then move issue to `Human Review`.
     - Exception: if blocked by missing required non-GitHub tools/auth per the blocked-access escape hatch, move to `Human Review` with the blocker brief and explicit unblock actions.
-12. For `Todo` tickets that already had a PR attached at kickoff:
+13. For `Todo` tickets that already had a PR attached at kickoff:
     - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
     - Ensure branch was pushed with any required updates.
     - Then move to `Human Review`.
