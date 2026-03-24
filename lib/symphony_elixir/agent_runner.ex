@@ -274,9 +274,18 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp start_session_log(%Issue{id: issue_id} = issue, session_id, project_id) when is_binary(issue_id) and is_binary(session_id) do
+    config_snapshot = build_config_snapshot()
     workflow_name = SymphonyElixir.Workflow.current_workflow_name()
 
-    case SessionLog.start_link(issue_id: issue_id, session_id: session_id, issue_identifier: issue.identifier, issue_title: issue.title, project_id: project_id, workflow_name: workflow_name) do
+    case SessionLog.start_link(
+           issue_id: issue_id,
+           session_id: session_id,
+           issue_identifier: issue.identifier,
+           issue_title: issue.title,
+           project_id: project_id,
+           config_snapshot: config_snapshot,
+           workflow_name: workflow_name
+         ) do
       {:ok, _pid} ->
         :ok
 
@@ -290,6 +299,22 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp start_session_log(_issue, _session_id, _project_id), do: :ok
+
+  @spec build_config_snapshot() :: map() | nil
+  defp build_config_snapshot do
+    settings = Config.settings!()
+
+    %{
+      model: settings.claude.model,
+      engine: settings.engine,
+      max_turns: settings.agent.max_turns,
+      max_continuations: settings.agent.max_continuations,
+      max_concurrent_agents: settings.agent.max_concurrent_agents,
+      permission_mode: settings.claude.permission_mode
+    }
+  rescue
+    _ -> nil
+  end
 
   defp stop_session_log(%Issue{id: issue_id}, session_id) when is_binary(issue_id) and is_binary(session_id) do
     SessionLog.stop(issue_id, session_id)
