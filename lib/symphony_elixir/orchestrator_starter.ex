@@ -107,8 +107,8 @@ defmodule SymphonyElixir.OrchestratorStarter do
     stop_stale_orchestrators(expected_keys)
   end
 
-  defp ensure_workflow_orchestrators({workflow_name, path}, projects) do
-    if workflow_uses_project_filter?(path) and projects != [] do
+  defp ensure_workflow_orchestrators({workflow_name, _path}, projects) do
+    if projects != [] do
       Enum.each(projects, fn project ->
         ensure_started(workflow_name: workflow_name, project_id: project.id)
       end)
@@ -156,13 +156,6 @@ defmodule SymphonyElixir.OrchestratorStarter do
         {:error, reason} ->
           Logger.warning("Failed to start orchestrator #{workflow_name}:#{project_id || "default"}: #{inspect(reason)}")
       end
-    end
-  end
-
-  defp workflow_uses_project_filter?(path) do
-    case SymphonyElixir.Workflow.load(path) do
-      {:ok, %{config: %{"tracker" => %{"filter_by" => "label"}}}} -> false
-      _ -> true
     end
   end
 end

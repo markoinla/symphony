@@ -59,5 +59,103 @@ defmodule SymphonyElixir.OrchestratorStarterTest do
       running_after = Orchestrator.workflow_servers() |> Enum.map(fn {k, _} -> k end)
       assert Enum.any?(running_after, &String.starts_with?(&1, workflow_name))
     end
+
+    test "label-based workflow spawns per-project orchestrators when projects exist" do
+      [{_workflow_name, path}] = Workflow.named_workflow_paths()
+      workflow_root = Path.dirname(path)
+
+      # Create a second workflow file with filter_by: label
+      label_workflow_path = Path.join(workflow_root, "EPIC_SPLITTER.md")
+
+      File.write!(label_workflow_path, """
+      ---
+      tracker:
+        kind: "linear"
+        endpoint: "https://api.linear.app/graphql"
+        api_key: "token"
+        filter_by: "label"
+        label_name: "epic-split"
+        active_states: ["Todo", "In Progress"]
+        terminal_states: ["Done", "Canceled"]
+      polling:
+        interval_ms: 30000
+      workspace:
+        root: "#{Path.join(System.tmp_dir!(), "symphony_workspaces")}"
+      agent:
+        max_concurrent_agents: 10
+        max_turns: 20
+      codex:
+        command: "codex app-server"
+      ---
+      You are an epic splitter agent.
+      """)
+
+      # Register both workflows
+      Workflow.set_workflow_file_paths([path, label_workflow_path])
+      if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
+
+      # Create two projects
+      {:ok, project1} = Store.create_project(%{name: "Project A", linear_project_slug: "proj-a"})
+      {:ok, project2} = Store.create_project(%{name: "Project B", linear_project_slug: "proj-b"})
+
+      start_supervised!({SymphonyElixir.OrchestratorStarter, []})
+      Process.sleep(200)
+
+      running_keys = Orchestrator.workflow_servers() |> Enum.map(fn {k, _} -> k end)
+
+      # The label-based workflow should have per-project orchestrators
+      assert "EPIC_SPLITTER:#{project1.id}" in running_keys
+      assert "EPIC_SPLITTER:#{project2.id}" in running_keys
+      # Should NOT have a global "EPIC_SPLITTER" orchestrator (since projects exist)
+      refute "EPIC_SPLITTER" in running_keys
+    end
+
+    test "label-based workflow gets per-project orchestrators matching project-based workflow behavior" do
+      [{_workflow_name, path}] = Workflow.named_workflow_paths()
+      workflow_root = Path.dirname(path)
+
+      # Create a label-based workflow file
+      label_workflow_path = Path.join(workflow_root, "ENRICHMENT.md")
+
+      File.write!(label_workflow_path, """
+      ---
+      tracker:
+        kind: "linear"
+        endpoint: "https://api.linear.app/graphql"
+        api_key: "token"
+        filter_by: "label"
+        label_name: "enrich"
+        active_states: ["Todo", "In Progress"]
+        terminal_states: ["Done", "Canceled"]
+      polling:
+        interval_ms: 30000
+      workspace:
+        root: "#{Path.join(System.tmp_dir!(), "symphony_workspaces")}"
+      agent:
+        max_concurrent_agents: 10
+        max_turns: 20
+      codex:
+        command: "codex app-server"
+      ---
+      You are an enrichment agent.
+      """)
+
+      # Register both workflows
+      Workflow.set_workflow_file_paths([path, label_workflow_path])
+      if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
+
+      # Ensure at least one project exists
+      {:ok, project} = Store.create_project(%{name: "Test Project", linear_project_slug: "test-proj"})
+
+      start_supervised!({SymphonyElixir.OrchestratorStarter, []})
+      Process.sleep(200)
+
+      running_keys = Orchestrator.workflow_servers() |> Enum.map(fn {k, _} -> k end)
+
+      # The label-based workflow should have a per-project orchestrator
+      assert "ENRICHMENT:#{project.id}" in running_keys
+      # Should NOT have a global "ENRICHMENT" orchestrator
+      refute "ENRICHMENT" in running_keys
+    end
   end
 end

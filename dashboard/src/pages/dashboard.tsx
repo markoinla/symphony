@@ -332,6 +332,20 @@ function RetrySessionCard({
   )
 }
 
+const ERROR_CATEGORY_CONFIG: Record<string, { tone: 'danger' | 'retrying' | 'live' | 'neutral'; label: string; className?: string }> = {
+  infra: { tone: 'danger', label: 'Infra' },
+  agent: { tone: 'retrying', label: 'Agent' },
+  config: { tone: 'neutral', label: 'Config', className: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' },
+  timeout: { tone: 'live', label: 'Timeout' },
+}
+
+export function ErrorCategoryBadge({ category }: { category: string | null }) {
+  if (!category) return null
+  const config = ERROR_CATEGORY_CONFIG[category]
+  if (!config) return <Badge tone="neutral">{category}</Badge>
+  return <Badge tone={config.tone} className={config.className}>{config.label}</Badge>
+}
+
 export function HistoryCard({ index, session }: { index: number; session: SessionsPayload['sessions'][number] }) {
   const issueIdentifier = session.issue_identifier
   const failed = session.status === 'failed'
@@ -350,11 +364,7 @@ export function HistoryCard({ index, session }: { index: number; session: Sessio
             </span>
             {issueIdentifier ? <LinearIssueBadge identifier={issueIdentifier} /> : null}
             {failed ? <Badge tone="danger">Failed</Badge> : null}
-            {failed && session.error_category ? (
-              <Badge tone={session.error_category === 'infra' ? 'danger' : session.error_category === 'agent' ? 'retrying' : 'neutral'}>
-                {session.error_category}
-              </Badge>
-            ) : null}
+            {failed ? <ErrorCategoryBadge category={session.error_category} /> : null}
           </div>
           <p className="mt-2 line-clamp-1 text-[13px] leading-5 text-th-text-3">
             {session.issue_title ?? 'No title'}

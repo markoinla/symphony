@@ -402,7 +402,7 @@ defmodule SymphonyElixir.Store do
     Session
     |> where([s], s.status == "running")
     |> maybe_filter_project_id(project_id)
-    |> Repo.update_all(set: [status: "cancelled", ended_at: now, error: "orchestrator restarted"])
+    |> Repo.update_all(set: [status: "cancelled", ended_at: now, error: "orchestrator restarted", error_category: nil])
   end
 
   defp maybe_filter_project_id(query, nil), do: query

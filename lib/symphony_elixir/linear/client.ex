@@ -159,6 +159,80 @@ defmodule SymphonyElixir.Linear.Client do
   }
   """
 
+  @query_by_label_and_project """
+  query SymphonyLinearPollByLabelAndProject($labelName: String!, $projectSlug: String!, $stateNames: [String!]!, $first: Int!, $relationFirst: Int!, $commentFirst: Int!, $after: String) {
+    issues(filter: {labels: {some: {name: {eq: $labelName}}}, project: {slugId: {eq: $projectSlug}}, state: {name: {in: $stateNames}}}, first: $first, after: $after) {
+      nodes {
+        id
+        identifier
+        title
+        description
+        priority
+        state {
+          name
+        }
+        branchName
+        url
+        assignee {
+          id
+        }
+        labels {
+          nodes {
+            name
+          }
+        }
+        comments(first: $commentFirst) {
+          nodes {
+            id
+            body
+            user {
+              id
+              name
+            }
+            createdAt
+          }
+        }
+        inverseRelations(first: $relationFirst) {
+          nodes {
+            type
+            issue {
+              id
+              identifier
+              state {
+                name
+              }
+            }
+          }
+        }
+        createdAt
+        updatedAt
+        parent {
+          id
+          identifier
+          title
+          state {
+            name
+          }
+        }
+        children {
+          nodes {
+            id
+            identifier
+            title
+            state {
+              name
+            }
+          }
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+  """
+
   @query_by_ids """
   query SymphonyLinearIssuesById($ids: [ID!]!, $first: Int!, $relationFirst: Int!, $commentFirst: Int!) {
     issues(filter: {id: {in: $ids}}, first: $first) {
@@ -377,18 +451,7 @@ defmodule SymphonyElixir.Linear.Client do
     tracker = Config.settings!().tracker
 
     with {:ok, assignee_filter} <- routing_assignee_filter_for_test(graphql_fun) do
-      case tracker.filter_by do
-        "label" ->
-          do_fetch_by_label_with(tracker.label_name, tracker.active_states, assignee_filter, graphql_fun)
-
-        _ ->
-          do_fetch_by_states_with(
-            extract_slug_id(tracker.project_slug),
-            tracker.active_states,
-            assignee_filter,
-            graphql_fun
-          )
-      end
+      fetch_candidate_issues_for_tracker_with(tracker, assignee_filter, graphql_fun)
     end
   end
 
@@ -402,10 +465,47 @@ defmodule SymphonyElixir.Linear.Client do
     end
   end
 
+  defp fetch_candidate_issues_for_tracker_with(tracker, assignee_filter, graphql_fun) do
+    case tracker.filter_by do
+      "label" ->
+        fetch_candidate_issues_by_label_with(tracker, assignee_filter, graphql_fun)
+
+      _ ->
+        do_fetch_by_states_with(
+          extract_slug_id(tracker.project_slug),
+          tracker.active_states,
+          assignee_filter,
+          graphql_fun
+        )
+    end
+  end
+
   defp fetch_candidate_issues_by_label(tracker, assignee_filter) do
-    case tracker.label_name do
-      label_name when is_binary(label_name) ->
+    case {tracker.label_name, extract_optional_slug_id(tracker.project_slug)} do
+      {label_name, slug} when is_binary(label_name) and is_binary(slug) ->
+        do_fetch_by_label_and_project(label_name, slug, tracker.active_states, assignee_filter)
+
+      {label_name, nil} when is_binary(label_name) ->
         do_fetch_by_label(label_name, tracker.active_states, assignee_filter)
+
+      _ ->
+        {:error, :missing_linear_label_name}
+    end
+  end
+
+  defp fetch_candidate_issues_by_label_with(tracker, assignee_filter, graphql_fun) do
+    case {tracker.label_name, extract_optional_slug_id(tracker.project_slug)} do
+      {label_name, slug} when is_binary(label_name) and is_binary(slug) ->
+        do_fetch_by_label_and_project_with(
+          label_name,
+          slug,
+          tracker.active_states,
+          assignee_filter,
+          graphql_fun
+        )
+
+      {label_name, nil} when is_binary(label_name) ->
+        do_fetch_by_label_with(label_name, tracker.active_states, assignee_filter, graphql_fun)
 
       _ ->
         {:error, :missing_linear_label_name}
@@ -442,6 +542,14 @@ defmodule SymphonyElixir.Linear.Client do
 
   defp do_fetch_by_label_with(label_name, state_names, assignee_filter, graphql_fun) do
     do_fetch_by_label_page(label_name, state_names, assignee_filter, nil, [], graphql_fun)
+  end
+
+  defp do_fetch_by_label_and_project(label_name, project_slug, state_names, assignee_filter) do
+    do_fetch_by_label_and_project_page(label_name, project_slug, state_names, assignee_filter, nil, [])
+  end
+
+  defp do_fetch_by_label_and_project_with(label_name, project_slug, state_names, assignee_filter, graphql_fun) do
+    do_fetch_by_label_and_project_page(label_name, project_slug, state_names, assignee_filter, nil, [], graphql_fun)
   end
 
   defp do_fetch_by_states_page(project_slug, state_names, assignee_filter, after_cursor, acc_issues) do
@@ -496,6 +604,69 @@ defmodule SymphonyElixir.Linear.Client do
       case next_page_cursor(page_info) do
         {:ok, next_cursor} ->
           do_fetch_by_label_page(label_name, state_names, assignee_filter, next_cursor, updated_acc, graphql_fun)
+
+        :done ->
+          {:ok, finalize_paginated_issues(updated_acc)}
+
+        {:error, reason} ->
+          {:error, reason}
+      end
+    end
+  end
+
+  defp do_fetch_by_label_and_project_page(
+         label_name,
+         project_slug,
+         state_names,
+         assignee_filter,
+         after_cursor,
+         acc_issues
+       ) do
+    do_fetch_by_label_and_project_page(
+      label_name,
+      project_slug,
+      state_names,
+      assignee_filter,
+      after_cursor,
+      acc_issues,
+      &graphql/2
+    )
+  end
+
+  defp do_fetch_by_label_and_project_page(
+         label_name,
+         project_slug,
+         state_names,
+         assignee_filter,
+         after_cursor,
+         acc_issues,
+         graphql_fun
+       )
+       when is_function(graphql_fun, 2) do
+    with {:ok, body} <-
+           graphql_fun.(@query_by_label_and_project, %{
+             labelName: label_name,
+             projectSlug: project_slug,
+             stateNames: state_names,
+             first: @issue_page_size,
+             relationFirst: @issue_page_size,
+             commentFirst: @comment_page_size,
+             after: after_cursor
+           }),
+         {:ok, issues, page_info} <- decode_linear_page_response(body, assignee_filter) do
+      updated_acc = prepend_page_issues(issues, acc_issues)
+
+      case next_page_cursor(page_info) do
+        {:ok, next_cursor} ->
+          do_fetch_by_label_and_project_page(
+            label_name,
+            project_slug,
+            state_names,
+            assignee_filter,
+            next_cursor,
+            updated_acc,
+            graphql_fun
+          )
 
         :done ->
           {:ok, finalize_paginated_issues(updated_acc)}
@@ -912,6 +1083,10 @@ defmodule SymphonyElixir.Linear.Client do
   # Linear's GraphQL `slugId` filter expects only the hex hash portion
   # of the project slug (e.g. "1b3188ca0747"), not the full URL slug
   # (e.g. "agent-workflow-1b3188ca0747"). Extract the trailing hex segment.
+  defp extract_optional_slug_id(nil), do: nil
+  defp extract_optional_slug_id(""), do: nil
+  defp extract_optional_slug_id(slug) when is_binary(slug), do: extract_slug_id(slug)
+
   defp extract_slug_id(project_slug) when is_binary(project_slug) do
     case Regex.run(~r/-([0-9a-f]{10,})$/, project_slug) do
       [_, hex_id] -> hex_id

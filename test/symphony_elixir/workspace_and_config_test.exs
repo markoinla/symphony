@@ -609,6 +609,54 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert query =~ "labels: {some: {name: {eq: $labelName}}}"
   end
 
+  test "linear client uses combined label+project query when both are configured" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_filter_by: "label",
+      tracker_project_slug: "my-project-abc123",
+      tracker_label_name: "epic-split"
+    )
+
+    graphql_fun = fn query, variables ->
+      send(self(), {:combined_query, query, variables})
+
+      {:ok,
+       %{
+         "data" => %{
+           "issues" => %{
+             "nodes" => [
+               %{
+                 "id" => "issue-combined-1",
+                 "identifier" => "SYM-EPIC",
+                 "title" => "Combined filter matched",
+                 "description" => "epic split candidate",
+                 "priority" => 1,
+                 "state" => %{"name" => "Todo"},
+                 "branchName" => nil,
+                 "url" => "https://example.test/issues/SYM-EPIC",
+                 "assignee" => nil,
+                 "labels" => %{"nodes" => [%{"name" => "epic-split"}]},
+                 "comments" => %{"nodes" => []},
+                 "inverseRelations" => %{"nodes" => []},
+                 "createdAt" => "2026-03-19T00:00:00Z",
+                 "updatedAt" => "2026-03-19T00:00:00Z"
+               }
+             ],
+             "pageInfo" => %{"hasNextPage" => false, "endCursor" => nil}
+           }
+         }
+       }}
+    end
+
+    assert {:ok, [%SymphonyElixir.Linear.Issue{identifier: "SYM-EPIC", labels: ["epic-split"]}]} =
+             Client.fetch_candidate_issues_for_test(graphql_fun)
+
+    assert_receive {:combined_query, query, %{labelName: "epic-split", projectSlug: "my-project-abc123", stateNames: ["Todo", "In Progress"]}}
+
+    assert query =~ "SymphonyLinearPollByLabelAndProject"
+    assert query =~ "labels: {some: {name: {eq: $labelName}}}"
+    assert query =~ "project: {slugId: {eq: $projectSlug}}"
+  end
+
   test "orchestrator sorts dispatch by priority then oldest created_at" do
     issue_same_priority_older = %Issue{
       id: "issue-old-high",

@@ -26,6 +26,7 @@ import {
 import { useNow } from '../hooks/use-now'
 import { formatQueryError, formatJson, titleCase } from '../lib/helpers'
 import { Badge, Button, ErrorPanel, LoadingPanel } from '../components/ui'
+import { ErrorCategoryBadge } from './dashboard'
 
 import { sessionRoute } from '../router'
 
@@ -82,6 +83,8 @@ export function SessionView() {
         turn_count: fresh.turn_count,
         status: fresh.status,
         ended_at: fresh.ended_at,
+        error: fresh.error,
+        error_category: fresh.error_category,
         live: fresh.live,
       }
     })
@@ -273,10 +276,11 @@ function SessionBlock({ now, session }: { now: number; session: TimelineSession 
           {session.live ? 'Live' : 'Session'} {session.session_id} · {formatDateTime(session.started_at)}
           {session.live ? ` · ${runtimeSince(session.started_at, now)}` : ''}
         </span>
-        {session.status === 'failed' && session.error_category ? (
-          <Badge className="ml-2" tone={session.error_category === 'infra' ? 'danger' : session.error_category === 'agent' ? 'retrying' : 'neutral'}>
-            {session.error_category}
-          </Badge>
+        {session.status === 'failed' ? (
+          <span className="ml-2 inline-flex items-center gap-1.5">
+            <Badge tone="danger">Failed</Badge>
+            <ErrorCategoryBadge category={session.error_category} />
+          </span>
         ) : null}
       </div>
 
