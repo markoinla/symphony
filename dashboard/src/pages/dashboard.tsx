@@ -257,6 +257,14 @@ function LinearIssueBadge({ identifier }: { identifier: string }) {
   )
 }
 
+function MetaBadge({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="inline-block max-w-full truncate rounded bg-th-muted px-1.5 py-0.5 text-[11px] text-th-text-4">
+      {children}
+    </span>
+  )
+}
+
 function RunningSessionCard({
   entry,
   index,
@@ -286,7 +294,12 @@ function RunningSessionCard({
         </div>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-th-text-4">
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        {entry.workflow_name ? <MetaBadge>{entry.workflow_name}</MetaBadge> : null}
+        {entry.project_name ? <MetaBadge>{entry.project_name}</MetaBadge> : null}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-th-text-4">
         <span className="tabular-nums">{runtimeSince(entry.started_at, now)}</span>
         <span className="tabular-nums">{formatNumber(entry.turn_count)} turns</span>
         <span className="tabular-nums">{formatNumber(entry.tokens.total_tokens)} tok</span>
@@ -324,7 +337,12 @@ function RetrySessionCard({
         </div>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-th-text-4">
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        {entry.workflow_name ? <MetaBadge>{entry.workflow_name}</MetaBadge> : null}
+        {entry.project_name ? <MetaBadge>{entry.project_name}</MetaBadge> : null}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-th-text-4">
         <span className="tabular-nums">{formatDateTime(entry.due_at)}</span>
         {entry.worker_host ? <span>{entry.worker_host}</span> : null}
       </div>
@@ -372,7 +390,13 @@ export function HistoryCard({ index, session }: { index: number; session: Sessio
         </div>
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-th-text-4">
+      <div className="mt-3 flex flex-wrap items-center gap-1.5">
+        {session.workflow_name ? <MetaBadge>{session.workflow_name}</MetaBadge> : null}
+        {session.github_repo ? <MetaBadge>{session.github_repo}</MetaBadge> : null}
+        {session.github_branch ? <MetaBadge>{session.github_branch}</MetaBadge> : null}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-th-text-4">
         <span className="tabular-nums">{formatDateTime(session.started_at)}</span>
         <span className="tabular-nums">{formatNumber(session.total_tokens)} tok</span>
         {session.worker_host ? <span>{session.worker_host}</span> : null}

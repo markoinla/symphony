@@ -92,6 +92,9 @@ export type SessionsPayload = {
     error: string | null
     error_category: string | null
     workflow_name: string | null
+    github_branch: string | null
+    github_repo: string | null
+    project_name: string | null
   }>
 }
 
