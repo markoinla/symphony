@@ -305,6 +305,24 @@ export function deleteSetting(key: string) {
   })
 }
 
+export type AgentWorkflow = {
+  name: string
+  enabled: boolean
+  loaded: boolean
+  description: string | null
+  config: {
+    max_concurrent_agents?: number
+    polling_interval_ms?: number
+    max_turns?: number
+    engine?: string
+  }
+  raw_config: Record<string, unknown>
+}
+
+export function getAgents() {
+  return requestJson<{ agents: AgentWorkflow[] }>('/api/v1/agents')
+}
+
 export type OAuthStatus = {
   status: 'connected' | 'expired' | 'disconnected'
   expires_at: string | null

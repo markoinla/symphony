@@ -346,6 +346,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   embedded_schema do
     field(:engine, :string, default: "codex")
+    field(:description, :string)
     embeds_one(:tracker, Tracker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:polling, Polling, on_replace: :update, defaults_to_struct: true)
     embeds_one(:workspace, Workspace, on_replace: :update, defaults_to_struct: true)
@@ -439,7 +440,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [:engine])
+    |> cast(attrs, [:engine, :description])
     |> validate_inclusion(:engine, ["codex", "claude"])
     |> cast_embed(:tracker, with: &Tracker.changeset/2)
     |> cast_embed(:polling, with: &Polling.changeset/2)
