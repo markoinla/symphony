@@ -37,9 +37,10 @@ defmodule SymphonyElixir.SessionLog do
     workflow_name = Keyword.get(opts, :workflow_name)
     github_branch = Keyword.get(opts, :github_branch)
     name = via(issue_id, session_id)
+
     init_arg =
-      {issue_id, session_id, issue_identifier, issue_title, project_id,
-       config_snapshot, workflow_name, github_branch}
+      {issue_id, session_id, issue_identifier, issue_title, project_id, config_snapshot, workflow_name, github_branch}
+
     GenServer.start_link(__MODULE__, init_arg, name: name)
   end
 
@@ -76,6 +77,14 @@ defmodule SymphonyElixir.SessionLog do
         metadata: parse_metadata(m.metadata)
       }
     end)
+  end
+
+  @spec get_db_session_id(String.t(), String.t()) :: integer() | nil
+  def get_db_session_id(issue_id, session_id) do
+    case lookup(issue_id, session_id) do
+      nil -> nil
+      pid -> GenServer.call(pid, :get_db_session_id)
+    end
   end
 
   @spec finalize(String.t(), String.t(), atom(), map()) :: :ok
@@ -851,15 +860,14 @@ defmodule SymphonyElixir.SessionLog do
   # When the real codex session_id arrives via :session_started, update the DB
   # session so that finalize_db_session (which looks up by codex session_id)
   # can find and update it with turn_count / total_tokens.
+  # This is synchronous (not async) to ensure the DB session_id is updated
+  # before any subsequent token sync attempts that look up by engine session_id.
   defp maybe_sync_engine_session_id(
          %{event: :session_started, session_id: engine_session_id},
          %{db_session_id: db_id} = state
        )
        when is_binary(engine_session_id) and not is_nil(db_id) do
-    Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-      Store.update_session_engine_id(db_id, engine_session_id)
-    end)
-
+    Store.update_session_engine_id(db_id, engine_session_id)
     state
   end
 

@@ -178,8 +178,11 @@ defmodule SymphonyElixir.Orchestrator do
   def terminate(_reason, %State{running: running}) do
     Enum.each(running, fn {_issue_id, running_entry} ->
       session_id = running_entry_session_id(running_entry)
+      pid = Map.get(running_entry, :pid)
 
-      if session_id != "n/a" do
+      # Only finalize sessions whose agent task has already exited.
+      # Live tasks (under TaskSupervisor) will finalize themselves on completion.
+      if session_id != "n/a" and (is_nil(pid) or not Process.alive?(pid)) do
         input_tokens = Map.get(running_entry, :engine_input_tokens, 0)
         output_tokens = Map.get(running_entry, :engine_output_tokens, 0)
         estimated_cost_cents = compute_estimated_cost(input_tokens, output_tokens)
@@ -350,6 +353,18 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   def handle_info({:engine_worker_update, _issue_id, _update}, state), do: {:noreply, state}
+
+  def handle_info({:session_db_id, issue_id, db_session_id}, %{running: running} = state)
+      when is_binary(issue_id) and is_integer(db_session_id) do
+    case Map.get(running, issue_id) do
+      nil ->
+        {:noreply, state}
+
+      running_entry ->
+        updated = Map.put(running_entry, :db_session_id, db_session_id)
+        {:noreply, %{state | running: Map.put(running, issue_id, updated)}}
+    end
+  end
 
   def handle_info({:comment_watch_state, issue_id, comment_watch_state}, %{running: running} = state)
       when is_binary(issue_id) and is_map(comment_watch_state) do
@@ -976,6 +991,7 @@ defmodule SymphonyElixir.Orchestrator do
             last_engine_timestamp: nil,
             last_engine_event: nil,
             engine_pid: nil,
+            db_session_id: nil,
             engine_input_tokens: 0,
             engine_output_tokens: 0,
             engine_total_tokens: 0,
@@ -1267,11 +1283,27 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp finalize_stale_db_sessions(%State{project_id: project_id}) do
-    {count, _} = Store.finalize_stale_sessions(project_id: project_id)
+    live_issue_ids = live_session_issue_ids()
+
+    {count, _} =
+      Store.finalize_stale_sessions(
+        project_id: project_id,
+        exclude_issue_ids: live_issue_ids
+      )
 
     if count > 0 do
       Logger.warning("Finalized #{count} stale running session(s) from previous orchestrator lifecycle")
     end
+
+    if live_issue_ids != [] do
+      Logger.info("Preserved #{length(live_issue_ids)} running session(s) with active agent tasks")
+    end
+  end
+
+  defp live_session_issue_ids do
+    Registry.select(SymphonyElixir.SessionLogRegistry, [{{:"$1", :_, :_}, [], [:"$1"]}])
+    |> Enum.map(fn {issue_id, _session_id} -> issue_id end)
+    |> Enum.uniq()
   end
 
   defp notify_dashboard do
@@ -1801,6 +1833,15 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp finalize_db_session(_running_entry, _reason), do: :ok
+
+  defp sync_session_to_db(%{db_session_id: db_session_id}, attrs)
+       when is_integer(db_session_id) do
+    clean_attrs = attrs |> Enum.reject(fn {_k, v} -> is_nil(v) end) |> Map.new()
+
+    if map_size(clean_attrs) > 0 do
+      Store.update_session_live_by_id(db_session_id, clean_attrs)
+    end
+  end
 
   defp sync_session_to_db(%{session_id: session_id}, attrs)
        when is_binary(session_id) and session_id != "n/a" do

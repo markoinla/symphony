@@ -291,6 +291,20 @@ defmodule SymphonyElixir.Store do
     :ok
   end
 
+  @spec update_session_live_by_id(integer(), map()) :: :ok
+  def update_session_live_by_id(db_session_id, attrs)
+      when is_integer(db_session_id) and is_map(attrs) do
+    case Repo.get(Session, db_session_id) do
+      %Session{status: "running"} = session ->
+        session |> Session.changeset(attrs) |> Repo.update()
+
+      _ ->
+        :ok
+    end
+
+    :ok
+  end
+
   @spec complete_session_by_engine_session_id(String.t(), map()) ::
           {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t() | :not_found}
   def complete_session_by_engine_session_id(session_id, attrs) do
@@ -449,12 +463,22 @@ defmodule SymphonyElixir.Store do
   @spec finalize_stale_sessions(keyword()) :: {integer(), nil}
   def finalize_stale_sessions(opts \\ []) do
     project_id = Keyword.get(opts, :project_id)
+    exclude_issue_ids = Keyword.get(opts, :exclude_issue_ids, [])
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    Session
-    |> where([s], s.status == "running")
-    |> maybe_filter_project_id(project_id)
-    |> Repo.update_all(
+    query =
+      Session
+      |> where([s], s.status == "running")
+      |> maybe_filter_project_id(project_id)
+
+    query =
+      if exclude_issue_ids != [] do
+        where(query, [s], s.issue_id not in ^exclude_issue_ids)
+      else
+        query
+      end
+
+    Repo.update_all(query,
       set: [
         status: "cancelled",
         ended_at: now,

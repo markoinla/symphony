@@ -274,7 +274,7 @@ defmodule SymphonyElixir.AgentRunner do
 
     with {:ok, session} <- Engine.engine_module().start_session(workspace, worker_host: worker_host) do
       session_id = session[:session_id] || "session_#{System.unique_integer([:positive])}"
-      start_session_log(issue, session_id, project_id)
+      start_session_log(issue, session_id, project_id, engine_update_recipient)
       send_comment_watch_update(engine_update_recipient, issue, comment_watch_state)
       send_session_stderr_info(engine_update_recipient, issue, session[:stderr_file])
 
@@ -300,7 +300,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp start_session_log(%Issue{id: issue_id} = issue, session_id, project_id) when is_binary(issue_id) and is_binary(session_id) do
+  defp start_session_log(%Issue{id: issue_id} = issue, session_id, project_id, engine_update_recipient) when is_binary(issue_id) and is_binary(session_id) do
     config_snapshot = build_config_snapshot()
     workflow_name = SymphonyElixir.Workflow.current_workflow_name()
 
@@ -321,10 +321,10 @@ defmodule SymphonyElixir.AgentRunner do
            github_branch: github_branch
          ) do
       {:ok, _pid} ->
-        :ok
+        send_session_db_id(engine_update_recipient, issue, issue_id, session_id)
 
       {:error, {:already_started, _pid}} ->
-        :ok
+        send_session_db_id(engine_update_recipient, issue, issue_id, session_id)
 
       {:error, reason} ->
         Logger.warning("Failed to start SessionLog for issue_id=#{issue_id} session_id=#{session_id}: #{inspect(reason)}")
@@ -332,7 +332,20 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp start_session_log(_issue, _session_id, _project_id), do: :ok
+  defp start_session_log(_issue, _session_id, _project_id, _engine_update_recipient), do: :ok
+
+  defp send_session_db_id(recipient, %Issue{id: issue_id}, issue_id, session_id)
+       when is_binary(issue_id) and is_pid(recipient) do
+    case SessionLog.get_db_session_id(issue_id, session_id) do
+      db_id when is_integer(db_id) ->
+        send(recipient, {:session_db_id, issue_id, db_id})
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp send_session_db_id(_recipient, _issue, _issue_id, _session_id), do: :ok
 
   @spec build_config_snapshot() :: map() | nil
   defp build_config_snapshot do
