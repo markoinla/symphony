@@ -382,41 +382,34 @@ defmodule SymphonyElixir.Workspace do
   defp hook_env do
     project = SymphonyElixir.Settings.current_project()
 
-    base =
-      case project do
-        %{github_repo: repo} when is_binary(repo) and repo != "" ->
-          [{"GITHUB_REPO", repo}]
-
-        _ ->
-          []
-      end
-
-    base =
-      case project do
-        %{github_branch: branch} when is_binary(branch) and branch != "" ->
-          base ++ [{"GITHUB_BRANCH", branch}]
-
-        _ ->
-          base
-      end
-
-    base =
-      case GitHub.OAuth.current_access_token() do
-        token when is_binary(token) and token != "" ->
-          base ++ [{"GITHUB_TOKEN", token}]
-
-        _ ->
-          base
-      end
-
-    project_env_vars =
-      case project do
-        %{env_vars: env_text} -> SymphonyElixir.Settings.parse_env_vars(env_text)
-        _ -> []
-      end
-
-    base ++ project_env_vars
+    project_fields(project) ++
+      github_token_env() ++
+      project_env_vars(project)
   end
+
+  defp project_fields(%{github_repo: repo, github_branch: branch})
+       when is_binary(repo) and repo != "" and is_binary(branch) and branch != "",
+       do: [{"GITHUB_REPO", repo}, {"GITHUB_BRANCH", branch}]
+
+  defp project_fields(%{github_repo: repo}) when is_binary(repo) and repo != "",
+    do: [{"GITHUB_REPO", repo}]
+
+  defp project_fields(%{github_branch: branch}) when is_binary(branch) and branch != "",
+    do: [{"GITHUB_BRANCH", branch}]
+
+  defp project_fields(_), do: []
+
+  defp github_token_env do
+    case GitHub.OAuth.current_access_token() do
+      token when is_binary(token) and token != "" -> [{"GITHUB_TOKEN", token}]
+      _ -> []
+    end
+  end
+
+  defp project_env_vars(%{env_vars: env_text}),
+    do: SymphonyElixir.Settings.parse_env_vars(env_text)
+
+  defp project_env_vars(_), do: []
 
   defp hook_env_export do
     hook_env()
