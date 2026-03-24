@@ -72,11 +72,18 @@ defmodule SymphonyElixir.AgentRunner do
         maybe_notify_workspace_ready(issue, workspace, worker_host, created?)
 
         try do
-          with :ok <- Workspace.run_before_run_hook(workspace, issue, worker_host) do
-            run_engine_turns(workspace, issue, engine_update_recipient, opts, worker_host)
+          case Workspace.run_before_run_hook(workspace, issue, worker_host) do
+            {:ok, before_results} ->
+              send_hook_results(engine_update_recipient, issue, before_results)
+              run_engine_turns(workspace, issue, engine_update_recipient, opts, worker_host)
+
+            {:error, reason, before_results} ->
+              send_hook_results(engine_update_recipient, issue, before_results)
+              {:error, reason}
           end
         after
-          Workspace.run_after_run_hook(workspace, issue, worker_host)
+          after_results = Workspace.run_after_run_hook(workspace, issue, worker_host)
+          send_hook_results(engine_update_recipient, issue, after_results)
         end
 
       {:error, reason} ->
@@ -128,6 +135,14 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
+
+  defp send_hook_results(recipient, %Issue{id: issue_id}, results)
+       when is_binary(issue_id) and is_pid(recipient) and is_list(results) and results != [] do
+    send(recipient, {:hook_results, issue_id, results})
+    :ok
+  end
+
+  defp send_hook_results(_recipient, _issue, _results), do: :ok
 
   defp send_comment_watch_update(recipient, %Issue{id: issue_id}, comment_watch_state)
        when is_binary(issue_id) and is_pid(recipient) do

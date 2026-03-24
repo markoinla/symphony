@@ -1664,8 +1664,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert Config.settings!().worker.ssh_hosts == ["worker-01:2200"]
       assert Config.settings!().workspace.root == workspace_root
       assert {:ok, ^workspace_path} = Workspace.create_for_issue("MT-SSH-WS", "worker-01:2200")
-      assert :ok = Workspace.run_before_run_hook(workspace_path, "MT-SSH-WS", "worker-01:2200")
-      assert :ok = Workspace.run_after_run_hook(workspace_path, "MT-SSH-WS", "worker-01:2200")
+      assert {:ok, [%{hook_name: "before_run", status: "ok"}]} = Workspace.run_before_run_hook(workspace_path, "MT-SSH-WS", "worker-01:2200")
+      assert [%{hook_name: "after_run", status: "ok"}] = Workspace.run_after_run_hook(workspace_path, "MT-SSH-WS", "worker-01:2200")
       assert :ok = Workspace.remove_issue_workspaces("MT-SSH-WS", "worker-01:2200")
 
       trace = File.read!(trace_file)
