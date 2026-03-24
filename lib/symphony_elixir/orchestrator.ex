@@ -13,6 +13,7 @@ defmodule SymphonyElixir.Orchestrator do
     Codex.StderrBuffer,
     Config,
     DashboardLinks,
+    ErrorClassifier,
     Pricing,
     Settings,
     StatusDashboard,
@@ -1726,6 +1727,11 @@ defmodule SymphonyElixir.Orchestrator do
       output_tokens = Map.get(running_entry, :engine_output_tokens, 0)
       estimated_cost_cents = compute_estimated_cost(input_tokens, output_tokens)
 
+      error_category =
+        if reason != :normal,
+          do: reason |> ErrorClassifier.classify() |> Atom.to_string(),
+          else: nil
+
       completion_attrs = %{
         status: status,
         issue_identifier: running_entry.identifier,
@@ -1738,7 +1744,8 @@ defmodule SymphonyElixir.Orchestrator do
         workspace_path: Map.get(running_entry, :workspace_path),
         error: error,
         stderr: stderr,
-        estimated_cost_cents: estimated_cost_cents
+        estimated_cost_cents: estimated_cost_cents,
+        error_category: error_category
       }
 
       completion_attrs =
