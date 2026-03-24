@@ -231,5 +231,28 @@ defmodule SymphonyElixirWeb.ObservabilityApiControllerTest do
       assert body["summary"]["message_count"] == 0
       assert body["summary"]["error_message_count"] == 0
     end
+
+    test "handles session with nil optional fields" do
+      session =
+        create_debug_session(%{
+          workflow_name: nil,
+          config_snapshot: nil,
+          stderr: nil,
+          hook_results: nil,
+          error: nil
+        })
+
+      conn =
+        build_conn()
+        |> put_req_header("accept", "application/json")
+        |> get("/api/v1/sessions/#{session.id}/debug")
+
+      body = json_response(conn, 200)
+      assert is_nil(body["session"]["workflow_name"])
+      assert is_nil(body["session"]["config_snapshot"])
+      assert is_nil(body["session"]["stderr"])
+      assert is_nil(body["session"]["hook_results"])
+      assert is_nil(body["session"]["error"])
+    end
   end
 end
