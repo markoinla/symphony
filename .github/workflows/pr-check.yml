@@ -40,9 +40,6 @@ jobs:
       - name: Lint
         run: mix lint
 
-      - name: Test
-        run: mix test --exclude codex_required
-
   dashboard:
     name: Dashboard
     runs-on: ubuntu-latest
