@@ -172,33 +172,40 @@ defmodule SymphonyElixir.Workspace do
     :ok
   end
 
+  @type hook_result :: %{hook_name: String.t(), status: String.t(), output: String.t()}
+
   @spec run_before_run_hook(Path.t(), map() | String.t() | nil, worker_host()) ::
-          :ok | {:error, term()}
+          {:ok, [hook_result()]} | {:error, term(), [hook_result()]}
   def run_before_run_hook(workspace, issue_or_identifier, worker_host \\ nil) when is_binary(workspace) do
     issue_context = issue_context(issue_or_identifier)
     hooks = Config.settings!().hooks
 
     case hooks.before_run do
       nil ->
-        :ok
+        {:ok, []}
 
       command ->
-        run_hook(command, workspace, issue_context, "before_run", worker_host)
+        case run_hook(command, workspace, issue_context, "before_run", worker_host) do
+          {:ok, result} -> {:ok, [result]}
+          {:error, reason, result} -> {:error, reason, [result]}
+        end
     end
   end
 
-  @spec run_after_run_hook(Path.t(), map() | String.t() | nil, worker_host()) :: :ok
+  @spec run_after_run_hook(Path.t(), map() | String.t() | nil, worker_host()) :: [hook_result()]
   def run_after_run_hook(workspace, issue_or_identifier, worker_host \\ nil) when is_binary(workspace) do
     issue_context = issue_context(issue_or_identifier)
     hooks = Config.settings!().hooks
 
     case hooks.after_run do
       nil ->
-        :ok
+        []
 
       command ->
-        run_hook(command, workspace, issue_context, "after_run", worker_host)
-        |> ignore_hook_failure()
+        case run_hook(command, workspace, issue_context, "after_run", worker_host) do
+          {:ok, result} -> [result]
+          {:error, _reason, result} -> [result]
+        end
     end
   end
 
@@ -230,17 +237,17 @@ defmodule SymphonyElixir.Workspace do
 
   defp handle_after_create_hook(command, workspace, issue_context, worker_host) do
     case run_hook(command, workspace, issue_context, "after_create", worker_host) do
-      :ok ->
+      {:ok, _result} ->
         :ok
 
-      {:error, reason} = error ->
+      {:error, reason, _result} ->
         Logger.warning(
           "after_create hook failed, removing workspace to allow re-creation on next attempt " <>
             "#{issue_log_context(issue_context)} workspace=#{workspace} reason=#{inspect(reason)}"
         )
 
         cleanup_failed_workspace(workspace, worker_host)
-        error
+        {:error, reason}
     end
   end
 
@@ -312,17 +319,17 @@ defmodule SymphonyElixir.Workspace do
             )
 
           {:error, {:workspace_hook_timeout, "before_remove", _timeout_ms} = reason} ->
-            {:error, reason}
+            {:error, reason, %{hook_name: "before_remove", status: "timeout", output: ""}}
 
           {:error, reason} ->
-            {:error, reason}
+            {:error, reason, %{hook_name: "before_remove", status: "failed", output: inspect(reason)}}
         end
         |> ignore_hook_failure()
     end
   end
 
-  defp ignore_hook_failure(:ok), do: :ok
-  defp ignore_hook_failure({:error, _reason}), do: :ok
+  defp ignore_hook_failure({:ok, _result}), do: :ok
+  defp ignore_hook_failure({:error, _reason, _result}), do: :ok
 
   defp run_hook(command, workspace, issue_context, hook_name, nil) do
     timeout_ms = Config.settings!().hooks.timeout_ms
@@ -344,7 +351,8 @@ defmodule SymphonyElixir.Workspace do
 
         Logger.warning("Workspace hook timed out hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} worker_host=local timeout_ms=#{timeout_ms}")
 
-        {:error, {:workspace_hook_timeout, hook_name, timeout_ms}}
+        result = %{hook_name: hook_name, status: "timeout", output: ""}
+        {:error, {:workspace_hook_timeout, hook_name, timeout_ms}, result}
     end
   end
 
@@ -359,10 +367,12 @@ defmodule SymphonyElixir.Workspace do
         handle_hook_command_result(cmd_result, workspace, issue_context, hook_name)
 
       {:error, {:workspace_hook_timeout, ^hook_name, _timeout_ms} = reason} ->
-        {:error, reason}
+        result = %{hook_name: hook_name, status: "timeout", output: ""}
+        {:error, reason, result}
 
       {:error, reason} ->
-        {:error, reason}
+        result = %{hook_name: hook_name, status: "failed", output: inspect(reason)}
+        {:error, reason, result}
     end
   end
 
@@ -405,16 +415,18 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  defp handle_hook_command_result({_output, 0}, _workspace, _issue_id, _hook_name) do
-    :ok
+  defp handle_hook_command_result({output, 0}, _workspace, _issue_context, hook_name) do
+    {:ok, %{hook_name: hook_name, status: "ok", output: IO.iodata_to_binary(output)}}
   end
 
   defp handle_hook_command_result({output, status}, workspace, issue_context, hook_name) do
-    sanitized_output = sanitize_hook_output_for_log(output)
+    binary_output = IO.iodata_to_binary(output)
+    sanitized_output = sanitize_hook_output_for_log(binary_output)
 
     Logger.warning("Workspace hook failed hook=#{hook_name} #{issue_log_context(issue_context)} workspace=#{workspace} status=#{status} output=#{inspect(sanitized_output)}")
 
-    {:error, {:workspace_hook_failed, hook_name, status, output}}
+    result = %{hook_name: hook_name, status: "failed", output: binary_output}
+    {:error, {:workspace_hook_failed, hook_name, status, binary_output}, result}
   end
 
   defp sanitize_hook_output_for_log(output, max_bytes \\ 2_048) do

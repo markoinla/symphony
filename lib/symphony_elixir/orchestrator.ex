@@ -342,6 +342,19 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  def handle_info({:hook_results, issue_id, results}, %{running: running} = state)
+      when is_binary(issue_id) and is_list(results) do
+    case Map.get(running, issue_id) do
+      nil ->
+        {:noreply, state}
+
+      running_entry ->
+        existing = Map.get(running_entry, :hook_results, [])
+        updated_running_entry = Map.put(running_entry, :hook_results, existing ++ results)
+        {:noreply, %{state | running: Map.put(running, issue_id, updated_running_entry)}}
+    end
+  end
+
   def handle_info({:retry_issue, issue_id, retry_token}, state) do
     result =
       case pop_retry_attempt_state(state, issue_id, retry_token) do
@@ -1697,20 +1710,30 @@ defmodule SymphonyElixir.Orchestrator do
     if session_id != "n/a" do
       status = if reason == :normal, do: "completed", else: "failed"
       error = if reason != :normal, do: inspect(reason)
+      hook_results = Map.get(running_entry, :hook_results)
+
+      completion_attrs = %{
+        status: status,
+        issue_identifier: running_entry.identifier,
+        issue_title: Map.get(running_entry, :issue, %{}) |> Map.get(:title),
+        turn_count: Map.get(running_entry, :turn_count, 0),
+        input_tokens: Map.get(running_entry, :engine_input_tokens, 0),
+        output_tokens: Map.get(running_entry, :engine_output_tokens, 0),
+        total_tokens: Map.get(running_entry, :engine_total_tokens, 0),
+        worker_host: Map.get(running_entry, :worker_host),
+        workspace_path: Map.get(running_entry, :workspace_path),
+        error: error
+      }
+
+      completion_attrs =
+        if hook_results in [nil, []] do
+          completion_attrs
+        else
+          Map.put(completion_attrs, :hook_results, hook_results_to_map(hook_results))
+        end
 
       Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-        Store.complete_session_by_engine_session_id(session_id, %{
-          status: status,
-          issue_identifier: running_entry.identifier,
-          issue_title: Map.get(running_entry, :issue, %{}) |> Map.get(:title),
-          turn_count: Map.get(running_entry, :turn_count, 0),
-          input_tokens: Map.get(running_entry, :engine_input_tokens, 0),
-          output_tokens: Map.get(running_entry, :engine_output_tokens, 0),
-          total_tokens: Map.get(running_entry, :engine_total_tokens, 0),
-          worker_host: Map.get(running_entry, :worker_host),
-          workspace_path: Map.get(running_entry, :workspace_path),
-          error: error
-        })
+        Store.complete_session_by_engine_session_id(session_id, completion_attrs)
       end)
     end
 
@@ -1718,6 +1741,14 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp finalize_db_session(_running_entry, _reason), do: :ok
+
+  defp hook_results_to_map(results) when is_list(results) do
+    Enum.map(results, fn result ->
+      result
+      |> Map.take([:hook_name, :status, :output])
+      |> Map.new(fn {k, v} -> {to_string(k), v} end)
+    end)
+  end
 
   defp refresh_runtime_config(%State{} = state) do
     config = Config.settings!(state.workflow_name)
