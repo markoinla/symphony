@@ -148,31 +148,31 @@ mutation CreateBlockingRelation($issueId: String!, $relatedIssueId: String!) {
 
 2. Set `issueId` to the blocking issue (must be done first) and `relatedIssueId` to the dependent issue (must wait).
 
-### Step 7: Move sub-issues to Staged
+### Step 7: Move sub-issues to Todo
 
-1. Resolve the "Staged" state ID for the team:
+1. Resolve the "Todo" state ID for the team:
 
 ```graphql
-query ResolveStagedState($teamId: String!) {
+query ResolveTodoState($teamId: String!) {
   team(id: $teamId) {
-    states(filter: {name: {eq: "Staged"}}, first: 1) {
+    states(filter: {name: {eq: "Todo"}}, first: 1) {
       nodes { id }
     }
   }
 }
 ```
 
-2. For each created sub-issue, use `issueUpdate` to move it to "Staged":
+2. For each created sub-issue, use `issueUpdate` to move it to "Todo":
 
 ```graphql
-mutation MoveToStaged($issueId: String!, $stateId: String!) {
+mutation MoveToTodo($issueId: String!, $stateId: String!) {
   issueUpdate(id: $issueId, input: {stateId: $stateId}) {
     success
   }
 }
 ```
 
-Sub-issues flow from "Staged" into the normal triage pipeline.
+Sub-issues flow from "Todo" into the normal pipeline.
 
 ### Step 8: Post a summary comment
 
@@ -192,7 +192,7 @@ Post a single comment on the parent epic issue summarizing the decomposition:
 
 ### Next steps
 
-Sub-issues have been staged for triage. The parent epic remains in Backlog as a coordination container.
+Sub-issues have been moved to Todo. The parent epic remains in Backlog as a coordination container.
 ```
 {% endraw %}
 
