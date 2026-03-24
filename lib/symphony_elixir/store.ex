@@ -263,12 +263,14 @@ defmodule SymphonyElixir.Store do
     issue_identifier = Keyword.get(opts, :issue_identifier)
     status = Keyword.get(opts, :status)
     project_id = Keyword.get(opts, :project_id)
+    workflow_name = Keyword.get(opts, :workflow_name)
 
     Session
     |> order_by([s], desc: s.started_at)
     |> maybe_filter_issue_identifier(issue_identifier)
     |> maybe_filter_status(status)
     |> maybe_filter_project_id(project_id)
+    |> maybe_filter_workflow_name(workflow_name)
     |> limit(^limit)
     |> offset(^offset)
     |> Repo.all()
@@ -320,6 +322,12 @@ defmodule SymphonyElixir.Store do
 
   defp maybe_filter_status(query, status) do
     where(query, [s], s.status == ^status)
+  end
+
+  defp maybe_filter_workflow_name(query, nil), do: query
+
+  defp maybe_filter_workflow_name(query, workflow_name) do
+    where(query, [s], s.workflow_name == ^workflow_name)
   end
 
   @spec finalize_stale_sessions(keyword()) :: {integer(), nil}

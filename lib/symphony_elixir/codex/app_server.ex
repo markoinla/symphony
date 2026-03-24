@@ -1011,7 +1011,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp issue_context(%{id: issue_id, identifier: identifier}) do
-    "issue_id=#{issue_id} issue_identifier=#{identifier}"
+    "issue_id=#{issue_id} issue_identifier=#{identifier} workflow_name=#{SymphonyElixir.Workflow.current_workflow_name()}"
   end
 
   defp stop_port(port) when is_port(port) do
