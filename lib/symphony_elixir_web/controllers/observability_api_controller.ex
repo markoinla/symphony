@@ -44,6 +44,20 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
     json(conn, Presenter.history_payload(opts))
   end
 
+  @spec session_debug(Conn.t(), map()) :: Conn.t()
+  def session_debug(conn, %{"id" => id_str}) do
+    case Integer.parse(id_str) do
+      {id, ""} when id > 0 ->
+        case Presenter.session_debug_payload(id) do
+          {:ok, payload} -> json(conn, payload)
+          {:error, :not_found} -> error_response(conn, 404, "session_not_found", "Session not found")
+        end
+
+      _ ->
+        error_response(conn, 404, "session_not_found", "Session not found")
+    end
+  end
+
   @spec refresh(Conn.t(), map()) :: Conn.t()
   def refresh(conn, _params) do
     case Presenter.refresh_payload(orchestrator()) do

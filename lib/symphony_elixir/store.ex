@@ -281,6 +281,14 @@ defmodule SymphonyElixir.Store do
     Repo.get(Session, db_session_id)
   end
 
+  @spec get_session_debug(integer()) :: Ecto.Schema.t() | nil
+  def get_session_debug(db_session_id) do
+    Session
+    |> where([s], s.id == ^db_session_id)
+    |> preload(messages: ^from(m in Message, order_by: [asc: m.seq]))
+    |> Repo.one()
+  end
+
   @spec find_session_by_agent_session_id(String.t()) :: Ecto.Schema.t() | nil
   def find_session_by_agent_session_id(agent_session_id) when is_binary(agent_session_id) do
     Session
