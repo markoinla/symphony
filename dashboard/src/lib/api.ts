@@ -69,6 +69,7 @@ export type TimelineSession = {
   total_tokens: number | null
   worker_host: string | null
   error: string | null
+  error_category: string | null
   workflow_name: string | null
   live: boolean
   messages: TimelineMessage[]
@@ -89,6 +90,7 @@ export type SessionsPayload = {
     total_tokens: number
     worker_host: string | null
     error: string | null
+    error_category: string | null
     workflow_name: string | null
   }>
 }
