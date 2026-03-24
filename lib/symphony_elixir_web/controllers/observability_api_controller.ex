@@ -8,6 +8,8 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   alias Plug.Conn
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
+  import SymphonyElixirWeb.ErrorHelpers, only: [error_response: 4]
+
   @spec state(Conn.t(), map()) :: Conn.t()
   def state(conn, _params) do
     json(conn, Presenter.state_payload(orchestrator(), snapshot_timeout_ms()))
@@ -57,22 +59,6 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   @spec healthz(Conn.t(), map()) :: Conn.t()
   def healthz(conn, _params) do
     json(conn, %{status: "ok"})
-  end
-
-  @spec method_not_allowed(Conn.t(), map()) :: Conn.t()
-  def method_not_allowed(conn, _params) do
-    error_response(conn, 405, "method_not_allowed", "Method not allowed")
-  end
-
-  @spec not_found(Conn.t(), map()) :: Conn.t()
-  def not_found(conn, _params) do
-    error_response(conn, 404, "not_found", "Route not found")
-  end
-
-  defp error_response(conn, status, code, message) do
-    conn
-    |> put_status(status)
-    |> json(%{error: %{code: code, message: message}})
   end
 
   defp maybe_put_issue_identifier(opts, issue_identifier)

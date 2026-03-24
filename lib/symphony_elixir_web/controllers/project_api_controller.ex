@@ -9,6 +9,8 @@ defmodule SymphonyElixirWeb.ProjectApiController do
   alias SymphonyElixir.{Settings, Store}
   alias SymphonyElixirWeb.{ObservabilityPubSub, Presenter}
 
+  import SymphonyElixirWeb.ErrorHelpers, only: [error_response: 4, changeset_error_response: 4]
+
   @spec index(Conn.t(), map()) :: Conn.t()
   def index(conn, _params) do
     json(conn, Presenter.projects_payload())
@@ -36,7 +38,7 @@ defmodule SymphonyElixirWeb.ProjectApiController do
         |> json(%{project: project_payload(project)})
 
       {:error, changeset} ->
-        changeset_error_response(conn, changeset)
+        changeset_error_response(conn, "invalid_project", "Project is invalid", changeset)
     end
   end
 
@@ -53,7 +55,7 @@ defmodule SymphonyElixirWeb.ProjectApiController do
             error_response(conn, 404, "project_not_found", "Project not found")
 
           {:error, changeset} ->
-            changeset_error_response(conn, changeset)
+            changeset_error_response(conn, "invalid_project", "Project is invalid", changeset)
         end
 
       _ ->
@@ -116,28 +118,6 @@ defmodule SymphonyElixirWeb.ProjectApiController do
   defp project_payload(project) do
     %{project: item} = Presenter.project_lookup_payload(project.id) |> elem(1)
     item
-  end
-
-  defp changeset_error_response(conn, changeset) do
-    conn
-    |> put_status(:unprocessable_entity)
-    |> json(%{
-      error: %{
-        code: "invalid_project",
-        message: "Project is invalid",
-        details: changeset_errors(changeset)
-      }
-    })
-  end
-
-  defp changeset_errors(changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {message, _opts} -> message end)
-  end
-
-  defp error_response(conn, status, code, message) do
-    conn
-    |> put_status(status)
-    |> json(%{error: %{code: code, message: message}})
   end
 
   defp trimmed(nil), do: ""
