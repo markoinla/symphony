@@ -9,7 +9,40 @@ defmodule SymphonyElixir.Store do
 
   import Ecto.Query
   alias SymphonyElixir.Repo
-  alias SymphonyElixir.Store.{IssueClaim, Message, Project, Session, Setting}
+  alias SymphonyElixir.Store.{Agent, IssueClaim, Message, Project, Session, Setting}
+
+  # ── Agent CRUD ─────────────────────────────────────────────────────
+
+  @spec list_agents() :: [Agent.t()]
+  def list_agents do
+    Agent
+    |> order_by([a], asc: a.name)
+    |> Repo.all()
+  end
+
+  @spec get_agent_by_name(String.t()) :: Agent.t() | nil
+  def get_agent_by_name(name) when is_binary(name) do
+    Repo.get_by(Agent, name: name)
+  end
+
+  @spec upsert_agent(map()) :: {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
+  def upsert_agent(attrs) when is_map(attrs) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    attrs =
+      attrs
+      |> Map.put(:inserted_at, now)
+      |> Map.put(:updated_at, now)
+
+    %Agent{}
+    |> Agent.changeset(attrs)
+    |> Ecto.Changeset.put_change(:inserted_at, now)
+    |> Ecto.Changeset.put_change(:updated_at, now)
+    |> Repo.insert(
+      on_conflict: [set: [updated_at: now]],
+      conflict_target: :name
+    )
+  end
 
   # ── Project CRUD ──────────────────────────────────────────────────
 

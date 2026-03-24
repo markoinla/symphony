@@ -1,8 +1,10 @@
 import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import * as Collapsible from '@radix-ui/react-collapsible'
-import { Bot, ChevronRight, Plus } from 'lucide-react'
+import { Bot, ChevronRight } from 'lucide-react'
 
 import { cn } from '../lib/utils'
+import { type AgentWorkflow, getAgents } from '../lib/api'
 import {
   Badge,
   Button,
@@ -11,80 +13,7 @@ import {
   EmptyState,
   Field,
   Input,
-  Textarea,
 } from '../components/ui'
-
-type MockAgent = {
-  name: string
-  description: string
-  enabled: boolean
-  engine: string
-  concurrency: number
-  polling_interval: number
-  max_turns: number
-  prompt_template: string
-  config: Record<string, unknown>
-}
-
-const mockAgents: MockAgent[] = [
-  {
-    name: 'WORKFLOW',
-    description: 'Main development workflow — picks up issues, writes code, creates PRs.',
-    enabled: true,
-    engine: 'codex',
-    concurrency: 3,
-    polling_interval: 30,
-    max_turns: 20,
-    prompt_template:
-      'You are a software engineering agent. Given a Linear issue, analyze the requirements,\nimplement the changes, write tests, and create a pull request.\n\nFollow the project conventions in CLAUDE.md and AGENTS.md.',
-    config: {
-      engine: 'codex',
-      concurrency: 3,
-      polling_interval: 30,
-      max_turns: 20,
-      labels: ['symphony'],
-      states: { trigger: 'Todo', in_progress: 'In Progress', done: 'Done' },
-    },
-  },
-  {
-    name: 'TRIAGE',
-    description: 'Triages incoming issues — adds labels, estimates complexity, suggests approach.',
-    enabled: true,
-    engine: 'codex',
-    concurrency: 5,
-    polling_interval: 15,
-    max_turns: 5,
-    prompt_template:
-      'You are a triage agent. Analyze the incoming issue and:\n1. Estimate complexity (low/medium/high)\n2. Suggest labels\n3. Write a suggested approach as a comment',
-    config: {
-      engine: 'codex',
-      concurrency: 5,
-      polling_interval: 15,
-      max_turns: 5,
-      labels: ['needs-triage'],
-      states: { trigger: 'Triage', done: 'Todo' },
-    },
-  },
-  {
-    name: 'ENRICHMENT',
-    description: 'Enriches issues with context — links related issues, adds documentation refs.',
-    enabled: false,
-    engine: 'codex',
-    concurrency: 2,
-    polling_interval: 60,
-    max_turns: 8,
-    prompt_template:
-      'You are an enrichment agent. For each issue:\n1. Search for related issues and link them\n2. Find relevant documentation and add references\n3. Identify potential blockers',
-    config: {
-      engine: 'codex',
-      concurrency: 2,
-      polling_interval: 60,
-      max_turns: 8,
-      labels: [],
-      states: { trigger: 'Backlog', done: 'Backlog' },
-    },
-  },
-]
 
 // ---------------------------------------------------------------------------
 // Agent detail dialog
@@ -97,47 +26,46 @@ function AgentDetailDialog({
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  agent: MockAgent | null
+  agent: AgentWorkflow | null
 }) {
-  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [showRawConfig, setShowRawConfig] = useState(false)
 
   if (!agent) return null
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent title={agent.name} description={agent.description}>
+      <DialogContent title={agent.name} description={agent.description ?? undefined}>
         <div className="grid gap-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge tone={agent.enabled ? 'running' : 'neutral'}>
+              {agent.enabled ? 'Enabled' : 'Disabled'}
+            </Badge>
+            {!agent.loaded && <Badge tone="neutral">Not loaded</Badge>}
+          </div>
+
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Engine">
-              <Input readOnly value={agent.engine} />
+              <Input readOnly value={agent.config.engine ?? '—'} />
             </Field>
             <Field label="Concurrency">
-              <Input readOnly type="number" value={agent.concurrency} />
+              <Input readOnly value={agent.config.max_concurrent_agents ?? '—'} />
             </Field>
-            <Field label="Polling interval (seconds)">
-              <Input readOnly type="number" value={agent.polling_interval} />
+            <Field label="Polling interval (ms)">
+              <Input readOnly value={agent.config.polling_interval_ms ?? '—'} />
             </Field>
             <Field label="Max turns">
-              <Input readOnly type="number" value={agent.max_turns} />
+              <Input readOnly value={agent.config.max_turns ?? '—'} />
             </Field>
           </div>
 
-          <Field label="Prompt template">
-            <Textarea
-              className="min-h-[160px] font-mono text-xs leading-5"
-              readOnly
-              value={agent.prompt_template}
-            />
-          </Field>
-
-          <Collapsible.Root onOpenChange={setShowAdvanced} open={showAdvanced}>
+          <Collapsible.Root onOpenChange={setShowRawConfig} open={showRawConfig}>
             <Collapsible.Trigger className="group flex w-full items-center gap-1.5 rounded-md py-1.5 text-xs font-medium text-th-text-3 transition hover:text-th-text-1">
               <ChevronRight className="h-3 w-3 transition-transform group-data-[state=open]:rotate-90" />
               Raw JSON config
             </Collapsible.Trigger>
             <Collapsible.Content>
               <pre className="mt-3 overflow-auto rounded-lg border border-th-border bg-th-inset p-4 font-mono text-xs leading-5 text-th-text-3">
-                {JSON.stringify(agent.config, null, 2)}
+                {JSON.stringify(agent.raw_config, null, 2)}
               </pre>
             </Collapsible.Content>
           </Collapsible.Root>
@@ -146,7 +74,6 @@ function AgentDetailDialog({
             <Button onClick={() => onOpenChange(false)} type="button" variant="ghost">
               Close
             </Button>
-            <Button type="button">Save changes</Button>
           </div>
         </div>
       </DialogContent>
@@ -162,8 +89,8 @@ function AgentCard({
   agent,
   onView,
 }: {
-  agent: MockAgent
-  onView: (agent: MockAgent) => void
+  agent: AgentWorkflow
+  onView: (agent: AgentWorkflow) => void
 }) {
   return (
     <div className="session-card rounded-xl border border-th-border bg-th-surface p-4 transition-shadow hover:shadow-sm sm:p-5">
@@ -174,15 +101,22 @@ function AgentCard({
             <Badge tone={agent.enabled ? 'running' : 'neutral'}>
               {agent.enabled ? 'Enabled' : 'Disabled'}
             </Badge>
+            {!agent.loaded && <Badge tone="neutral">Not loaded</Badge>}
           </div>
 
-          <p className="text-[13px] leading-5 text-th-text-3">{agent.description}</p>
+          {agent.description && (
+            <p className="text-[13px] leading-5 text-th-text-3">{agent.description}</p>
+          )}
 
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-th-text-4">
-            <span>Engine: {agent.engine}</span>
-            <span>Concurrency: {agent.concurrency}</span>
-            <span>Poll: {agent.polling_interval}s</span>
-            <span>Max turns: {agent.max_turns}</span>
+            {agent.config.engine && <span>Engine: {agent.config.engine}</span>}
+            {agent.config.max_concurrent_agents != null && (
+              <span>Concurrency: {agent.config.max_concurrent_agents}</span>
+            )}
+            {agent.config.polling_interval_ms != null && (
+              <span>Poll: {agent.config.polling_interval_ms}ms</span>
+            )}
+            {agent.config.max_turns != null && <span>Max turns: {agent.config.max_turns}</span>}
           </div>
         </div>
 
@@ -193,7 +127,7 @@ function AgentCard({
           type="button"
           variant="ghost"
         >
-          Edit
+          View
         </Button>
       </div>
     </div>
@@ -206,38 +140,42 @@ function AgentCard({
 
 export function AgentsView() {
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [selectedAgent, setSelectedAgent] = useState<MockAgent | null>(null)
+  const [selectedAgent, setSelectedAgent] = useState<AgentWorkflow | null>(null)
 
-  function handleView(agent: MockAgent) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['agents'],
+    queryFn: getAgents,
+    refetchInterval: 30_000,
+  })
+
+  const agents = data?.agents ?? []
+
+  function handleView(agent: AgentWorkflow) {
     setSelectedAgent(agent)
     setDialogOpen(true)
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight text-th-text-1">Agents</h1>
-          <p className="mt-1 text-sm text-th-text-3">
-            Manage agent definitions — configure workflows, prompt templates, and runtime settings.
-          </p>
-        </div>
-        <Button className="shrink-0" type="button">
-          <Plus className={cn('mr-1.5 h-3.5 w-3.5')} />
-          New agent
-        </Button>
+      <div>
+        <h1 className="text-xl font-semibold tracking-tight text-th-text-1">Agents</h1>
+        <p className="mt-1 text-sm text-th-text-3">
+          Agent definitions loaded from workflow files — configure via YAML frontmatter.
+        </p>
       </div>
 
-      {mockAgents.length === 0 ? (
+      {isLoading ? (
+        <p className="text-sm text-th-text-3">Loading agents…</p>
+      ) : agents.length === 0 ? (
         <EmptyState
-          icon={<Bot className="h-5 w-5 text-th-text-4" />}
-          title="No agents yet"
-          description="Create your first agent to start automating workflows."
+          icon={<Bot className={cn('h-5 w-5 text-th-text-4')} />}
+          title="No agents found"
+          description="No workflow files are loaded and no agents have been registered."
         />
       ) : null}
 
       <div className="grid gap-3">
-        {mockAgents.map((agent) => (
+        {agents.map((agent) => (
           <AgentCard key={agent.name} agent={agent} onView={handleView} />
         ))}
       </div>
