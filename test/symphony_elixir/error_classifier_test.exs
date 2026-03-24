@@ -127,6 +127,38 @@ defmodule SymphonyElixir.ErrorClassifierTest do
     end
   end
 
+  describe "classify/1 — exception tuple unwrapping (:DOWN reason)" do
+    test "RuntimeError wrapping :turn_timeout classifies as :timeout" do
+      reason = {%RuntimeError{message: "Agent run failed for SYM-1: :turn_timeout"}, []}
+      assert ErrorClassifier.classify(reason) == :timeout
+    end
+
+    test "RuntimeError wrapping :turn_failed classifies as :agent" do
+      reason = {%RuntimeError{message: "Agent run failed for SYM-1: {:turn_failed, %{reason: \"err\"}}"}, []}
+      assert ErrorClassifier.classify(reason) == :agent
+    end
+
+    test "RuntimeError wrapping :invalid_workspace_cwd classifies as :config" do
+      reason = {%RuntimeError{message: "Agent run failed for SYM-1: {:invalid_workspace_cwd, :symlink_escape, \"/a\"}"}, []}
+      assert ErrorClassifier.classify(reason) == :config
+    end
+
+    test "RuntimeError wrapping :port_exit classifies as :infra" do
+      reason = {%RuntimeError{message: "Agent run failed for SYM-1: {:port_exit, 1}"}, []}
+      assert ErrorClassifier.classify(reason) == :infra
+    end
+
+    test "RuntimeError wrapping stall detection classifies as :timeout" do
+      reason = {%RuntimeError{message: "Agent run failed: stalled for 120000ms without codex activity"}, []}
+      assert ErrorClassifier.classify(reason) == :timeout
+    end
+
+    test "RuntimeError with unknown message classifies as :infra" do
+      reason = {%RuntimeError{message: "something unexpected"}, []}
+      assert ErrorClassifier.classify(reason) == :infra
+    end
+  end
+
   describe "classify/1 — unknown fallback" do
     test "unknown atom defaults to :infra" do
       assert ErrorClassifier.classify(:something_totally_unknown) == :infra
