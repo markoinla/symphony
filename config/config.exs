@@ -1,5 +1,7 @@
 import Config
 
+config :logger, :default_formatter, metadata: [:request_id]
+
 config :phoenix, :json_library, Jason
 
 config :symphony_elixir, ecto_repos: [SymphonyElixir.Repo]
