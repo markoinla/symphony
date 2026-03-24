@@ -9,6 +9,11 @@ defmodule SymphonyElixir.PricingTest do
       assert Pricing.cost_cents("claude-sonnet-4-6", 1_000_000, 1_000_000) == 1_800
     end
 
+    test "calculates cost for claude-opus model" do
+      # 1M input tokens at 500 cents + 1M output tokens at 2500 cents = 3000 cents
+      assert Pricing.cost_cents("claude-opus-4-6", 1_000_000, 1_000_000) == 3_000
+    end
+
     test "calculates cost for claude-haiku model" do
       # 1M input tokens at 80 cents + 1M output tokens at 400 cents = 480 cents
       assert Pricing.cost_cents("claude-haiku-4-5", 1_000_000, 1_000_000) == 480
