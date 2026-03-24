@@ -90,6 +90,13 @@ To add the signal label:
 
 ### Step 4: Decompose the epic into sub-issues
 
+Break the epic into **tracer bullet** issues. Each issue is a thin vertical slice that cuts through ALL integration layers end-to-end, NOT a horizontal slice of one layer.
+
+**Vertical slice rules:**
+- Each slice delivers a narrow but COMPLETE path through every layer (schema, API, UI, tests)
+- A completed slice is demoable or verifiable on its own
+- Prefer many thin slices over few thick ones
+
 Design each sub-issue as a complete, actionable unit of work that a single agent can reasonably accomplish in one pass. Consider:
 
 - **Scope**: Each sub-issue should be a focused piece of work (not another epic).

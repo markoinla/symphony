@@ -5,12 +5,12 @@ After=network.target docker.service
 [Service]
 Type=simple
 User=marko
-WorkingDirectory=/home/marko/projects/symphony
-ExecStart=/home/marko/projects/symphony/start.sh
+WorkingDirectory=/home/marko/Projects/symphony
+ExecStart=/home/marko/Projects/symphony/start.sh
 Restart=always
 RestartSec=5
 Environment=HOME=/home/marko
-EnvironmentFile=-/home/marko/projects/symphony/.env
+EnvironmentFile=-/home/marko/Projects/symphony/.env
 
 [Install]
 WantedBy=multi-user.target

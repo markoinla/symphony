@@ -222,6 +222,7 @@ defmodule SymphonyElixir.SessionLogTest do
     assert session.status == "running"
   end
 
+
   defp start_session_log!(issue_id, session_id) do
     {:ok, _pid} =
       SessionLog.start_link(
