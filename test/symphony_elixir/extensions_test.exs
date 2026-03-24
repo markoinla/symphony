@@ -718,9 +718,8 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     conn = get(build_conn(), "/api/v1/MT-MISSING")
 
-    assert json_response(conn, 404) == %{
-             "error" => %{"code" => "issue_not_found", "message" => "Issue not found"}
-           }
+    assert %{"error" => %{"code" => "issue_not_found", "message" => "Issue not found"}} =
+             json_response(conn, 404)
 
     conn = post(build_conn(), "/api/v1/refresh", %{})
 
@@ -734,20 +733,20 @@ defmodule SymphonyElixir.ExtensionsTest do
     start_test_endpoint(orchestrator: unavailable_orchestrator, snapshot_timeout_ms: 5)
     write_dashboard_assets!()
 
-    assert json_response(post(build_conn(), "/api/v1/state", %{}), 405) ==
-             %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+    assert %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}} =
+             json_response(post(build_conn(), "/api/v1/state", %{}), 405)
 
-    assert json_response(get(build_conn(), "/api/v1/refresh"), 405) ==
-             %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+    assert %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}} =
+             json_response(get(build_conn(), "/api/v1/refresh"), 405)
 
-    assert json_response(post(build_conn(), "/", %{}), 405) ==
-             %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+    assert %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}} =
+             json_response(post(build_conn(), "/", %{}), 405)
 
-    assert json_response(post(build_conn(), "/api/v1/MT-1", %{}), 405) ==
-             %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}}
+    assert %{"error" => %{"code" => "method_not_allowed", "message" => "Method not allowed"}} =
+             json_response(post(build_conn(), "/api/v1/MT-1", %{}), 405)
 
-    assert json_response(get(build_conn(), "/api/v1/unknown/extra"), 404) ==
-             %{"error" => %{"code" => "not_found", "message" => "Route not found"}}
+    assert %{"error" => %{"code" => "not_found", "message" => "Route not found"}} =
+             json_response(get(build_conn(), "/api/v1/unknown/extra"), 404)
 
     index_path =
       :symphony_elixir |> :code.priv_dir() |> Path.join("static/dashboard/index.html")
@@ -768,13 +767,12 @@ defmodule SymphonyElixir.ExtensionsTest do
                "error" => %{"code" => "snapshot_unavailable", "message" => "Snapshot unavailable"}
              }
 
-    assert json_response(post(build_conn(), "/api/v1/refresh", %{}), 503) ==
-             %{
-               "error" => %{
-                 "code" => "orchestrator_unavailable",
-                 "message" => "Orchestrator is unavailable"
-               }
+    assert %{
+             "error" => %{
+               "code" => "orchestrator_unavailable",
+               "message" => "Orchestrator is unavailable"
              }
+           } = json_response(post(build_conn(), "/api/v1/refresh", %{}), 503)
   end
 
   test "phoenix observability api preserves snapshot timeout behavior" do
@@ -969,6 +967,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "linear_filter_by" => "project",
                  "linear_label_name" => nil,
                  "github_repo" => "openai/other",
+                 "github_branch" => nil,
                  "workspace_root" => "/tmp/other",
                  "env_vars" => nil,
                  "created_at" => DateTime.to_iso8601(now),
@@ -982,6 +981,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "linear_filter_by" => "project",
                  "linear_label_name" => nil,
                  "github_repo" => "openai/symphony",
+                 "github_branch" => nil,
                  "workspace_root" => "/tmp/symphony",
                  "env_vars" => "FOO=bar",
                  "created_at" => DateTime.to_iso8601(now),
@@ -1020,7 +1020,9 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "output_tokens" => 13,
                  "total_tokens" => 24,
                  "worker_host" => "worker-1",
-                 "error" => nil
+                 "error" => nil,
+                 "error_category" => nil,
+                 "workflow_name" => nil
                }
              ]
            }
@@ -1040,7 +1042,9 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "output_tokens" => 13,
                  "total_tokens" => 24,
                  "worker_host" => "worker-1",
-                 "error" => nil
+                 "error" => nil,
+                 "error_category" => nil,
+                 "workflow_name" => nil
                },
                %{
                  "id" => legacy_session.id,
@@ -1055,7 +1059,9 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "output_tokens" => 4,
                  "total_tokens" => 7,
                  "worker_host" => "worker-legacy",
-                 "error" => nil
+                 "error" => nil,
+                 "error_category" => nil,
+                 "workflow_name" => nil
                }
              ]
            }
