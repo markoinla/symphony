@@ -384,4 +384,101 @@ defmodule SymphonyElixir.Store do
     |> String.replace("_", "\\_")
     |> Path.join("%")
   end
+
+  # ── Analytics ─────────────────────────────────────────────────────
+
+  @spec analytics_cost(String.t()) :: map()
+  def analytics_cost(range) when range in ["7d", "30d", "90d"] do
+    days = range_to_days(range)
+    since = DateTime.utc_now() |> DateTime.add(-days, :day) |> DateTime.truncate(:second)
+
+    summary = summary_query(since)
+    daily = daily_query(since)
+    by_workflow = by_workflow_query(since)
+
+    %{
+      range: range,
+      summary: summary,
+      daily: daily,
+      by_workflow: by_workflow
+    }
+  end
+
+  defp range_to_days("7d"), do: 7
+  defp range_to_days("30d"), do: 30
+  defp range_to_days("90d"), do: 90
+
+  defp summary_query(since) do
+    result =
+      Session
+      |> where([s], s.started_at >= ^since and not is_nil(s.estimated_cost_cents))
+      |> select([s], %{
+        total_cost_cents: coalesce(sum(s.estimated_cost_cents), 0),
+        total_sessions: count(s.id),
+        total_input_tokens: coalesce(sum(s.input_tokens), 0),
+        total_output_tokens: coalesce(sum(s.output_tokens), 0)
+      })
+      |> Repo.one()
+
+    %{
+      total_cost_cents: result.total_cost_cents || 0,
+      total_sessions: result.total_sessions || 0,
+      total_input_tokens: result.total_input_tokens || 0,
+      total_output_tokens: result.total_output_tokens || 0
+    }
+  end
+
+  defp daily_query(since) do
+    Session
+    |> where([s], s.started_at >= ^since and not is_nil(s.workflow))
+    |> group_by([s], [fragment("date_trunc('day', ?)", s.started_at), s.workflow])
+    |> order_by([s], asc: fragment("date_trunc('day', ?)", s.started_at))
+    |> select([s], %{
+      date: fragment("date_trunc('day', ?)", s.started_at),
+      workflow: s.workflow,
+      cost_cents: coalesce(sum(s.estimated_cost_cents), 0),
+      sessions: count(s.id),
+      input_tokens: coalesce(sum(s.input_tokens), 0),
+      output_tokens: coalesce(sum(s.output_tokens), 0)
+    })
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      %{
+        date: row.date |> NaiveDateTime.to_date() |> Date.to_iso8601(),
+        workflow: row.workflow,
+        cost_cents: row.cost_cents || 0,
+        sessions: row.sessions || 0,
+        input_tokens: row.input_tokens || 0,
+        output_tokens: row.output_tokens || 0
+      }
+    end)
+  end
+
+  defp by_workflow_query(since) do
+    Session
+    |> where([s], s.started_at >= ^since and not is_nil(s.workflow))
+    |> group_by([s], s.workflow)
+    |> select([s], %{
+      workflow: s.workflow,
+      cost_cents: coalesce(sum(s.estimated_cost_cents), 0),
+      sessions: count(s.id),
+      input_tokens: coalesce(sum(s.input_tokens), 0),
+      output_tokens: coalesce(sum(s.output_tokens), 0)
+    })
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      cost = row.cost_cents || 0
+      sessions = row.sessions || 0
+      avg = if sessions > 0, do: div(cost, sessions), else: 0
+
+      %{
+        workflow: row.workflow,
+        cost_cents: cost,
+        sessions: sessions,
+        input_tokens: row.input_tokens || 0,
+        output_tokens: row.output_tokens || 0,
+        avg_cost_cents_per_session: avg
+      }
+    end)
+  end
 end
