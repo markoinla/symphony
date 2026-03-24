@@ -83,6 +83,8 @@ export function SessionView() {
         turn_count: fresh.turn_count,
         status: fresh.status,
         ended_at: fresh.ended_at,
+        error: fresh.error,
+        error_category: fresh.error_category,
         live: fresh.live,
       }
     })
