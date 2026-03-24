@@ -49,6 +49,8 @@ jobs:
       - name: Sync main into staging
         if: success() && github.ref == 'refs/heads/main'
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           git fetch origin staging || exit 0
           git checkout staging
           git merge origin/main --no-edit --allow-unrelated-histories || {
