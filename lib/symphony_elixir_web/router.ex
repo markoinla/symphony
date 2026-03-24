@@ -7,14 +7,17 @@ defmodule SymphonyElixirWeb.Router do
 
   pipeline :api do
     plug(:accepts, ["json"])
+    plug(SymphonyElixirWeb.Plugs.RequestId)
   end
 
   pipeline :authenticated_api do
     plug(:accepts, ["json"])
+    plug(SymphonyElixirWeb.Plugs.RequestId)
     plug(SymphonyElixirWeb.Plugs.RequireAuth)
   end
 
   pipeline :authenticated_stream do
+    plug(SymphonyElixirWeb.Plugs.RequestId)
     plug(SymphonyElixirWeb.Plugs.RequireAuth)
   end
 
