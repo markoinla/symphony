@@ -580,6 +580,7 @@ defmodule SymphonyElixir.Orchestrator do
           state
           | running: Map.delete(state.running, issue_id),
             claimed: MapSet.delete(state.claimed, issue_id),
+            completed: Map.delete(state.completed, issue_id),
             retry_attempts: Map.delete(state.retry_attempts, issue_id)
         }
 
@@ -1202,40 +1203,63 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_active_retry(state, issue, attempt, metadata) do
+    case retry_limit_reached(state, issue, attempt, metadata) do
+      {:exhausted, reason} ->
+        Logger.info("#{reason}: #{issue_context(issue)}; releasing claim")
+        {:noreply, release_issue_claim(state, issue.id)}
+
+      :ok ->
+        dispatch_or_reschedule_retry(state, issue, attempt, metadata)
+    end
+  end
+
+  defp retry_limit_reached(state, issue, attempt, metadata) do
     max_continuations = Config.settings!().agent.max_continuations
+    max_failure_retries = Config.settings!().agent.max_failure_retries
     completion_entry = Map.get(state.completed, issue.id)
     completion_count = if completion_entry, do: completion_entry.count, else: 0
 
     cond do
       metadata[:delay_type] == :continuation and completion_count > max_continuations ->
-        Logger.info("Issue reached max continuations (#{completion_count}/#{max_continuations}): #{issue_context(issue)}; releasing claim")
+        {:exhausted, "Issue reached max continuations (#{completion_count}/#{max_continuations})"}
 
-        {:noreply, release_issue_claim(state, issue.id)}
-
-      retry_candidate_issue?(issue, terminal_state_set()) and
-        dispatch_slots_available?(issue, state) and
-          worker_slots_available?(state, metadata[:worker_host]) ->
-        {:noreply, dispatch_issue(state, issue, attempt, metadata[:worker_host], metadata[:comment_watch_state])}
+      metadata[:delay_type] != :continuation and attempt > max_failure_retries ->
+        {:exhausted, "Issue reached max failure retries (#{attempt}/#{max_failure_retries})"}
 
       true ->
-        Logger.debug("No available slots for retrying #{issue_context(issue)}; retrying again")
+        :ok
+    end
+  end
 
-        {:noreply,
-         schedule_issue_retry(
-           state,
-           issue.id,
-           attempt + 1,
-           Map.merge(metadata, %{
-             identifier: issue.identifier,
-             error: "no available orchestrator slots"
-           })
-         )}
+  defp dispatch_or_reschedule_retry(state, issue, attempt, metadata) do
+    if retry_candidate_issue?(issue, terminal_state_set()) and
+         dispatch_slots_available?(issue, state) and
+         worker_slots_available?(state, metadata[:worker_host]) do
+      {:noreply, dispatch_issue(state, issue, attempt, metadata[:worker_host], metadata[:comment_watch_state])}
+    else
+      Logger.debug("No available slots for retrying #{issue_context(issue)}; retrying again")
+
+      {:noreply,
+       schedule_issue_retry(
+         state,
+         issue.id,
+         attempt + 1,
+         Map.merge(metadata, %{
+           identifier: issue.identifier,
+           error: "no available orchestrator slots"
+         })
+       )}
     end
   end
 
   defp release_issue_claim(%State{} = state, issue_id) do
     Store.release_issue_claim(issue_id)
-    %{state | claimed: MapSet.delete(state.claimed, issue_id)}
+
+    %{
+      state
+      | claimed: MapSet.delete(state.claimed, issue_id),
+        completed: Map.delete(state.completed, issue_id)
+    }
   end
 
   defp retry_delay(attempt, metadata) when is_integer(attempt) and attempt > 0 and is_map(metadata) do
