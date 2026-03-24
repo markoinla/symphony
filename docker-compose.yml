@@ -14,8 +14,8 @@ services:
   symphony:
     image: ghcr.io/markoinla/symphony:main
     pull_policy: always
-    ports:
-      - "4000:4000"
+    expose:
+      - "4000"
     volumes:
       # Mount host home directory (auth, git, ssh, claude config)
       - ${HOST_HOME}:${HOST_HOME}
