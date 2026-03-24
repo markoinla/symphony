@@ -1,21 +1,22 @@
-## Summary
+#### Context
 
-<!-- What changed and why. Link the Linear issue. -->
+<!-- Why is this change needed? Length <= 240 chars -->
 
-## Changes
+#### TL;DR
 
-<!-- Bulleted list of what was added/changed/removed. -->
+*<!-- A short description of what we are changing. Use simple language. Assume reader is not familiar with this code. Length <= 120 chars -->*
 
--
+#### Summary
 
-## Test Evidence
+- <!-- Details of the changes in bullet points -->
+- <!-- Keep them high level -->
+- <!-- Each item <= 120 chars -->
 
-<!-- How was this validated? Paste commands, output, or screenshots. -->
+#### Alternatives
 
--
+- <!-- What alternatives have been considered? Why not? -->
 
-## Manual QA Plan
+#### Test Plan
 
-<!-- Steps a reviewer can follow to verify the change works. -->
-
-1.
+- [ ] `make -C elixir all`
+- [ ] <!-- Additional targeted checks (list below) -->
