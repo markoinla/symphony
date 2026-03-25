@@ -435,19 +435,26 @@ export function updateTimelineMessage(payload: MessagesPayload, incoming: Timeli
   return { ...payload, sessions }
 }
 
+export type CurrentUser = {
+  id: number
+  email: string
+  name: string | null
+}
+
 export type AuthStatus = {
   authenticated: boolean
   auth_required: boolean
+  user?: CurrentUser
 }
 
 export function getAuthStatus() {
   return requestJson<AuthStatus>('/api/v1/auth/status')
 }
 
-export function login(password: string) {
-  return requestJson<{ ok: boolean }>('/api/v1/auth/login', {
+export function login(email: string, password: string) {
+  return requestJson<{ ok: boolean; user: CurrentUser }>('/api/v1/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ email, password }),
   })
 }
 
@@ -582,10 +589,10 @@ export function getCostAnalytics(range: CostRange) {
   return requestJson<CostAnalyticsResponse>(`/api/v1/analytics/cost?range=${encodeURIComponent(range)}`)
 }
 
-export function setupPassword(password: string) {
-  return requestJson<{ ok: boolean }>('/api/v1/auth/setup', {
+export function setupAccount(email: string, password: string, name?: string) {
+  return requestJson<{ ok: boolean; user: CurrentUser }>('/api/v1/auth/setup', {
     method: 'POST',
-    body: JSON.stringify({ password }),
+    body: JSON.stringify({ email, password, ...(name ? { name } : {}) }),
   })
 }
 

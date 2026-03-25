@@ -24,6 +24,7 @@ import {
   Moon,
   Menu,
   X,
+  User,
 } from 'lucide-react'
 
 import {
@@ -61,6 +62,15 @@ import { ReliabilityView } from './pages/reliability'
 import { LoginView } from './pages/login'
 import { SetupView } from './pages/setup'
 
+function redirectToLoginOn401(error: Error) {
+  if (error instanceof ApiError && error.status === 401) {
+    const path = window.location.pathname
+    if (path !== '/login' && path !== '/setup') {
+      window.location.href = '/login'
+    }
+  }
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -71,13 +81,15 @@ const queryClient = new QueryClient({
       },
     },
     mutations: {
-      onError: (error) => {
-        if (error instanceof ApiError && error.status === 401) {
-          window.location.href = '/login'
-        }
-      },
+      onError: redirectToLoginOn401,
     },
   },
+})
+
+queryClient.getQueryCache().subscribe((event) => {
+  if (event.type === 'updated' && event.action.type === 'error') {
+    redirectToLoginOn401(event.action.error)
+  }
 })
 
 // Bind components to routes
@@ -201,6 +213,12 @@ function RootLayout() {
             </div>
 
             <div className="flex items-center gap-1">
+              {showLogout && authQuery.data?.user && (
+                <span className="mr-1 hidden items-center gap-1.5 text-[13px] text-th-text-3 sm:flex">
+                  <User className="h-3.5 w-3.5" />
+                  {authQuery.data.user.name || authQuery.data.user.email}
+                </span>
+              )}
               {showLogout && (
                 <Button
                   aria-label="Sign out"

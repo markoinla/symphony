@@ -38,6 +38,7 @@ function useBackendStatus() {
 }
 
 export function LoginView() {
+  const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -49,11 +50,11 @@ export function LoginView() {
     setLoading(true)
 
     try {
-      await login(password)
+      await login(email, password)
       window.location.href = '/'
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        setError('Invalid password')
+        setError('Invalid email or password')
       } else {
         setError('Something went wrong')
       }
@@ -82,6 +83,14 @@ export function LoginView() {
           <Input
             autoFocus
             disabled={backendStatus !== 'connected'}
+            name="email"
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email"
+            type="email"
+            value={email}
+          />
+          <Input
+            disabled={backendStatus !== 'connected'}
             name="password"
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Password"
@@ -89,7 +98,7 @@ export function LoginView() {
             value={password}
           />
           {error && <p className="text-sm text-th-danger">{error}</p>}
-          <Button disabled={loading || !password || backendStatus !== 'connected'} type="submit">
+          <Button disabled={loading || !email || !password || backendStatus !== 'connected'} type="submit">
             {loading ? 'Signing in...' : 'Sign in'}
           </Button>
         </form>
