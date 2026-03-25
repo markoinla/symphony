@@ -37,6 +37,19 @@ interface InstanceEntry {
   registered_at: string;
 }
 
+/**
+ * Convert bare-IP URLs to sslip.io hostnames so Cloudflare Workers' fetch()
+ * can reach them (Workers block direct IP access with error 1003).
+ * Domain-name URLs pass through unchanged.
+ */
+function resolveInstanceUrl(url: string): string {
+  const parsed = new URL(url);
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(parsed.hostname)) {
+    parsed.hostname = parsed.hostname.replaceAll(".", "-") + ".sslip.io";
+  }
+  return parsed.toString().replace(/\/$/, "");
+}
+
 const PENDING_TTL = 300; // 5 minutes
 const TOKEN_TTL = 60; // 60 seconds
 
@@ -456,7 +469,7 @@ async function handleWebhookLinear(request: Request, env: Env): Promise<Response
   const instance = JSON.parse(instanceRaw) as InstanceEntry;
 
   try {
-    await fetch(`${instance.instance_url}/api/v1/webhooks/linear`, {
+    await fetch(`${resolveInstanceUrl(instance.instance_url)}/api/v1/webhooks/linear`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -510,7 +523,7 @@ async function handlePingInstance(request: Request, env: Env): Promise<Response>
   const instance = JSON.parse(instanceRaw) as InstanceEntry;
 
   try {
-    const res = await fetch(`${instance.instance_url}/healthz`, {
+    const res = await fetch(`${resolveInstanceUrl(instance.instance_url)}/healthz`, {
       method: "GET",
       signal: AbortSignal.timeout(10_000),
     });
