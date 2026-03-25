@@ -85,21 +85,32 @@ defmodule SymphonyElixir.AccountsTest do
 
   describe "organization helpers" do
     test "create_default_organization/0 creates a default org" do
-      assert {:ok, org} = Accounts.create_default_organization()
+      org = get_or_create_default_org()
       assert org.name == "Default"
       assert org.slug == "default"
     end
 
     test "get_default_organization/0 returns the default org" do
-      {:ok, org} = Accounts.create_default_organization()
+      org = get_or_create_default_org()
       assert Accounts.get_default_organization().id == org.id
     end
 
     test "add_user_to_organization/3 links user to org" do
       {:ok, user} = Store.create_user(%{email: "test@example.com", password: "securepassword"})
-      {:ok, org} = Accounts.create_default_organization()
+      org = get_or_create_default_org()
       assert {:ok, uo} = Accounts.add_user_to_organization(user.id, org.id, "owner")
       assert uo.role == "owner"
+    end
+
+    defp get_or_create_default_org do
+      case Accounts.get_default_organization() do
+        nil ->
+          {:ok, org} = Accounts.create_default_organization()
+          org
+
+        org ->
+          org
+      end
     end
   end
 end

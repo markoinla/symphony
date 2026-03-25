@@ -24,7 +24,13 @@ defmodule SymphonyElixir.TestSupport do
       alias Ecto.Adapters.SQL.Sandbox, as: SQLSandbox
 
       import SymphonyElixir.TestSupport,
-        only: [write_workflow_file!: 1, write_workflow_file!: 2, restore_env: 2, stop_default_http_server: 0]
+        only: [
+          write_workflow_file!: 1,
+          write_workflow_file!: 2,
+          restore_env: 2,
+          stop_default_http_server: 0,
+          test_org_id: 0
+        ]
 
       setup do
         :ok = SQLSandbox.checkout(SymphonyElixir.Repo)
@@ -53,6 +59,31 @@ defmodule SymphonyElixir.TestSupport do
 
         :ok
       end
+    end
+  end
+
+  @doc """
+  Returns the ID of a test organization, creating one if it doesn't exist.
+  Uses a process dictionary cache to avoid repeated DB lookups within a test.
+  """
+  def test_org_id do
+    case Process.get(:test_org_id) do
+      nil ->
+        org =
+          case SymphonyElixir.Store.get_organization_by_slug("test-org") do
+            nil ->
+              {:ok, org} = SymphonyElixir.Store.create_organization(%{name: "Test Org", slug: "test-org"})
+              org
+
+            org ->
+              org
+          end
+
+        Process.put(:test_org_id, org.id)
+        org.id
+
+      id ->
+        id
     end
   end
 

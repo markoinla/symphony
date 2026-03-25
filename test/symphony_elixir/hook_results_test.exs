@@ -10,7 +10,8 @@ defmodule SymphonyElixir.HookResultsTest do
           issue_id: "hook-test-issue-#{System.unique_integer([:positive])}",
           session_id: "hook-test-session-#{System.unique_integer([:positive])}",
           status: "running",
-          started_at: DateTime.utc_now()
+          started_at: DateTime.utc_now(),
+          organization_id: test_org_id()
         })
 
       hook_results = [
@@ -35,7 +36,8 @@ defmodule SymphonyElixir.HookResultsTest do
           issue_id: "hook-test-issue-#{System.unique_integer([:positive])}",
           session_id: "hook-test-session-#{System.unique_integer([:positive])}",
           status: "running",
-          started_at: DateTime.utc_now()
+          started_at: DateTime.utc_now(),
+          organization_id: test_org_id()
         })
 
       {:ok, updated} =
@@ -53,7 +55,8 @@ defmodule SymphonyElixir.HookResultsTest do
           issue_id: "hook-test-issue-#{System.unique_integer([:positive])}",
           session_id: "hook-test-session-#{System.unique_integer([:positive])}",
           status: "running",
-          started_at: DateTime.utc_now()
+          started_at: DateTime.utc_now(),
+          organization_id: test_org_id()
         })
 
       hook_results = [
@@ -146,7 +149,8 @@ defmodule SymphonyElixir.HookResultsTest do
           issue_id: "hook-test-issue-#{System.unique_integer([:positive])}",
           session_id: session_id,
           status: "running",
-          started_at: DateTime.utc_now()
+          started_at: DateTime.utc_now(),
+          organization_id: test_org_id()
         })
 
       hook_results = [

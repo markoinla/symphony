@@ -11,7 +11,8 @@ defmodule SymphonyElixirWeb.PresenterWorkflowNameTest do
         session_id: "session-#{System.unique_integer([:positive])}",
         status: "completed",
         started_at: DateTime.utc_now() |> DateTime.add(-60),
-        ended_at: DateTime.utc_now()
+        ended_at: DateTime.utc_now(),
+        organization_id: SymphonyElixir.TestSupport.test_org_id()
       },
       overrides
     )

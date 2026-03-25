@@ -35,7 +35,7 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
       issue_id = "test-issue-#{System.unique_integer([:positive])}"
 
       # Pre-claim the issue
-      Store.claim_issue(issue_id, "orchestrator")
+      Store.claim_issue(issue_id, "orchestrator", org_id: test_org_id())
 
       payload = %{
         "data" => %{
@@ -50,7 +50,7 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
 
     test "emits first_activity_latency telemetry when received_at is provided" do
       issue_id = "test-issue-#{System.unique_integer([:positive])}"
-      Store.claim_issue(issue_id, "orchestrator")
+      Store.claim_issue(issue_id, "orchestrator", org_id: test_org_id())
 
       test_pid = self()
 
@@ -87,7 +87,7 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
 
     test "does not emit telemetry when received_at is not provided" do
       issue_id = "test-issue-#{System.unique_integer([:positive])}"
-      Store.claim_issue(issue_id, "orchestrator")
+      Store.claim_issue(issue_id, "orchestrator", org_id: test_org_id())
 
       test_pid = self()
 
@@ -154,7 +154,8 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
         agent_session_id: agent_session_id,
         session_id: "engine-#{System.unique_integer([:positive])}",
         status: "running",
-        started_at: DateTime.utc_now()
+        started_at: DateTime.utc_now(),
+        organization_id: test_org_id()
       })
 
       # Start an AgentSession GenServer
@@ -216,7 +217,7 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
       issue_id = "test-issue-#{System.unique_integer([:positive])}"
 
       # Pre-claim the issue
-      Store.claim_issue(issue_id, "orchestrator")
+      Store.claim_issue(issue_id, "orchestrator", org_id: test_org_id())
 
       # Simulate two concurrent dispatch_created calls for the same issue
       payload = %{
@@ -278,7 +279,7 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
       Application.put_env(:symphony_elixir, :linear_client_module, __MODULE__.NoSkipLabelStubClient)
 
       # Pre-claim so the second call hits the already_claimed branch (avoids spawning a real agent)
-      Store.claim_issue(issue_id, "orchestrator")
+      Store.claim_issue(issue_id, "orchestrator", org_id: test_org_id())
 
       payload = %{
         "data" => %{

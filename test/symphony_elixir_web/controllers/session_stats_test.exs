@@ -44,7 +44,8 @@ defmodule SymphonyElixirWeb.SessionStatsTest do
           issue_id: "issue-#{System.unique_integer([:positive])}",
           session_id: "sess-#{System.unique_integer([:positive])}",
           status: "completed",
-          started_at: DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.truncate(:second)
+          started_at: DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.truncate(:second),
+          organization_id: test_org_id()
         },
         overrides
       )
@@ -205,8 +206,8 @@ defmodule SymphonyElixirWeb.SessionStatsTest do
     test "filter: project_id filters results to matching project" do
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-      {:ok, project} = Store.create_project(%{name: "test-project-stats-#{System.unique_integer([:positive])}"})
-      {:ok, other_project} = Store.create_project(%{name: "other-project-stats-#{System.unique_integer([:positive])}"})
+      {:ok, project} = Store.create_project(%{name: "test-project-stats-#{System.unique_integer([:positive])}", organization_id: test_org_id()})
+      {:ok, other_project} = Store.create_project(%{name: "other-project-stats-#{System.unique_integer([:positive])}", organization_id: test_org_id()})
 
       create_session(%{
         project_id: project.id,

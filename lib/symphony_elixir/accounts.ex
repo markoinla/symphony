@@ -65,7 +65,10 @@ defmodule SymphonyElixir.Accounts do
 
   @spec create_default_organization() :: {:ok, Organization.t()} | {:error, Ecto.Changeset.t()}
   def create_default_organization do
-    Store.create_organization(%{name: "Default", slug: "default"})
+    case Store.get_organization_by_slug("default") do
+      nil -> Store.create_organization(%{name: "Default", slug: "default"})
+      org -> {:ok, org}
+    end
   end
 
   @spec get_default_organization() :: Organization.t() | nil

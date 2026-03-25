@@ -10,7 +10,8 @@ defmodule SymphonyElixir.StoreErrorCategoryTest do
         issue_identifier: "SYM-182",
         session_id: "session-errcat-1",
         status: "running",
-        started_at: DateTime.utc_now()
+        started_at: DateTime.utc_now(),
+        organization_id: SymphonyElixir.TestSupport.test_org_id()
       })
 
     {:ok, completed} =
@@ -34,7 +35,8 @@ defmodule SymphonyElixir.StoreErrorCategoryTest do
         issue_identifier: "SYM-182",
         session_id: "engine-session-errcat-2",
         status: "running",
-        started_at: DateTime.utc_now()
+        started_at: DateTime.utc_now(),
+        organization_id: SymphonyElixir.TestSupport.test_org_id()
       })
 
     {:ok, completed} =
@@ -55,7 +57,8 @@ defmodule SymphonyElixir.StoreErrorCategoryTest do
         issue_identifier: "SYM-182",
         session_id: "session-errcat-3",
         status: "running",
-        started_at: DateTime.utc_now()
+        started_at: DateTime.utc_now(),
+        organization_id: SymphonyElixir.TestSupport.test_org_id()
       })
 
     {:ok, completed} =
