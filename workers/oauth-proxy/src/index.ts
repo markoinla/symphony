@@ -422,20 +422,23 @@ function timingSafeEqual(a: Uint8Array, b: Uint8Array): boolean {
 async function handleWebhookLinear(request: Request, env: Env): Promise<Response> {
   const signature = request.headers.get("Linear-Signature");
   if (!signature) {
-    return Response.json({ error: "missing Linear-Signature header" }, { status: 401 });
+    console.error("webhook: missing Linear-Signature header");
+    return Response.json({ ok: true });
   }
 
   const rawBody = await request.arrayBuffer();
 
   if (!(await verifyLinearSignature(rawBody, signature, env.LINEAR_WEBHOOK_SIGNING_SECRET))) {
-    return Response.json({ error: "invalid signature" }, { status: 401 });
+    console.error("webhook: invalid signature");
+    return Response.json({ ok: true });
   }
 
   let payload: Record<string, unknown>;
   try {
     payload = JSON.parse(new TextDecoder().decode(rawBody)) as Record<string, unknown>;
   } catch {
-    return Response.json({ error: "invalid JSON body" }, { status: 400 });
+    console.error("webhook: invalid JSON body");
+    return Response.json({ ok: true });
   }
 
   const orgId = payload.organizationId as string | undefined;
