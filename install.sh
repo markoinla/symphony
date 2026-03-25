@@ -30,6 +30,13 @@ handle_update() {
   header "Updating Symphony"
   cd "${INSTALL_DIR}"
 
+  # Load existing env so HOST_HOME/WORKFLOWS_DIR are available
+  if [[ -f "${INSTALL_DIR}/.env" ]]; then
+    set -a
+    source "${INSTALL_DIR}/.env"
+    set +a
+  fi
+
   curl -fsSL "${RAW_BASE}/install.sh" -o "${INSTALL_DIR}/install.sh"
   chmod +x "${INSTALL_DIR}/install.sh"
   info "Updated install.sh"
@@ -281,6 +288,9 @@ generate_env() {
 
   if [[ -f "${INSTALL_DIR}/.env" ]]; then
     info ".env already exists — skipping generation (won't overwrite)."
+    set -a
+    source "${INSTALL_DIR}/.env"
+    set +a
     return
   fi
 
@@ -307,6 +317,11 @@ CLAUDE_CODE_PLUGIN_SEED_DIR=${SEED_DIR}
 EOF
 
   info "Generated .env at ${INSTALL_DIR}/.env"
+
+  # Export so install_workflows and other steps can use HOST_HOME/WORKFLOWS_DIR
+  set -a
+  source "${INSTALL_DIR}/.env"
+  set +a
 }
 
 # ── Start services ──────────────────────────────────────────────────────────────
