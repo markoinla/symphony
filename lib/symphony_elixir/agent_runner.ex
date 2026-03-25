@@ -4,6 +4,7 @@ defmodule SymphonyElixir.AgentRunner do
   """
 
   require Logger
+  import Bitwise
   alias SymphonyElixir.Engine
 
   alias SymphonyElixir.{
@@ -399,13 +400,16 @@ defmodule SymphonyElixir.AgentRunner do
          new_comments
        ) do
     prompt = build_turn_prompt(issue, opts, turn_number, max_turns, new_comments)
+    max_turn_retries = Config.settings!().agent.max_turn_retries
 
     with {:ok, turn_session} <-
-           Engine.engine_module().run_turn(
+           run_turn_with_retry(
              app_session,
              prompt,
              issue,
-             on_message: engine_message_handler_with_log(engine_update_recipient, issue, session_id)
+             engine_update_recipient,
+             session_id,
+             max_turn_retries
            ) do
       Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
 
@@ -447,6 +451,61 @@ defmodule SymphonyElixir.AgentRunner do
       end
     end
   end
+
+  # -- Turn-level retry --
+
+  @turn_retry_base_ms 5_000
+  @turn_retry_max_ms 30_000
+
+  defp run_turn_with_retry(app_session, prompt, issue, engine_update_recipient, session_id, max_retries, attempt \\ 1) do
+    case Engine.engine_module().run_turn(
+           app_session,
+           prompt,
+           issue,
+           on_message: engine_message_handler_with_log(engine_update_recipient, issue, session_id)
+         ) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, reason} = error ->
+        if retryable_turn_error?(reason) and attempt <= max_retries do
+          backoff_ms = turn_retry_backoff_ms(attempt)
+
+          Logger.warning(
+            "Retryable turn error for #{issue_context(issue)}, retrying in #{backoff_ms}ms " <>
+              "(attempt #{attempt}/#{max_retries}): #{inspect(reason)}"
+          )
+
+          emit_retry_activity(issue.id, attempt, max_retries)
+          Process.sleep(backoff_ms)
+          run_turn_with_retry(app_session, prompt, issue, engine_update_recipient, session_id, max_retries, attempt + 1)
+        else
+          error
+        end
+    end
+  end
+
+  defp retryable_turn_error?({:turn_failed, _params}), do: true
+  defp retryable_turn_error?({:turn_cancelled, _params}), do: true
+  defp retryable_turn_error?(_), do: false
+
+  defp turn_retry_backoff_ms(attempt) do
+    min(@turn_retry_base_ms * (1 <<< (attempt - 1)), @turn_retry_max_ms)
+  end
+
+  defp emit_retry_activity(issue_id, attempt, max_retries) when is_binary(issue_id) do
+    AgentSession.emit_activity(issue_id, %{
+      event: :notification,
+      message: %{
+        "method" => "claude/assistant_message",
+        "params" => %{
+          "content" => "Turn failed, retrying (attempt #{attempt}/#{max_retries})..."
+        }
+      }
+    })
+  end
+
+  defp emit_retry_activity(_issue_id, _attempt, _max_retries), do: :ok
 
   @doc false
   @spec build_turn_prompt_for_test(Issue.t(), keyword(), pos_integer(), pos_integer(), list()) :: String.t()

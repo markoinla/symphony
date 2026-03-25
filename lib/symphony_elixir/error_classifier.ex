@@ -5,7 +5,7 @@ defmodule SymphonyElixir.ErrorClassifier do
   Pure, stateless module with no side effects or DB interaction.
   """
 
-  @type category :: :infra | :agent | :config | :timeout
+  @type category :: :infra | :agent | :config | :timeout | :shutdown
 
   # --- timeout ---
 

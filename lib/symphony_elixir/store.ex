@@ -408,6 +408,14 @@ defmodule SymphonyElixir.Store do
     Repo.get(Session, db_session_id)
   end
 
+  @spec get_session_by_engine_session_id(String.t()) :: Ecto.Schema.t() | nil
+  def get_session_by_engine_session_id(session_id) when is_binary(session_id) do
+    Session
+    |> where([s], s.session_id == ^session_id)
+    |> limit(1)
+    |> Repo.one()
+  end
+
   @spec get_session_debug(integer()) :: Ecto.Schema.t() | nil
   def get_session_debug(db_session_id) do
     Session
@@ -468,13 +476,14 @@ defmodule SymphonyElixir.Store do
   @spec finalize_stale_sessions(keyword()) :: {integer(), nil}
   def finalize_stale_sessions(opts \\ []) do
     project_id = Keyword.get(opts, :project_id)
+    workflow_name = Keyword.get(opts, :workflow_name)
     exclude_issue_ids = Keyword.get(opts, :exclude_issue_ids, [])
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
     query =
       Session
       |> where([s], s.status == "running")
-      |> maybe_filter_project_id(project_id)
+      |> scope_to_owner(project_id, workflow_name)
 
     query =
       if exclude_issue_ids != [] do
@@ -487,11 +496,25 @@ defmodule SymphonyElixir.Store do
       set: [
         status: "cancelled",
         ended_at: now,
-        error: "orchestrator restarted",
-        error_category: "infra",
+        error_category: "shutdown",
         worker_host: "local"
       ]
     )
+  end
+
+  # Scope stale-session cleanup so each orchestrator only touches its own sessions.
+  defp scope_to_owner(query, nil, nil), do: where(query, [s], is_nil(s.project_id) and is_nil(s.workflow_name))
+  defp scope_to_owner(query, nil, wf), do: where(query, [s], is_nil(s.project_id) and s.workflow_name == ^wf)
+
+  defp scope_to_owner(query, project_id, nil) do
+    query
+    |> maybe_filter_project_id(project_id)
+  end
+
+  defp scope_to_owner(query, project_id, workflow_name) do
+    query
+    |> maybe_filter_project_id(project_id)
+    |> where([s], s.workflow_name == ^workflow_name)
   end
 
   defp maybe_filter_project_id(query, nil), do: query
@@ -537,6 +560,50 @@ defmodule SymphonyElixir.Store do
     |> failure_bucket_query(range)
     |> Repo.all()
     |> pivot_failure_buckets()
+  end
+
+  @spec run_counts_by_bucket(String.t(), keyword()) :: [map()]
+  def run_counts_by_bucket(range, opts \\ []) when range in ["24h", "7d", "30d"] do
+    {since, _trunc} = stats_range_params(range)
+
+    Session
+    |> where([s], s.ended_at >= ^since)
+    |> maybe_filter_project_id(Keyword.get(opts, :project_id))
+    |> maybe_filter_workflow_name(Keyword.get(opts, :workflow_name))
+    |> run_count_bucket_query(range)
+    |> Repo.all()
+    |> Enum.sort_by(& &1.bucket, NaiveDateTime)
+    |> Enum.map(fn row ->
+      %{
+        bucket:
+          row.bucket
+          |> DateTime.from_naive!("Etc/UTC")
+          |> DateTime.truncate(:second)
+          |> DateTime.to_iso8601(),
+        total: row.total,
+        successful: row.successful
+      }
+    end)
+  end
+
+  defp run_count_bucket_query(query, "24h") do
+    query
+    |> group_by([s], fragment("date_trunc('hour', ?)", s.ended_at))
+    |> select([s], %{
+      bucket: fragment("date_trunc('hour', ?)", s.ended_at),
+      total: count(s.id),
+      successful: fragment("count(*) filter (where ? = 'completed')", s.status)
+    })
+  end
+
+  defp run_count_bucket_query(query, _range) do
+    query
+    |> group_by([s], fragment("date_trunc('day', ?)", s.ended_at))
+    |> select([s], %{
+      bucket: fragment("date_trunc('day', ?)", s.ended_at),
+      total: count(s.id),
+      successful: fragment("count(*) filter (where ? = 'completed')", s.status)
+    })
   end
 
   defp failure_bucket_query(query, "24h") do

@@ -507,6 +507,12 @@ export type DeadLetterSession = {
   ended_at: string | null
 }
 
+export type RunCountBucket = {
+  bucket: string
+  total: number
+  successful: number
+}
+
 export type WorkerHostStats = {
   host: string
   total_runs: number
@@ -516,6 +522,7 @@ export type WorkerHostStats = {
 
 export type SessionStats = {
   failure_counts: FailureCountBucket[]
+  run_counts: RunCountBucket[]
   dead_letters: DeadLetterSession[]
   worker_health: WorkerHostStats[]
 }

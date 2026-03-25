@@ -13,6 +13,7 @@ tracker:
     - Canceled
     - Duplicate
     - Done
+    - Human Review
 polling:
   interval_ms: 5000
 hooks:
@@ -35,6 +36,7 @@ agent:
   max_concurrent_agents: 5
   max_turns: 20
 claude:
+  model: claude-opus-4-6
   permission_mode: bypassPermissions
   sandbox:
     enabled: true

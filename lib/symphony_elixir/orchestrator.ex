@@ -32,6 +32,9 @@ defmodule SymphonyElixir.Orchestrator do
   @failure_retry_base_ms 10_000
   # Slightly above the dashboard render interval so "checking now…" can render.
   @poll_transition_render_delay_ms 20
+  # Grace period before sweeping orphaned DB sessions on startup, giving live
+  # agent tasks time to register in the SessionLogRegistry.
+  @stale_session_grace_ms 30_000
   @empty_engine_totals %{
     input_tokens: 0,
     output_tokens: 0,
@@ -168,41 +171,81 @@ defmodule SymphonyElixir.Orchestrator do
     }
 
     run_terminal_workspace_cleanup()
-    finalize_stale_db_sessions(state)
+    Process.send_after(self(), :finalize_stale_sessions, @stale_session_grace_ms)
     state = schedule_tick(state, 0)
 
     {:ok, state}
   end
 
   @impl true
-  def terminate(_reason, %State{running: running}) do
+  def terminate(terminate_reason, %State{running: running}) do
+    session_count = map_size(running)
+
+    if session_count > 0 do
+      Logger.info(
+        "Orchestrator terminating with #{session_count} running session(s), " <>
+          "terminate_reason=#{inspect(terminate_reason)}"
+      )
+    end
+
     Enum.each(running, fn {_issue_id, running_entry} ->
-      session_id = running_entry_session_id(running_entry)
-      pid = Map.get(running_entry, :pid)
-
-      # Only finalize sessions whose agent task has already exited.
-      # Live tasks (under TaskSupervisor) will finalize themselves on completion.
-      if session_id != "n/a" and (is_nil(pid) or not Process.alive?(pid)) do
-        input_tokens = Map.get(running_entry, :engine_input_tokens, 0)
-        output_tokens = Map.get(running_entry, :engine_output_tokens, 0)
-        estimated_cost_cents = compute_estimated_cost(input_tokens, output_tokens)
-
-        Store.complete_session_by_engine_session_id(session_id, %{
-          status: "cancelled",
-          issue_identifier: running_entry.identifier,
-          issue_title: Map.get(running_entry, :issue, %{}) |> Map.get(:title),
-          error: "orchestrator shutdown",
-          input_tokens: input_tokens,
-          output_tokens: output_tokens,
-          total_tokens: Map.get(running_entry, :engine_total_tokens, 0),
-          worker_host: Map.get(running_entry, :worker_host) || "local",
-          estimated_cost_cents: estimated_cost_cents,
-          error_category: "infra"
-        })
-      end
+      maybe_cancel_on_shutdown(running_entry, terminate_reason)
     end)
 
     :ok
+  end
+
+  # Extracted from terminate/2 to keep nesting depth within Credo limits.
+  defp maybe_cancel_on_shutdown(running_entry, terminate_reason) do
+    session_id = running_entry_session_id(running_entry)
+    pid = Map.get(running_entry, :pid)
+
+    # Only finalize sessions whose agent task has already exited.
+    # Live tasks (under TaskSupervisor) will finalize themselves on completion.
+    if session_id != "n/a" and (is_nil(pid) or not Process.alive?(pid)) do
+      cancel_or_skip_session(running_entry, session_id, terminate_reason)
+    end
+  end
+
+  defp cancel_or_skip_session(running_entry, session_id, terminate_reason) do
+    # Check if the session was already finalized (e.g., the :DOWN handler
+    # ran via finalize_db_session before terminate/2). If so, don't
+    # overwrite a completed session as cancelled+shutdown.
+    already_finalized =
+      case Store.get_session_by_engine_session_id(session_id) do
+        %{status: status} when status not in ["running"] -> true
+        _ -> false
+      end
+
+    if already_finalized do
+      Logger.info(
+        "Orchestrator shutdown skipping already-finalized session " <>
+          "issue_id=#{running_entry.issue_id} issue_identifier=#{running_entry.identifier} " <>
+          "session_id=#{session_id}"
+      )
+    else
+      input_tokens = Map.get(running_entry, :engine_input_tokens, 0)
+      output_tokens = Map.get(running_entry, :engine_output_tokens, 0)
+      estimated_cost_cents = compute_estimated_cost(input_tokens, output_tokens)
+
+      Logger.warning(
+        "Orchestrator shutdown cancelling session issue_id=#{running_entry.issue_id} " <>
+          "issue_identifier=#{running_entry.identifier} session_id=#{session_id} " <>
+          "terminate_reason=#{inspect(terminate_reason)}"
+      )
+
+      Store.complete_session_by_engine_session_id(session_id, %{
+        status: "cancelled",
+        issue_identifier: running_entry.identifier,
+        issue_title: Map.get(running_entry, :issue, %{}) |> Map.get(:title),
+        input_tokens: input_tokens,
+        output_tokens: output_tokens,
+        total_tokens: Map.get(running_entry, :engine_total_tokens, 0),
+        worker_host: Map.get(running_entry, :worker_host) || "local",
+        estimated_cost_cents: estimated_cost_cents,
+        error_category: "shutdown"
+      })
+    end
   end
 
   @impl true
@@ -413,6 +456,11 @@ defmodule SymphonyElixir.Orchestrator do
   def handle_info(:settings_changed, state) do
     Logger.info("Settings changed, refreshing runtime config for #{state.workflow_name}")
     {:noreply, refresh_runtime_config(state)}
+  end
+
+  def handle_info(:finalize_stale_sessions, state) do
+    finalize_stale_db_sessions(state)
+    {:noreply, state}
   end
 
   def handle_info(msg, state) do
@@ -643,6 +691,12 @@ defmodule SymphonyElixir.Orchestrator do
         if is_reference(ref) do
           Process.demonitor(ref, [:flush])
         end
+
+        # The :DOWN handler normally finalizes DB sessions, but demonitor(:flush)
+        # above prevents it from firing. Finalize the DB session here so it
+        # doesn't stay stuck as "running" forever.
+        reason = if outcome == :completed, do: :normal, else: :terminated
+        finalize_db_session(running_entry, reason)
 
         Store.release_issue_claim(issue_id)
 
@@ -1282,12 +1336,13 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp finalize_stale_db_sessions(%State{project_id: project_id}) do
+  defp finalize_stale_db_sessions(%State{project_id: project_id, workflow_name: workflow_name}) do
     live_issue_ids = live_session_issue_ids()
 
     {count, _} =
       Store.finalize_stale_sessions(
         project_id: project_id,
+        workflow_name: workflow_name,
         exclude_issue_ids: live_issue_ids
       )
 
@@ -1802,6 +1857,14 @@ defmodule SymphonyElixir.Orchestrator do
         if reason != :normal,
           do: reason |> ErrorClassifier.classify() |> Atom.to_string(),
           else: nil
+
+      if error_category == "infra" do
+        Logger.warning(
+          "Session finalized with error_category=infra issue_id=#{running_entry.issue_id} " <>
+            "issue_identifier=#{running_entry.identifier} session_id=#{session_id} " <>
+            "reason=#{inspect(reason)} has_stderr=#{stderr != nil}"
+        )
+      end
 
       completion_attrs = %{
         status: status,

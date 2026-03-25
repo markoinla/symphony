@@ -151,6 +151,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:max_failure_retries, :integer, default: 5)
       field(:max_concurrent_agents_by_state, :map, default: %{})
       field(:max_continuations, :integer, default: 10)
+      field(:max_turn_retries, :integer, default: 2)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -164,7 +165,8 @@ defmodule SymphonyElixir.Config.Schema do
           :max_retry_backoff_ms,
           :max_failure_retries,
           :max_concurrent_agents_by_state,
-          :max_continuations
+          :max_continuations,
+          :max_turn_retries
         ],
         empty_values: []
       )
@@ -173,6 +175,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:max_retry_backoff_ms, greater_than: 0)
       |> validate_number(:max_failure_retries, greater_than: 0)
       |> validate_number(:max_continuations, greater_than_or_equal_to: 0)
+      |> validate_number(:max_turn_retries, greater_than_or_equal_to: 0)
       |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)
       |> Schema.validate_state_limits(:max_concurrent_agents_by_state)
     end

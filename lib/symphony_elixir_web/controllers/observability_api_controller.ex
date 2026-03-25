@@ -55,11 +55,13 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
       |> maybe_put_workflow_name(params["workflow_name"])
 
     failure_counts = Store.failure_counts_by_bucket(range, opts)
+    run_counts = Store.run_counts_by_bucket(range, opts)
     dead_letters = Store.dead_letter_sessions(opts)
     worker_health = Store.worker_host_stats(range, opts)
 
     json(conn, %{
       failure_counts: failure_counts,
+      run_counts: run_counts,
       dead_letters:
         Enum.map(dead_letters, fn dl ->
           %{

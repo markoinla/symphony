@@ -356,6 +356,7 @@ const ERROR_CATEGORY_CONFIG: Record<string, { tone: 'danger' | 'retrying' | 'liv
   agent: { tone: 'retrying', label: 'Agent' },
   config: { tone: 'neutral', label: 'Config', className: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' },
   timeout: { tone: 'live', label: 'Timeout' },
+  shutdown: { tone: 'neutral', label: 'Shutdown' },
 }
 
 export function ErrorCategoryBadge({ category }: { category: string | null }) {

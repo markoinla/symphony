@@ -13,6 +13,7 @@ tracker:
     - Canceled
     - Duplicate
     - Done
+    - Human Review
 polling:
   interval_ms: 5000
 hooks:
