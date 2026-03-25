@@ -1225,9 +1225,20 @@ function ProxySection() {
             </span>
           </div>
           {!pingResult.webhook.ok && pingResult.webhook.registered !== false ? (
-            <p className="text-xs text-th-text-4">
-              Webhook forwarding requires a publicly accessible URL. If you are behind NAT, use a tunnel (e.g. cloudflared) and set the tunnel URL as your domain above.
-            </p>
+            <div className="space-y-1">
+              <p className="text-xs text-th-text-4">
+                Webhook forwarding requires a publicly accessible URL. If you are behind NAT, use a tunnel (e.g. cloudflared) and set the tunnel URL as your domain above.
+              </p>
+              {pingResult.webhook.response_body ? (
+                <details className="text-xs text-th-text-4">
+                  <summary className="cursor-pointer">Response details</summary>
+                  <pre className="mt-1 max-h-32 overflow-auto rounded bg-th-bg-3 p-2 font-mono text-[11px]">
+                    {pingResult.webhook.response_server ? `Server: ${pingResult.webhook.response_server}\n` : ''}
+                    {pingResult.webhook.response_body}
+                  </pre>
+                </details>
+              ) : null}
+            </div>
           ) : null}
         </div>
       ) : null}

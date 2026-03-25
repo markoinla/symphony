@@ -622,7 +622,7 @@ export function proxyRegister() {
 
 export type ProxyPingResult = {
   proxy: { ok: boolean; error?: string }
-  webhook: { ok: boolean; registered?: boolean; instance_url?: string; error?: string }
+  webhook: { ok: boolean; registered?: boolean; instance_url?: string; error?: string; response_body?: string; response_server?: string }
 }
 
 export function proxyPing() {

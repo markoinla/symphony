@@ -204,7 +204,27 @@ install_claude() {
     npm install -g @anthropic-ai/claude-code
     info "Claude Code CLI installed."
   fi
-  warn "Reminder: run ${BOLD}claude auth login${NC} to authenticate."
+
+  # Check authentication as the real user (not root)
+  local -a as_user=()
+  [[ -n "${SUDO_USER:-}" ]] && as_user=(sudo -u "$SUDO_USER" env "PATH=$PATH")
+
+  if "${as_user[@]}" claude auth status &>/dev/null 2>&1; then
+    info "Claude Code is authenticated."
+  else
+    warn "Claude Code is not authenticated."
+    read -rp "  Run 'claude auth login' now? [Y/n] " ans
+    if [[ ! "${ans}" =~ ^[Nn]$ ]]; then
+      "${as_user[@]}" claude auth login
+      if "${as_user[@]}" claude auth status &>/dev/null 2>&1; then
+        info "Claude Code authenticated successfully."
+      else
+        warn "Authentication not completed. Run ${BOLD}claude auth login${NC} later."
+      fi
+    else
+      warn "Skipped. Run ${BOLD}claude auth login${NC} to authenticate later."
+    fi
+  fi
 }
 
 # ── GitHub CLI ──────────────────────────────────────────────────────────────────
@@ -227,7 +247,27 @@ install_gh() {
       && apt-get install -y gh
     info "GitHub CLI installed."
   fi
-  warn "Reminder: run ${BOLD}gh auth login${NC} to authenticate."
+
+  # Check authentication as the real user (not root)
+  local -a as_user=()
+  [[ -n "${SUDO_USER:-}" ]] && as_user=(sudo -u "$SUDO_USER" env "PATH=$PATH")
+
+  if "${as_user[@]}" gh auth status &>/dev/null 2>&1; then
+    info "GitHub CLI is authenticated."
+  else
+    warn "GitHub CLI is not authenticated."
+    read -rp "  Run 'gh auth login' now? [Y/n] " ans
+    if [[ ! "${ans}" =~ ^[Nn]$ ]]; then
+      "${as_user[@]}" gh auth login
+      if "${as_user[@]}" gh auth status &>/dev/null 2>&1; then
+        info "GitHub CLI authenticated successfully."
+      else
+        warn "Authentication not completed. Run ${BOLD}gh auth login${NC} later."
+      fi
+    else
+      warn "Skipped. Run ${BOLD}gh auth login${NC} to authenticate later."
+    fi
+  fi
 }
 
 # ── Download compose & Caddyfile ────────────────────────────────────────────────

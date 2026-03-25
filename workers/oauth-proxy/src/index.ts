@@ -523,11 +523,20 @@ async function handlePingInstance(request: Request, env: Env): Promise<Response>
       });
     }
 
+    let body = "";
+    try {
+      body = await res.text();
+    } catch {
+      /* ignore */
+    }
+
     return Response.json({
       ok: false,
       registered: true,
       instance_url: instance.instance_url,
       error: `Instance returned HTTP ${res.status}`,
+      response_body: body.slice(0, 500),
+      response_server: res.headers.get("server"),
     });
   } catch (err) {
     return Response.json({
