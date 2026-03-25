@@ -188,7 +188,8 @@ defmodule SymphonyElixir.Linear.OAuth do
     end
   end
 
-  defp store_tokens(%{"access_token" => access_token} = token_data) do
+  @spec store_tokens(map()) :: :ok
+  def store_tokens(%{"access_token" => access_token} = token_data) do
     {:ok, _} = Store.put_setting("linear_oauth.access_token", access_token)
 
     if refresh = token_data["refresh_token"] do

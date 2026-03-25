@@ -901,6 +901,7 @@ defmodule SymphonyElixir.Orchestrator do
          db_claims
        ) do
     candidate_issue?(issue, active_states, terminal_states) and
+      !issue_has_skip_label?(issue) and
       !todo_issue_dispatch_blocked?(issue, terminal_states) and
       !Enum.member?(db_claims, issue.id) and
       !Map.has_key?(running, issue.id) and
@@ -2060,9 +2061,25 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp retry_candidate_issue?(%Issue{} = issue, terminal_states) do
     candidate_issue?(issue, active_state_set(), terminal_states) and
+      !issue_has_skip_label?(issue) and
       !todo_issue_blocked_by_non_terminal?(issue, terminal_states) and
       issue_still_matches_label_filter?(issue)
   end
+
+  defp issue_has_skip_label?(%Issue{labels: labels}) when is_list(labels) do
+    skip_labels = Config.settings!().tracker.skip_labels
+
+    case skip_labels do
+      list when is_list(list) and list != [] ->
+        normalized_skip = MapSet.new(list, &normalize_issue_state/1)
+        Enum.any?(labels, &(normalize_issue_state(&1) in normalized_skip))
+
+      _ ->
+        false
+    end
+  end
+
+  defp issue_has_skip_label?(_issue), do: false
 
   defp issue_still_matches_label_filter?(%Issue{labels: labels}) do
     tracker = Config.settings!().tracker

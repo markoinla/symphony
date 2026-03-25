@@ -80,6 +80,9 @@ Labels: {{ issue.labels }}
 URL: {{ issue.url }}
 Live workpad comment ID: {% if issue.live_workpad_comment_id %}{{ issue.live_workpad_comment_id }}{% else %}none{% endif %}
 Existing workpad comment count: {% if issue.workpad_comment_count %}{{ issue.workpad_comment_count }}{% else %}0{% endif %}
+{% if issue.parent_issue %}
+Parent issue: {{ issue.parent_issue.identifier }} — {{ issue.parent_issue.title }} ({{ issue.parent_issue.state }})
+{% endif %}
 
 Description:
 {% if issue.description %}
@@ -109,6 +112,7 @@ Before starting any implementation work, discover and read the project's context
 2. Check subdirectories for additional `CLAUDE.md` or `AGENTS.md` files relevant to the area you will be working in.
 3. These files contain architecture details, testing conventions, build commands, and important development notes — treat their contents as authoritative project context.
 4. If no context files are found, infer project structure from the repository layout, README, and package manifests.
+5. If the issue has a parent issue, fetch the parent issue via the Linear MCP tools using its UUID to read its full description and comments. Use the parent's context to understand the broader goal, constraints, and acceptance criteria that inform this sub-issue. Record relevant parent context in the workpad.
 
 ## Project setup
 

@@ -1,0 +1,15 @@
+name = "oauth-proxy"
+main = "src/index.ts"
+compatibility_date = "2025-03-24"
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "TBD" # Replace after: wrangler kv namespace create OAUTH_KV
+
+# Secrets (set via `wrangler secret put`):
+#   LINEAR_CLIENT_ID
+#   LINEAR_CLIENT_SECRET
+#   GITHUB_CLIENT_ID
+#   GITHUB_CLIENT_SECRET
+#   LINEAR_WEBHOOK_SIGNING_SECRET
+#   REGISTRATION_SECRET

@@ -114,6 +114,7 @@ defmodule SymphonyElixir.TestSupport do
           tracker_project_slug: "project",
           tracker_label_name: nil,
           tracker_picked_up_label_name: nil,
+          tracker_skip_labels: [],
           tracker_assignee: nil,
           tracker_active_states: ["Todo", "In Progress"],
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
@@ -156,6 +157,7 @@ defmodule SymphonyElixir.TestSupport do
     tracker_project_slug = Keyword.get(config, :tracker_project_slug)
     tracker_label_name = Keyword.get(config, :tracker_label_name)
     tracker_picked_up_label_name = Keyword.get(config, :tracker_picked_up_label_name)
+    tracker_skip_labels = Keyword.get(config, :tracker_skip_labels)
     tracker_assignee = Keyword.get(config, :tracker_assignee)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
@@ -200,6 +202,7 @@ defmodule SymphonyElixir.TestSupport do
         "  project_slug: #{yaml_value(tracker_project_slug)}",
         "  label_name: #{yaml_value(tracker_label_name)}",
         "  picked_up_label_name: #{yaml_value(tracker_picked_up_label_name)}",
+        "  skip_labels: #{yaml_value(tracker_skip_labels)}",
         "  assignee: #{yaml_value(tracker_assignee)}",
         "  active_states: #{yaml_value(tracker_active_states)}",
         "  terminal_states: #{yaml_value(tracker_terminal_states)}",

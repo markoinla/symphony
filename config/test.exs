@@ -9,3 +9,6 @@ config :symphony_elixir, SymphonyElixir.Repo,
 config :symphony_elixir, SymphonyElixirWeb.Endpoint,
   check_origin: false,
   secret_key_base: String.duplicate("t", 64)
+
+config :symphony_elixir,
+  proxy_req_options: [plug: {Req.Test, SymphonyElixir.ProxyClient}]

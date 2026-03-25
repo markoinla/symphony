@@ -3,6 +3,9 @@ tracker:
   kind: linear
   active_states:
     - Human Review
+  skip_labels:
+    - reviewed-by-agent
+    - needs-human-review
   terminal_states:
     - Closed
     - Cancelled
@@ -82,11 +85,16 @@ them. If no Linear tools are found, stop immediately.
 
 ## Instructions
 
-This is an unattended review session. You must NOT modify any code or create branches/PRs. Your only outputs are Linear comments and issue state changes.
+This is an unattended review session. You must NOT modify any code or create branches/PRs. Your only outputs are Linear comments, label changes, and issue state changes.
 
-### Step 1: Check for prior review
+### Step 1: Check for review labels
 
-Search the issue comments for a previous `## Review` comment. If one exists, check whether any **human** comments have been posted after it or new commits have been pushed to the PR since it was written. Ignore your own bot-authored comments when making this determination — only human activity counts as "new information." If nothing new has happened, stop immediately without posting a duplicate. If there is genuinely new human input or new commits, proceed with a fresh review.
+Check the issue's labels (provided in the issue context above). If the issue has **either** of these labels, **stop immediately** — do not post a comment or take any action:
+
+- `reviewed-by-agent` — a prior review auto-approved this issue
+- `needs-human-review` — a prior review flagged this issue for human attention
+
+A prior review session has already handled this issue. If a human wants a fresh review, they will remove the label.
 
 ### Step 2: Locate the PR
 
@@ -94,7 +102,7 @@ Find the PR associated with this issue:
 
 1. Check the issue comments and description for a GitHub PR URL.
 2. If no URL is found, use the issue's branch name to search: `gh pr list --head <branchName> --json number,url,state --jq '.[] | select(.state == "OPEN")'`.
-3. If no open PR is found, post a `## Review` comment noting there is no PR to review, then resolve the "Done" state ID and move the issue to Done, then stop.
+3. If no open PR is found, post a `## Review` comment noting there is no PR to review, add the `needs-human-review` label (see Step 5 label instructions), then stop. Do NOT change the issue state — leave it in Human Review for a human to investigate.
 
 ### Step 3: Inspect the diff
 
@@ -148,7 +156,7 @@ Post a comment with the `## Review` header:
 - `path/to/file2` — [brief description of change]
 ```
 
-Then resolve the "Merging" state ID and transition the issue.
+Then add the `reviewed-by-agent` label (see label instructions below), then resolve the "Merging" state ID and transition the issue.
 
 #### Outcome B: Needs human review (stay in Human Review)
 
@@ -171,11 +179,20 @@ Post a comment with the `## Review` header:
 - `path/to/sensitive/file` — [what the reviewer should focus on]
 ```
 
-Do NOT change the issue state.
+Then add the `needs-human-review` label (see label instructions below). Do NOT change the issue state.
+
+#### Label instructions (both outcomes)
+
+After posting the review comment, add the appropriate label to the issue. This is a **two-step** process:
+
+1. **Resolve the label ID** from the team's labels using the query in the GraphQL reference section below.
+2. **Add the label** to the issue using the `addedLabelIds` mutation (this appends without removing existing labels).
+
+If the label does not exist on the team yet, create it first using the `linear_create_issue_label` MCP tool (or the GraphQL reference below), then add it to the issue. The label must be added before any state transition.
 
 ### Step 6: Done
 
-After posting the review comment and optionally updating the issue state, stop. Do not take any further action.
+After posting the review comment, adding the label, and optionally updating the issue state, stop. Do not take any further action.
 
 ## Linear GraphQL reference
 
@@ -227,6 +244,38 @@ mutation CreateComment($issueId: String!, $body: String!) {
 
 Variables: `{"issueId": "<issue-uuid>", "body": "Comment text here"}`
 
+### Resolve label ID (required before adding a label)
+
+```graphql
+query ResolveLabelId($issueId: String!, $labelName: String!) {
+  issue(id: $issueId) {
+    team {
+      labels(filter: {name: {eq: $labelName}}, first: 1) {
+        nodes { id }
+      }
+    }
+  }
+}
+```
+
+Variables: `{"issueId": "<issue-uuid>", "labelName": "reviewed-by-agent"}`
+
+If no label is returned, create it first using the `linear_create_issue_label` MCP tool with `teamId` set to the issue's team ID, then re-resolve.
+
+### Add label to issue
+
+```graphql
+mutation AddLabel($issueId: String!, $labelIds: [String!]!) {
+  issueUpdate(id: $issueId, input: {addedLabelIds: $labelIds}) {
+    success
+  }
+}
+```
+
+Variables: `{"issueId": "<issue-uuid>", "labelIds": ["<label-uuid-from-resolve>"]}`
+
+Note: `addedLabelIds` appends to existing labels without removing them.
+
 ### Fetch issue details (if needed)
 
 ```graphql
@@ -264,7 +313,7 @@ query GetIssue($id: String!) {
 - Do NOT modify any files in the workspace.
 - Do NOT create git branches or commits.
 - Do NOT create follow-up issues.
-- Do NOT change the issue state EXCEPT from "Human Review" to "Merging" (auto-approve) or from "Human Review" to "Done" (no PR found).
-- Post exactly one review comment, then optionally update state, then stop.
+- Do NOT change the issue state EXCEPT from "Human Review" to "Merging" (auto-approve).
+- Post exactly one review comment, add exactly one label (`reviewed-by-agent` or `needs-human-review`), then optionally update state, then stop.
 - If the workspace is empty, the codebase is unavailable, or the PR cannot be found, leave the issue in Human Review and note the limitation in the review comment.
 - If you cannot confidently assess the diff (too large, unfamiliar patterns, complex refactoring), default to keeping the issue in Human Review. When in doubt, defer to humans.

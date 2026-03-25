@@ -54,6 +54,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:picked_up_label_name, :string)
       field(:organization_slug, :string)
       field(:assignee, :string)
+      field(:skip_labels, {:array, :string}, default: [])
       field(:active_states, {:array, :string}, default: ["Todo", "In Progress"])
       field(:terminal_states, {:array, :string}, default: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"])
     end
@@ -73,6 +74,7 @@ defmodule SymphonyElixir.Config.Schema do
           :picked_up_label_name,
           :organization_slug,
           :assignee,
+          :skip_labels,
           :active_states,
           :terminal_states
         ],
