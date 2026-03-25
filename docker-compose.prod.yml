@@ -26,6 +26,7 @@ services:
       - HOME=${HOST_HOME}
       - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${HOST_HOME}/.local/bin:${HOST_HOME}/.npm-global/bin:${HOST_HOME}/.nvm/versions/node/v22.14.0/bin
       - IS_SANDBOX=1
+      - SYMPHONY_DASHBOARD=0
       - DATABASE_URL=${DATABASE_URL}
       - SYMPHONY_SECRET_KEY_BASE=${SYMPHONY_SECRET_KEY_BASE}
     env_file:

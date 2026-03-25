@@ -248,7 +248,7 @@ defmodule SymphonyElixir.CLI do
   # Fix :code.priv_dir(:symphony_elixir) so the SPA controller
   # can find built dashboard assets under priv/static/dashboard/.
   defp ensure_nif_code_paths do
-    for app <- [:symphony_elixir] do
+    for app <- [:symphony_elixir, :bcrypt_elixir] do
       build_ebin = Path.expand("_build/dev/lib/#{app}/ebin")
 
       if File.dir?(build_ebin) do

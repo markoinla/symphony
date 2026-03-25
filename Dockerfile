@@ -51,6 +51,8 @@ COPY --from=build /app/bin/symphony /usr/local/bin/symphony
 COPY --from=build /app/_build/prod/lib/symphony_elixir/ebin /app/_build/dev/lib/symphony_elixir/ebin
 COPY --from=build /app/priv/static/dashboard /app/_build/dev/lib/symphony_elixir/priv/static/dashboard
 COPY --from=build /app/priv/repo/migrations /app/_build/dev/lib/symphony_elixir/priv/repo/migrations
+COPY --from=build /app/_build/prod/lib/bcrypt_elixir/priv /app/_build/dev/lib/bcrypt_elixir/priv
+COPY --from=build /app/_build/prod/lib/bcrypt_elixir/ebin /app/_build/dev/lib/bcrypt_elixir/ebin
 
 # Workflow config files
 COPY --from=build /app/*.md /app/
