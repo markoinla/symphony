@@ -52,14 +52,35 @@ Symphony stops the active agent for that issue and cleans up matching workspaces
 
 ## Deploy with Docker
 
-### Prerequisites
+### Option A: Install Script (recommended for fresh servers)
+
+One command to set up everything on Ubuntu 22.04/24.04:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/markoinla/symphony/main/install.sh | bash
+```
+
+This installs Docker, Node.js, Claude Code CLI, and GitHub CLI, then starts Symphony with
+Postgres and Caddy (for automatic HTTPS). After install:
+
+1. Open `http://<your-server-ip>:4000` and set your password
+2. **Settings** → Connect Linear OAuth
+3. **Projects** → Create a project (name, GitHub repo, Linear org/project slug)
+4. Optionally configure a domain in Settings for automatic HTTPS
+
+To update: `install.sh --update`
+To reset password: `install.sh --reset-password`
+
+### Option B: Manual Docker Compose
+
+#### Prerequisites
 
 On your server, install and authenticate:
 - **Docker** and **Docker Compose**
 - **Claude CLI** — installed and logged in (`claude auth login`)
 - **GitHub CLI** — installed and logged in (`gh auth login`)
 
-### Quick start
+#### Quick start
 
 ```bash
 git clone https://github.com/markoinla/symphony.git
@@ -76,7 +97,7 @@ Open `http://localhost:4000`:
 
 To update: `docker compose pull && docker compose up -d`
 
-### Deploy with Dokploy
+### Option C: Deploy with Dokploy
 
 1. **Add GHCR registry** in Dokploy → Settings → Registry:
    - URL: `ghcr.io`, Username: your GitHub username, Password: GitHub PAT with `read:packages` scope

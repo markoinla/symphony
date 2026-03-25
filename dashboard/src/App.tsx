@@ -47,6 +47,7 @@ import {
   analyticsRoute,
   reliabilityRoute,
   loginRoute,
+  setupRoute,
 } from './router'
 
 import { DashboardView } from './pages/dashboard'
@@ -58,6 +59,7 @@ import { AgentsView } from './pages/agents'
 import { AnalyticsView } from './pages/analytics'
 import { ReliabilityView } from './pages/reliability'
 import { LoginView } from './pages/login'
+import { SetupView } from './pages/setup'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -89,6 +91,7 @@ agentsRoute.update({ component: AgentsView })
 analyticsRoute.update({ component: AnalyticsView })
 reliabilityRoute.update({ component: ReliabilityView })
 loginRoute.update({ component: LoginView })
+setupRoute.update({ component: SetupView })
 
 export default function App() {
   return (
@@ -122,14 +125,16 @@ function RootLayout() {
   })
 
   const isLoginPage = pathname === '/login'
+  const isSetupPage = pathname === '/setup'
+  const isPublicPage = isLoginPage || isSetupPage
 
   useEffect(() => {
-    if (authQuery.data && authQuery.data.auth_required && !authQuery.data.authenticated && !isLoginPage) {
+    if (authQuery.data && authQuery.data.auth_required && !authQuery.data.authenticated && !isPublicPage) {
       window.location.href = '/login'
     }
-  }, [authQuery.data, isLoginPage])
+  }, [authQuery.data, isPublicPage])
 
-  if (isLoginPage) {
+  if (isPublicPage) {
     return <Outlet />
   }
 

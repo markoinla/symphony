@@ -1,0 +1,63 @@
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      symphony:
+        condition: service_healthy
+
+  symphony:
+    image: ghcr.io/markoinla/symphony:main
+    pull_policy: always
+    ports:
+      - "4000:4000"
+    volumes:
+      - ${HOST_HOME}:${HOST_HOME}
+      - /tmp/symphony_workspaces:/tmp/symphony_workspaces
+    environment:
+      - HOME=${HOST_HOME}
+      - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${HOST_HOME}/.local/bin:${HOST_HOME}/.npm-global/bin:${HOST_HOME}/.nvm/versions/node/v22.14.0/bin
+      - IS_SANDBOX=1
+      - DATABASE_URL=${DATABASE_URL}
+      - SYMPHONY_SECRET_KEY_BASE=${SYMPHONY_SECRET_KEY_BASE}
+    env_file:
+      - .env
+    working_dir: /app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4000/healthz"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: symphony
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: symphony
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U symphony"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

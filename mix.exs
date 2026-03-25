@@ -104,7 +104,8 @@ defmodule SymphonyElixir.MixProject do
       {:postgrex, ">= 0.0.0"},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev], runtime: false},
-      {:dotenvy, "~> 0.9"}
+      {:dotenvy, "~> 0.9"},
+      {:bcrypt_elixir, "~> 3.2"}
     ]
   end
 

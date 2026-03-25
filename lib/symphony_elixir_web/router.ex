@@ -35,6 +35,7 @@ defmodule SymphonyElixirWeb.Router do
   scope "/api/v1/auth", SymphonyElixirWeb do
     pipe_through(:api)
     post("/login", AuthController, :login)
+    post("/setup", AuthController, :setup)
     post("/logout", AuthController, :logout)
     get("/status", AuthController, :status)
   end
@@ -88,6 +89,7 @@ defmodule SymphonyElixirWeb.Router do
     get("/oauth/github/authorize", GitHubOAuthController, :authorize)
     get("/oauth/github/status", GitHubOAuthController, :status)
     post("/oauth/github/revoke", GitHubOAuthController, :revoke)
+    post("/auth/change-password", AuthController, :change_password)
 
     match(:*, "/state", FallbackController, :method_not_allowed)
     match(:*, "/refresh", FallbackController, :method_not_allowed)

@@ -575,6 +575,20 @@ export function getCostAnalytics(range: CostRange) {
   return requestJson<CostAnalyticsResponse>(`/api/v1/analytics/cost?range=${encodeURIComponent(range)}`)
 }
 
+export function setupPassword(password: string) {
+  return requestJson<{ ok: boolean }>('/api/v1/auth/setup', {
+    method: 'POST',
+    body: JSON.stringify({ password }),
+  })
+}
+
+export function changePassword(currentPassword: string, newPassword: string) {
+  return requestJson<{ ok: boolean }>('/api/v1/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  })
+}
+
 export function emptyProject(): ProjectBody {
   return {
     name: '',

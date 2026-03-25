@@ -1,32 +1,37 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 
-import { ApiError, getAuthStatus, login } from '../lib/api'
+import { ApiError, setupPassword } from '../lib/api'
 import { Button, Card, Input } from '../components/ui'
 
-export function LoginView() {
+export function SetupView() {
   const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    getAuthStatus().then((status) => {
-      if (!status.auth_required) {
-        window.location.href = '/setup'
-      }
-    }).catch(() => {})
-  }, [])
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setError('')
+
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters')
+      return
+    }
+
+    if (password !== confirm) {
+      setError('Passwords do not match')
+      return
+    }
+
     setLoading(true)
 
     try {
-      await login(password)
+      await setupPassword(password)
       window.location.href = '/'
     } catch (err) {
-      if (err instanceof ApiError && err.status === 401) {
-        setError('Invalid password')
+      if (err instanceof ApiError && err.status === 409) {
+        setError('Password already configured')
+        setTimeout(() => { window.location.href = '/login' }, 2000)
       } else {
         setError('Something went wrong')
       }
@@ -46,7 +51,7 @@ export function LoginView() {
               </svg>
             </div>
             <h1 className="text-lg font-semibold text-th-text-1">Symphony</h1>
-            <p className="text-sm text-th-text-3">Sign in to your dashboard</p>
+            <p className="text-sm text-th-text-3">Set your password</p>
           </div>
           <Input
             autoFocus
@@ -56,9 +61,16 @@ export function LoginView() {
             type="password"
             value={password}
           />
+          <Input
+            name="confirm"
+            onChange={(e) => setConfirm(e.target.value)}
+            placeholder="Confirm password"
+            type="password"
+            value={confirm}
+          />
           {error && <p className="text-sm text-th-danger">{error}</p>}
-          <Button disabled={loading || !password} type="submit">
-            {loading ? 'Signing in...' : 'Sign in'}
+          <Button disabled={loading || !password || !confirm} type="submit">
+            {loading ? 'Setting up...' : 'Set password'}
           </Button>
         </form>
       </Card>
