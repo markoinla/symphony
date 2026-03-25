@@ -13,6 +13,7 @@ defmodule SymphonyElixirWeb.OAuthController do
   alias Plug.Conn
   alias SymphonyElixir.Linear.{Client, OAuth}
   alias SymphonyElixir.{ProxyClient, Store}
+  alias SymphonyElixirWeb.ObservabilityPubSub
 
   @spec authorize(Conn.t(), map()) :: Conn.t()
   def authorize(conn, _params) do
@@ -56,6 +57,7 @@ defmodule SymphonyElixirWeb.OAuthController do
          {:ok, _token_data} <- OAuth.exchange_code(code, redirect_uri) do
       sync_linear_org_id()
       maybe_register_instance()
+      ObservabilityPubSub.broadcast_settings_changed()
       do_redirect(conn, "/settings?oauth=success")
     else
       {:error, :missing_param} ->
@@ -93,6 +95,7 @@ defmodule SymphonyElixirWeb.OAuthController do
             store_proxy_tokens(tokens)
             sync_linear_org_id()
             maybe_register_instance()
+            ObservabilityPubSub.broadcast_settings_changed()
             json(conn, %{status: "complete"})
 
           {:pending} ->
