@@ -25,14 +25,6 @@ defmodule SymphonyElixirWeb.AuthControllerTest do
       Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
     end)
 
-    # Ensure no env password interferes
-    original_env = System.get_env("SYMPHONY_AUTH_PASSWORD")
-    System.delete_env("SYMPHONY_AUTH_PASSWORD")
-
-    on_exit(fn ->
-      restore_env("SYMPHONY_AUTH_PASSWORD", original_env)
-    end)
-
     :ok
   end
 

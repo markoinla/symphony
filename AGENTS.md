@@ -24,6 +24,14 @@ This directory contains the Elixir agent orchestration service that polls Linear
 - Orchestrator behavior is stateful and concurrency-sensitive; preserve retry, reconciliation, and cleanup semantics.
 - Follow `docs/logging.md` for logging conventions and required issue/session context fields.
 
+## Authentication
+
+- `SymphonyElixir.Accounts` is the context module for user authentication and account management. It wraps `Store` CRUD with password verification, existence checks, and multi-step registration (user + org + membership).
+- `SymphonyElixirWeb.Plugs.RequireAuth` enforces session-based auth. When no users exist in the DB, all requests pass through (auth is unconfigured). Once any user exists, a valid `user_id` session is required.
+- `SymphonyElixirWeb.AuthController` handles login, setup, logout, and status endpoints under `/api/v1/auth/*`.
+- First-time setup: `POST /api/v1/auth/setup` creates the first user, default organization, and owner membership.
+- Additional users: `mix symphony.create_user <email> <password> [--name "Name"]`.
+
 ## Tests and Validation
 
 Run targeted tests while iterating, then run fast validation before handoff.

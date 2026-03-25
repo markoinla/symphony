@@ -30,14 +30,6 @@ defmodule SymphonyElixirWeb.AnalyticsControllerTest do
     # This runs inside the sandbox transaction and is rolled back after the test.
     SymphonyElixir.Repo.delete_all(SymphonyElixir.Store.Session)
 
-    # Disable auth so we can reach authenticated routes
-    original = System.get_env("SYMPHONY_AUTH_PASSWORD")
-    System.delete_env("SYMPHONY_AUTH_PASSWORD")
-
-    on_exit(fn ->
-      if original, do: System.put_env("SYMPHONY_AUTH_PASSWORD", original), else: :ok
-    end)
-
     :ok
   end
 
