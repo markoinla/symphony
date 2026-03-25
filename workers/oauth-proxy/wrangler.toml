@@ -1,0 +1,16 @@
+name = "oauth-proxy"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "placeholder-kv-id"
+preview_id = "placeholder-preview-kv-id"
+
+[vars]
+REDIRECT_URI = "https://proxy.symphony.dev/callback"
+# Test/dev defaults — overridden by wrangler secrets in production
+LINEAR_CLIENT_ID = "test-linear-client-id"
+LINEAR_CLIENT_SECRET = "test-linear-client-secret"
+GITHUB_CLIENT_ID = "test-github-client-id"
+GITHUB_CLIENT_SECRET = "test-github-client-secret"
