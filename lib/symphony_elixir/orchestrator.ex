@@ -170,6 +170,15 @@ defmodule SymphonyElixir.Orchestrator do
       engine_rate_limits: nil
     }
 
+    # Release any stale claims left by a previous instance of this orchestrator
+    # (e.g. from a crash or unclean shutdown where terminate/2 didn't run).
+    orch_key = orchestrator_key(state)
+    released = Store.release_claims_by_orchestrator_key(orch_key)
+
+    if released > 0 do
+      Logger.info("Released #{released} stale issue claim(s) for orchestrator_key=#{orch_key}")
+    end
+
     run_terminal_workspace_cleanup()
     Process.send_after(self(), :finalize_stale_sessions, @stale_session_grace_ms)
     state = schedule_tick(state, 0)
@@ -190,6 +199,13 @@ defmodule SymphonyElixir.Orchestrator do
 
     Enum.each(running, fn {_issue_id, running_entry} ->
       maybe_cancel_on_shutdown(running_entry, terminate_reason)
+    end)
+
+    # Release all DB claims owned by this orchestrator so issues are not
+    # permanently stuck after a shutdown.  Individual release calls above
+    # only cover the normal completion path; terminate/2 must sweep them.
+    Enum.each(running, fn {issue_id, _running_entry} ->
+      Store.release_issue_claim(issue_id)
     end)
 
     :ok
@@ -531,6 +547,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp reconcile_running_issues(%State{workflow_name: workflow_name} = state) do
     state = reconcile_stalled_running_issues(state)
+    sweep_orphaned_db_sessions(state)
     running_ids = Map.keys(state.running)
 
     if running_ids == [] do
@@ -1352,6 +1369,23 @@ defmodule SymphonyElixir.Orchestrator do
 
     if live_issue_ids != [] do
       Logger.info("Preserved #{length(live_issue_ids)} running session(s) with active agent tasks")
+    end
+  end
+
+  defp sweep_orphaned_db_sessions(%State{project_id: project_id, workflow_name: workflow_name} = state) do
+    # Exclude issue IDs the orchestrator is actively tracking — these are legitimately
+    # running regardless of SessionLogRegistry state (e.g. long thinking, waiting on tools).
+    active_issue_ids = Map.keys(state.running)
+
+    {count, _} =
+      Store.finalize_stale_sessions(
+        project_id: project_id,
+        workflow_name: workflow_name,
+        exclude_issue_ids: active_issue_ids
+      )
+
+    if count > 0 do
+      Logger.warning("Swept #{count} orphaned running session(s) from DB")
     end
   end
 

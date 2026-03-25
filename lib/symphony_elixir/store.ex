@@ -233,6 +233,16 @@ defmodule SymphonyElixir.Store do
     |> MapSet.new()
   end
 
+  @spec release_claims_by_orchestrator_key(String.t()) :: non_neg_integer()
+  def release_claims_by_orchestrator_key(orchestrator_key) when is_binary(orchestrator_key) do
+    {count, _} =
+      IssueClaim
+      |> where([c], c.orchestrator_key == ^orchestrator_key)
+      |> Repo.delete_all()
+
+    count
+  end
+
   @spec clear_all_issue_claims() :: :ok
   def clear_all_issue_claims do
     Repo.delete_all(IssueClaim)
