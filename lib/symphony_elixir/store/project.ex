@@ -9,6 +9,7 @@ defmodule SymphonyElixir.Store.Project do
   @type t :: %__MODULE__{
           id: integer() | nil,
           name: String.t() | nil,
+          organization_id: Ecto.UUID.t() | nil,
           linear_project_slug: String.t() | nil,
           linear_organization_slug: String.t() | nil,
           linear_filter_by: String.t() | nil,
@@ -23,6 +24,7 @@ defmodule SymphonyElixir.Store.Project do
 
   schema "projects" do
     field(:name, :string)
+    field(:organization_id, :binary_id)
     field(:linear_project_slug, :string)
     field(:linear_organization_slug, :string)
     field(:linear_filter_by, :string, default: "project")
@@ -34,11 +36,12 @@ defmodule SymphonyElixir.Store.Project do
     field(:created_at, :utc_datetime)
     field(:updated_at, :utc_datetime)
 
+    belongs_to(:organization, SymphonyElixir.Store.Organization, type: :binary_id, define_field: false)
     has_many(:sessions, SymphonyElixir.Store.Session)
   end
 
   @required_fields ~w(name)a
-  @optional_fields ~w(linear_project_slug linear_organization_slug linear_filter_by linear_label_name github_repo github_branch workspace_root env_vars)a
+  @optional_fields ~w(organization_id linear_project_slug linear_organization_slug linear_filter_by linear_label_name github_repo github_branch workspace_root env_vars)a
 
   @spec changeset(%__MODULE__{} | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
   def changeset(project, attrs) do
