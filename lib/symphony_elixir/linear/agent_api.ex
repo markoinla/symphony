@@ -113,6 +113,9 @@ defmodule SymphonyElixir.Linear.AgentAPI do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
+  @rate_limit_max_retries 3
+  @rate_limit_base_delay_ms 2_000
+
   defp agent_graphql(query, variables) do
     case oauth_token() do
       nil ->
@@ -120,35 +123,60 @@ defmodule SymphonyElixir.Linear.AgentAPI do
         {:error, :missing_oauth_token}
 
       token ->
-        payload = %{"query" => query, "variables" => variables}
-
-        headers = [
-          {"Authorization", "Bearer #{token}"},
-          {"Content-Type", "application/json"}
-        ]
-
-        endpoint = Config.settings!().tracker.endpoint
-
-        case Req.post(endpoint, json: payload, headers: headers, receive_timeout: 30_000) do
-          {:ok, %{status: 200, body: %{"errors" => [_ | _] = errors} = body}} ->
-            messages = Enum.map_join(errors, "; ", &Map.get(&1, "message", "unknown"))
-            Logger.warning("Linear Agent API GraphQL errors: #{messages}")
-            {:ok, body}
-
-          {:ok, %{status: 200, body: body}} ->
-            {:ok, body}
-
-          {:ok, response} ->
-            Logger.error("Linear Agent API request failed status=#{response.status} body=#{inspect(response.body)}")
-
-            {:error, {:linear_api_status, response.status}}
-
-          {:error, reason} ->
-            Logger.error("Linear Agent API request failed: #{inspect(reason)}")
-            {:error, {:linear_api_request, reason}}
-        end
+        agent_graphql_with_retry(query, variables, token, 0)
     end
   end
+
+  defp agent_graphql_with_retry(query, variables, token, attempt) do
+    payload = %{"query" => query, "variables" => variables}
+
+    headers = [
+      {"Authorization", "Bearer #{token}"},
+      {"Content-Type", "application/json"}
+    ]
+
+    endpoint = Config.settings!().tracker.endpoint
+
+    case Req.post(endpoint, json: payload, headers: headers, receive_timeout: 30_000) do
+      {:ok, %{status: 200, body: %{"errors" => [_ | _] = errors} = body}} ->
+        messages = Enum.map_join(errors, "; ", &Map.get(&1, "message", "unknown"))
+        Logger.warning("Linear Agent API GraphQL errors: #{messages}")
+        {:ok, body}
+
+      {:ok, %{status: 200, body: body}} ->
+        {:ok, body}
+
+      {:ok, %{status: 400, body: body} = response} when is_map(body) ->
+        if rate_limited_response?(body) and attempt < @rate_limit_max_retries do
+          delay = @rate_limit_base_delay_ms * Integer.pow(2, attempt)
+
+          Logger.warning("Linear Agent API rate limited, retrying in #{delay}ms (attempt #{attempt + 1}/#{@rate_limit_max_retries})")
+
+          Process.sleep(delay)
+          agent_graphql_with_retry(query, variables, token, attempt + 1)
+        else
+          Logger.error("Linear Agent API request failed status=400 body=#{inspect(response.body)}")
+          {:error, {:linear_api_status, 400}}
+        end
+
+      {:ok, response} ->
+        Logger.error("Linear Agent API request failed status=#{response.status} body=#{inspect(response.body)}")
+        {:error, {:linear_api_status, response.status}}
+
+      {:error, reason} ->
+        Logger.error("Linear Agent API request failed: #{inspect(reason)}")
+        {:error, {:linear_api_request, reason}}
+    end
+  end
+
+  defp rate_limited_response?(%{"errors" => errors}) when is_list(errors) do
+    Enum.any?(errors, fn
+      %{"extensions" => %{"code" => "RATELIMITED"}} -> true
+      _ -> false
+    end)
+  end
+
+  defp rate_limited_response?(_body), do: false
 
   defp oauth_token do
     OAuth.current_access_token()
