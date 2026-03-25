@@ -37,7 +37,11 @@ defmodule SymphonyElixirWeb.Plugs.RequireAuth do
 
     case user_id && Accounts.get_user(user_id) do
       {:ok, user} ->
-        assign(conn, :current_user, user)
+        org = Accounts.get_user_organization(user.id)
+
+        conn
+        |> assign(:current_user, user)
+        |> assign(:current_org, org)
 
       _ ->
         reject(conn)

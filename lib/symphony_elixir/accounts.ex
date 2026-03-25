@@ -78,4 +78,13 @@ defmodule SymphonyElixir.Accounts do
   def add_user_to_organization(user_id, organization_id, role \\ "member") do
     Store.add_user_to_organization(user_id, organization_id, role)
   end
+
+  @spec get_user_organization(Ecto.UUID.t()) :: Organization.t() | nil
+  def get_user_organization(user_id) do
+    Organization
+    |> join(:inner, [o], uo in UserOrganization, on: uo.organization_id == o.id)
+    |> where([_o, uo], uo.user_id == ^user_id)
+    |> limit(1)
+    |> Repo.one()
+  end
 end
