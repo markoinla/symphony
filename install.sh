@@ -34,9 +34,6 @@ handle_update() {
   curl -fsSL "${RAW_BASE}/docker-compose.prod.yml" -o "${INSTALL_DIR}/docker-compose.prod.yml"
   info "Updated docker-compose.prod.yml"
 
-  curl -fsSL "${RAW_BASE}/deploy/Caddyfile" -o "${INSTALL_DIR}/Caddyfile"
-  info "Updated Caddyfile"
-
   docker compose -f docker-compose.prod.yml pull
   docker compose -f docker-compose.prod.yml up -d
   info "Symphony updated successfully."
@@ -128,10 +125,37 @@ install_claude() {
     info "Claude Code CLI is already installed."
   else
     warn "Claude Code CLI not found. Installing..."
-    npm install -g @anthropic-ai/claude-code
+    curl -fsSL https://claude.ai/install.sh | bash
     info "Claude Code CLI installed."
   fi
   warn "Reminder: run ${BOLD}claude auth login${NC} to authenticate."
+}
+
+# ── Claude Skills ────────────────────────────────────────────────────────────
+
+install_skills() {
+  header "Claude Skills"
+
+  # Resolve the real user's home (prefer SUDO_USER's home over root's)
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    SKILL_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+  else
+    SKILL_HOME="$HOME"
+  fi
+
+  CLAUDE_DIR="${SKILL_HOME}/.claude"
+  mkdir -p "${CLAUDE_DIR}"
+
+  # TODO: Pull down skills into ${CLAUDE_DIR}/
+  # e.g. curl skill files from the repo or another source into ${CLAUDE_DIR}/commands/
+  warn "TODO: Skill installation not yet implemented — add skill download URLs here."
+
+  # Fix ownership if running as root via sudo
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    chown -R "${SUDO_USER}:${SUDO_USER}" "${CLAUDE_DIR}"
+  fi
+
+  info "Claude skills directory ready at ${CLAUDE_DIR}"
 }
 
 # ── GitHub CLI ──────────────────────────────────────────────────────────────────
@@ -157,7 +181,7 @@ install_gh() {
   warn "Reminder: run ${BOLD}gh auth login${NC} to authenticate."
 }
 
-# ── Download compose & Caddyfile ────────────────────────────────────────────────
+# ── Download compose file ──────────────────────────────────────────────────────
 
 download_files() {
   header "Downloading deployment files"
@@ -166,10 +190,6 @@ download_files() {
   curl -fsSL "${RAW_BASE}/docker-compose.prod.yml" \
     -o "${INSTALL_DIR}/docker-compose.prod.yml"
   info "Downloaded docker-compose.prod.yml"
-
-  curl -fsSL "${RAW_BASE}/deploy/Caddyfile" \
-    -o "${INSTALL_DIR}/Caddyfile"
-  info "Downloaded Caddyfile"
 }
 
 # ── Generate .env ───────────────────────────────────────────────────────────────
@@ -240,6 +260,7 @@ main() {
   install_docker
   install_node
   install_claude
+  install_skills
   install_gh
   download_files
   generate_env
