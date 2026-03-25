@@ -476,7 +476,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   def handle_info(:settings_changed, state) do
     Logger.info("Settings changed, refreshing runtime config for #{state.workflow_name}")
-    {:noreply, refresh_runtime_config(state)}
+    state = refresh_runtime_config(state)
+    state = schedule_tick(state, 0)
+    {:noreply, state}
   end
 
   def handle_info(:finalize_stale_sessions, state) do

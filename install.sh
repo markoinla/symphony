@@ -3,6 +3,11 @@ set -euo pipefail
 
 # Symphony self-hosted installer for Ubuntu 22.04/24.04
 
+# Ensure common install paths are reachable (sudo bash strips PATH)
+for p in /usr/local/bin /usr/local/sbin /snap/bin; do
+  [[ ":$PATH:" != *":$p:"* ]] && export PATH="$p:$PATH"
+done
+
 REPO="markoinla/symphony"
 BRANCH="main"
 INSTALL_DIR="/opt/symphony"
