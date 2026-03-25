@@ -27,14 +27,6 @@ defmodule SymphonyElixirWeb.ObservabilityApiControllerTest do
       Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
     end)
 
-    # Disable auth so we can reach authenticated routes
-    original = System.get_env("SYMPHONY_AUTH_PASSWORD")
-    System.delete_env("SYMPHONY_AUTH_PASSWORD")
-
-    on_exit(fn ->
-      if original, do: System.put_env("SYMPHONY_AUTH_PASSWORD", original), else: :ok
-    end)
-
     :ok
   end
 

@@ -66,9 +66,15 @@ them — changes are picked up automatically.
 
 After install:
 
-1. Open `http://<your-server-ip>:4000` and set your password
+1. Open `http://<your-server-ip>:4000/setup` and create your admin account (email + password)
 2. **Settings** → Connect Linear OAuth
 3. **Projects** → Create a project (name, GitHub repo, Linear org/project slug)
+
+To add more users:
+
+```bash
+docker exec symphony-app-1 mix symphony.create_user user@example.com secretpassword --name "Full Name"
+```
 
 #### Workflows
 
@@ -95,7 +101,7 @@ To add a new workflow, drop any `.md` file with valid YAML front matter into the
 sudo bash /opt/symphony/install.sh --update
 ```
 
-**Reset password** — clears the dashboard password so you can set a new one:
+**Reset authentication** — removes all user accounts so you can re-run `/setup`:
 
 ```bash
 sudo bash /opt/symphony/install.sh --reset-password
@@ -128,14 +134,14 @@ On your server, install and authenticate:
 git clone https://github.com/markoinla/symphony.git
 cd symphony
 echo "HOST_HOME=$HOME" > .env
-echo "SYMPHONY_AUTH_PASSWORD=$(openssl rand -base64 16)" >> .env
 docker compose up -d
 ```
 
 Open `http://localhost:4000`:
-1. **Settings** → Connect Linear OAuth
-2. **Projects** → Create a project (name, GitHub repo, Linear org/project slug)
-3. Create an issue in Linear — Symphony picks it up
+1. Visit `/setup` to create your admin account (email + password)
+2. **Settings** → Connect Linear OAuth
+3. **Projects** → Create a project (name, GitHub repo, Linear org/project slug)
+4. Create an issue in Linear — Symphony picks it up
 
 To update: `docker compose pull && docker compose up -d`
 
@@ -144,7 +150,7 @@ To update: `docker compose pull && docker compose up -d`
 1. **Add GHCR registry** in Dokploy → Settings → Registry:
    - URL: `ghcr.io`, Username: your GitHub username, Password: GitHub PAT with `read:packages` scope
 2. **Create service** → Docker Compose → GitHub → `markoinla/symphony`, branch `main`, path `./docker-compose.yml`
-3. **Environment variables**: `HOST_HOME=/home/youruser` and `SYMPHONY_AUTH_PASSWORD=your-password`
+3. **Environment variables**: `HOST_HOME=/home/youruser`
 4. **Deploy**, then configure Linear OAuth and projects in the dashboard
 
 Pushes to `main` auto-build the Docker image via GitHub Actions and trigger a Dokploy redeploy.

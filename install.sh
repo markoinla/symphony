@@ -84,10 +84,10 @@ handle_update() {
 }
 
 handle_reset_password() {
-  header "Resetting password"
+  header "Resetting authentication"
   docker exec symphony-postgres-1 psql -U symphony -d symphony \
-    -c "DELETE FROM settings WHERE key = 'auth_password_hash';"
-  info "Password cleared. Visit the dashboard to set a new one."
+    -c "DELETE FROM user_organizations; DELETE FROM users; DELETE FROM settings WHERE key = 'auth_password_hash';"
+  info "All user accounts removed. Visit the dashboard to create a new account via /setup."
   exit 0
 }
 

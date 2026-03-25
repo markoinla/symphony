@@ -53,6 +53,14 @@ Located in `dashboard/`. Built with Vite, served as static assets from Phoenix i
 ### API
 
 REST JSON API under `/api/v1/*`:
+
+**Auth (no session required):**
+- `POST /api/v1/auth/login` — body: `{email, password}`, response: `{ok: true, user: {id, email, name}}` or 401
+- `POST /api/v1/auth/setup` — body: `{email, password, name?}`, creates first user + org; 409 if already configured
+- `POST /api/v1/auth/logout` — clears session
+- `GET /api/v1/auth/status` — response: `{authenticated, auth_required, user?}` (user present when logged in)
+
+**Protected (session required when users exist):**
 - `GET /api/v1/state` — Orchestrator state snapshot
 - `GET /api/v1/sessions` — Session history (filterable by `workflow_name`, `issue_identifier`, `status`, `project_id`)
 - `GET /api/v1/sessions/:id/debug` — Full session debug payload (config, stderr, hooks, messages, summary)
