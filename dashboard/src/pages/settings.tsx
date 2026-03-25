@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect, type FormEvent } from 'react'
+import { useMemo, useRef, useState, useEffect, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Eye,
@@ -1042,12 +1042,14 @@ function DomainSection() {
   const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
   const existing = settingsQuery.data?.settings.find((s) => s.key === 'domain')
 
-  const [domain, setDomain] = useState('')
+  const [domain, setDomain] = useState(existing?.value ?? '')
   const [feedback, setFeedback] = useState<string | null>(null)
 
-  useEffect(() => {
+  const prevExisting = useRef(existing?.value)
+  if (existing?.value !== prevExisting.current) {
+    prevExisting.current = existing?.value
     if (existing) setDomain(existing.value)
-  }, [existing])
+  }
 
   const saveMutation = useMutation({
     mutationFn: (value: string) => upsertSetting('domain', value),
