@@ -1241,11 +1241,11 @@ function ProxySection() {
           <Field label="Proxy URL">
             <Input
               onChange={(e) => setProxyUrl(e.target.value)}
-              placeholder="https://proxy.symphony.dev"
+              placeholder="https://oauth-proxy.m-6bb.workers.dev"
               value={proxyUrl}
             />
             <p className="mt-1 text-xs text-th-text-4">
-              {existingProxyUrl ? `Current: ${existingProxyUrl}` : 'Default: https://proxy.symphony.dev'}
+              {existingProxyUrl ? `Current: ${existingProxyUrl}` : 'Default: https://oauth-proxy.m-6bb.workers.dev'}
             </p>
           </Field>
           <Field label="Instance URL">

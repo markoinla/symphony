@@ -57,7 +57,7 @@ defmodule SymphonyElixirWeb.ProxyApiController do
   def status(conn, _params) do
     json(conn, %{
       enabled: ProxyClient.proxy_enabled?(),
-      url: Store.get_setting("proxy.url") || "https://proxy.symphony.dev",
+      url: Store.get_setting("proxy.url") || "https://oauth-proxy.m-6bb.workers.dev",
       instance_url: Store.get_setting("proxy.instance_url"),
       linear_org_id: Store.get_setting("proxy.linear_org_id")
     })

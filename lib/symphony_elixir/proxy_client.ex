@@ -11,7 +11,7 @@ defmodule SymphonyElixir.ProxyClient do
   alias SymphonyElixir.PKCE
   alias SymphonyElixir.Store
 
-  @default_proxy_url "https://proxy.symphony.dev"
+  @default_proxy_url "https://oauth-proxy.m-6bb.workers.dev"
   @poll_interval_ms 1_000
   @poll_timeout_ms 300_000
 

@@ -4,7 +4,7 @@ compatibility_date = "2025-03-24"
 
 [[kv_namespaces]]
 binding = "OAUTH_KV"
-id = "TBD" # Replace after: wrangler kv namespace create OAUTH_KV
+id = "82fdd2ec66b8455bb8831d87be4d5941"
 
 # Secrets (set via `wrangler secret put`):
 #   LINEAR_CLIENT_ID
