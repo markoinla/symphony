@@ -95,7 +95,6 @@ defmodule SymphonyElixirWeb.Router do
     post("/proxy/health", ProxyApiController, :health)
     post("/proxy/ping", ProxyApiController, :ping)
     post("/proxy/register", ProxyApiController, :register)
-    post("/auth/change-password", AuthController, :change_password)
 
     match(:*, "/state", FallbackController, :method_not_allowed)
     match(:*, "/refresh", FallbackController, :method_not_allowed)

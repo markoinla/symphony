@@ -1,15 +1,18 @@
 defmodule SymphonyElixirWeb.Plugs.RequireAuth do
   @moduledoc """
-  Plug that enforces session-based authentication.
+  Plug that enforces session-based user authentication.
 
-  Checks for `:authenticated` flag in the session. When authentication is
-  not configured (no `SYMPHONY_AUTH_PASSWORD` env var), all requests pass through.
+  Loads the current user from `user_id` in the session and assigns it to
+  `conn.assigns.current_user`. When no users exist in the database,
+  authentication is not required and all requests pass through.
 
-  For API routes (Accept: application/json), returns 401 JSON.
+  For API routes (path starts with /api/), returns 401 JSON.
   For browser routes, redirects to `/login`.
   """
 
   import Plug.Conn
+
+  alias SymphonyElixir.Accounts
 
   @behaviour Plug
 
@@ -23,17 +26,21 @@ defmodule SymphonyElixirWeb.Plugs.RequireAuth do
     if auth_configured?() do
       conn
       |> fetch_session()
-      |> check_auth()
+      |> load_user()
     else
       conn
     end
   end
 
-  defp check_auth(conn) do
-    if get_session(conn, :authenticated) do
-      conn
-    else
-      reject(conn)
+  defp load_user(conn) do
+    user_id = get_session(conn, :user_id)
+
+    case user_id && Accounts.get_user(user_id) do
+      {:ok, user} ->
+        assign(conn, :current_user, user)
+
+      _ ->
+        reject(conn)
     end
   end
 
@@ -56,18 +63,6 @@ defmodule SymphonyElixirWeb.Plugs.RequireAuth do
 
   @spec auth_configured?() :: boolean()
   def auth_configured? do
-    env_password_set?() or db_password_set?()
-  end
-
-  defp env_password_set? do
-    case System.get_env("SYMPHONY_AUTH_PASSWORD") do
-      nil -> false
-      "" -> false
-      _ -> true
-    end
-  end
-
-  defp db_password_set? do
-    SymphonyElixir.Store.get_setting("auth_password_hash") != nil
+    Accounts.any_user_exists?()
   end
 end
