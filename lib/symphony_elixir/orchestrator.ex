@@ -753,25 +753,67 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  @tool_stall_multiplier 3
+
   defp restart_stalled_issue(state, issue_id, running_entry, now, timeout_ms) do
     elapsed_ms = stall_elapsed_ms(running_entry, now)
 
     if is_integer(elapsed_ms) and elapsed_ms > timeout_ms do
-      identifier = Map.get(running_entry, :identifier, issue_id)
-      session_id = running_entry_session_id(running_entry)
-
-      Logger.warning("Issue stalled: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} elapsed_ms=#{elapsed_ms}; restarting with backoff")
-
-      next_attempt = next_retry_attempt_from_running(running_entry)
-
-      state
-      |> terminate_running_issue(issue_id, false)
-      |> schedule_issue_retry(issue_id, next_attempt, %{
-        identifier: identifier,
-        error: "stalled for #{elapsed_ms}ms without codex activity"
-      })
+      if tool_in_flight?(running_entry) and not stalled_past_tool_limit?(running_entry, elapsed_ms, timeout_ms) do
+        state
+      else
+        do_restart_stalled_issue(state, issue_id, running_entry, elapsed_ms)
+      end
     else
       state
+    end
+  end
+
+  defp stalled_past_tool_limit?(running_entry, elapsed_ms, base_timeout_ms) do
+    if engine_process_alive?(running_entry) do
+      # Process is confirmed alive — not stalled, let the engine's own
+      # turn_timeout handle genuinely hung turns
+      false
+    else
+      # Can't confirm process is alive (SSH worker or missing PID) —
+      # fall back to multiplied cap
+      elapsed_ms > base_timeout_ms * @tool_stall_multiplier
+    end
+  end
+
+  defp do_restart_stalled_issue(state, issue_id, running_entry, elapsed_ms) do
+    identifier = Map.get(running_entry, :identifier, issue_id)
+    session_id = running_entry_session_id(running_entry)
+
+    Logger.warning("Issue stalled: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} elapsed_ms=#{elapsed_ms}; restarting with backoff")
+
+    next_attempt = next_retry_attempt_from_running(running_entry)
+
+    state
+    |> terminate_running_issue(issue_id, false)
+    |> schedule_issue_retry(issue_id, next_attempt, %{
+      identifier: identifier,
+      error: "stalled for #{elapsed_ms}ms without engine activity"
+    })
+  end
+
+  defp tool_in_flight?(running_entry) do
+    case get_in(running_entry, [:last_engine_message, :message]) do
+      %{"method" => "claude/tool_use"} -> true
+      _ -> false
+    end
+  end
+
+  defp engine_process_alive?(running_entry) do
+    pid = Map.get(running_entry, :engine_pid)
+    worker_host = Map.get(running_entry, :worker_host)
+
+    with true <- is_binary(pid),
+         true <- worker_host in [nil, "local"],
+         {_pid_int, ""} <- Integer.parse(pid) do
+      File.exists?("/proc/#{pid}")
+    else
+      _ -> false
     end
   end
 
