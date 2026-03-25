@@ -23,6 +23,24 @@ warn()    { echo -e "${YELLOW}⚠${NC} $*"; }
 err()     { echo -e "${RED}✗${NC} $*" >&2; }
 header()  { echo -e "\n${BOLD}── $* ──${NC}"; }
 
+# ── Safe .env loader ─────────────────────────────────────────────────────────────
+
+load_env() {
+  local env_file="${1:-${INSTALL_DIR}/.env}"
+  [[ -f "${env_file}" ]] || return 0
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    # Skip comments and blank lines
+    [[ "${line}" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "${line}" ]] && continue
+    # Extract key=value, stripping surrounding quotes from value
+    local key="${line%%=*}"
+    local val="${line#*=}"
+    val="${val#\"}" ; val="${val%\"}"
+    val="${val#\'}" ; val="${val%\'}"
+    export "${key}=${val}"
+  done < "${env_file}"
+}
+
 # ── Flag handlers ───────────────────────────────────────────────────────────────
 
 handle_update() {
@@ -31,9 +49,7 @@ handle_update() {
 
   # Load existing env so HOST_HOME/WORKFLOWS_DIR are available
   if [[ -f "${INSTALL_DIR}/.env" ]]; then
-    set -a
-    source "${INSTALL_DIR}/.env"
-    set +a
+    load_env
   fi
 
   curl -fsSL "${RAW_BASE}/install.sh" -o "${INSTALL_DIR}/install.sh"
@@ -72,11 +88,67 @@ handle_uninstall() {
   read -rp "This will stop all services and delete data. Continue? [y/N] " confirm
   [[ "$confirm" =~ ^[Yy]$ ]] || { info "Aborted."; exit 0; }
 
+  # Resolve the real user's home
+  local user_home
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    user_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+  else
+    user_home="$HOME"
+  fi
+
+  # Stop services and remove Docker volumes
   cd "${INSTALL_DIR}" 2>/dev/null && \
     docker compose -f docker-compose.prod.yml down -v 2>/dev/null || true
 
+  # Remove install directory
   rm -rf "${INSTALL_DIR}"
   info "Removed ${INSTALL_DIR} and all Docker volumes."
+
+  # Remove workflow files
+  rm -rf "${user_home}/.symphony"
+  info "Removed ${user_home}/.symphony/"
+
+  # Remove plugin entries from ~/.claude/plugins/
+  local PLUGINS_DIR="${user_home}/.claude/plugins"
+  if [[ -d "${PLUGINS_DIR}" ]]; then
+    # Remove cached plugin and marketplace files
+    rm -rf "${PLUGINS_DIR}/cache/symphony-skills"
+    rm -rf "${PLUGINS_DIR}/marketplaces/symphony-skills"
+
+    # Remove from installed_plugins.json
+    if [[ -f "${PLUGINS_DIR}/installed_plugins.json" ]]; then
+      local tmp
+      tmp=$(mktemp)
+      python3 -c "
+import json, sys
+with open('${PLUGINS_DIR}/installed_plugins.json') as f:
+    data = json.load(f)
+data.get('plugins', {}).pop('symphony-agent-skills@symphony-skills', None)
+json.dump(data, sys.stdout, indent=2)
+" > "${tmp}" && mv "${tmp}" "${PLUGINS_DIR}/installed_plugins.json" || true
+    fi
+
+    # Remove from known_marketplaces.json
+    if [[ -f "${PLUGINS_DIR}/known_marketplaces.json" ]]; then
+      local tmp
+      tmp=$(mktemp)
+      python3 -c "
+import json, sys
+with open('${PLUGINS_DIR}/known_marketplaces.json') as f:
+    data = json.load(f)
+data.pop('symphony-skills', None)
+json.dump(data, sys.stdout, indent=2)
+" > "${tmp}" && mv "${tmp}" "${PLUGINS_DIR}/known_marketplaces.json" || true
+    fi
+
+    # Fix ownership after modifications
+    if [[ -n "${SUDO_USER:-}" ]]; then
+      chown -R "${SUDO_USER}:${SUDO_USER}" "${PLUGINS_DIR}"
+    fi
+
+    info "Removed Symphony plugins from ${PLUGINS_DIR}"
+  fi
+
   info "Symphony has been uninstalled."
   exit 0
 }
@@ -363,9 +435,7 @@ generate_env() {
 
   if [[ -f "${INSTALL_DIR}/.env" ]]; then
     info ".env already exists — skipping generation (won't overwrite)."
-    set -a
-    source "${INSTALL_DIR}/.env"
-    set +a
+    load_env
     return
   fi
 
@@ -393,9 +463,7 @@ EOF
   info "Generated .env at ${INSTALL_DIR}/.env"
 
   # Export so install_workflows and other steps can use HOST_HOME/WORKFLOWS_DIR
-  set -a
-  source "${INSTALL_DIR}/.env"
-  set +a
+  load_env
 }
 
 # ── Start services ──────────────────────────────────────────────────────────────
