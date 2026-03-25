@@ -25,7 +25,6 @@ defmodule SymphonyElixir.OrchestratorStarter do
     Process.monitor(SymphonyElixir.OrchestratorSupervisor)
     ObservabilityPubSub.subscribe_projects()
     ObservabilityPubSub.subscribe_agents()
-    SymphonyElixir.Store.clear_all_issue_claims()
     ensure_orchestrators()
     schedule_reconcile()
     {:ok, %{}}

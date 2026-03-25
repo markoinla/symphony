@@ -266,7 +266,6 @@ defmodule SymphonyElixir.CoreTest do
             started_at: DateTime.utc_now()
           }
         },
-        claimed: MapSet.new([issue_id]),
         engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
         retry_attempts: %{}
       }
@@ -283,7 +282,6 @@ defmodule SymphonyElixir.CoreTest do
       updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
 
       refute Map.has_key?(updated_state.running, issue_id)
-      refute MapSet.member?(updated_state.claimed, issue_id)
       refute Process.alive?(agent_pid)
       assert File.exists?(workspace)
     after
@@ -329,7 +327,6 @@ defmodule SymphonyElixir.CoreTest do
             started_at: DateTime.utc_now()
           }
         },
-        claimed: MapSet.new([issue_id]),
         engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
         retry_attempts: %{}
       }
@@ -346,7 +343,6 @@ defmodule SymphonyElixir.CoreTest do
       updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
 
       refute Map.has_key?(updated_state.running, issue_id)
-      refute MapSet.member?(updated_state.claimed, issue_id)
       refute Process.alive?(agent_pid)
       refute File.exists?(workspace)
     after
@@ -414,7 +410,6 @@ defmodule SymphonyElixir.CoreTest do
       :sys.replace_state(pid, fn _ ->
         initial_state
         |> Map.put(:running, %{issue_id => running_entry})
-        |> Map.put(:claimed, MapSet.new([issue_id]))
         |> Map.put(:retry_attempts, %{})
       end)
 
@@ -423,7 +418,6 @@ defmodule SymphonyElixir.CoreTest do
       state = :sys.get_state(pid)
 
       refute Map.has_key?(state.running, issue_id)
-      refute MapSet.member?(state.claimed, issue_id)
       refute Process.alive?(agent_pid)
       assert File.exists?(workspace)
     after
@@ -449,7 +443,6 @@ defmodule SymphonyElixir.CoreTest do
           started_at: DateTime.utc_now()
         }
       },
-      claimed: MapSet.new([issue_id]),
       engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }
@@ -467,7 +460,6 @@ defmodule SymphonyElixir.CoreTest do
     updated_entry = updated_state.running[issue_id]
 
     assert Map.has_key?(updated_state.running, issue_id)
-    assert MapSet.member?(updated_state.claimed, issue_id)
     assert updated_entry.issue.state == "In Progress"
   end
 
@@ -496,7 +488,6 @@ defmodule SymphonyElixir.CoreTest do
           started_at: DateTime.utc_now()
         }
       },
-      claimed: MapSet.new([issue_id]),
       engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }
@@ -514,7 +505,6 @@ defmodule SymphonyElixir.CoreTest do
     updated_state = Orchestrator.reconcile_issue_states_for_test([issue], state)
 
     refute Map.has_key?(updated_state.running, issue_id)
-    refute MapSet.member?(updated_state.claimed, issue_id)
     refute Process.alive?(agent_pid)
   end
 
@@ -543,7 +533,6 @@ defmodule SymphonyElixir.CoreTest do
     :sys.replace_state(pid, fn _ ->
       initial_state
       |> Map.put(:running, %{issue_id => running_entry})
-      |> Map.put(:claimed, MapSet.new([issue_id]))
       |> Map.put(:retry_attempts, %{})
     end)
 
@@ -552,7 +541,7 @@ defmodule SymphonyElixir.CoreTest do
     state = :sys.get_state(pid)
 
     refute Map.has_key?(state.running, issue_id)
-    assert %{state: "In Progress", count: 1} = state.completed[issue_id]
+    assert %{state: "In Progress", count: 1} = state.completion_counts[issue_id]
     assert %{attempt: 1, due_at_ms: due_at_ms} = state.retry_attempts[issue_id]
     assert is_integer(due_at_ms)
     assert_due_in_range(due_at_ms, 500, 1_100)
@@ -563,7 +552,7 @@ defmodule SymphonyElixir.CoreTest do
 
     state = %Orchestrator.State{
       max_concurrent_agents: 2,
-      completed: %{issue_id => %{state: "In Progress", count: 1}},
+      cooldowns: %{issue_id => %{expires_at: DateTime.add(DateTime.utc_now(), 300, :second), state: "In Progress"}},
       engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }
@@ -591,12 +580,12 @@ defmodule SymphonyElixir.CoreTest do
     assert Orchestrator.should_dispatch_issue_for_test(changed_state_issue, state)
   end
 
-  test "issue is re-dispatchable after completed entry is cleared" do
+  test "issue is re-dispatchable after cooldown entry is cleared" do
     issue_id = "issue-completed-cleared"
 
-    state_with_completed = %Orchestrator.State{
+    state_with_cooldown = %Orchestrator.State{
       max_concurrent_agents: 2,
-      completed: %{issue_id => %{state: "In Progress", count: 11}},
+      cooldowns: %{issue_id => %{expires_at: DateTime.add(DateTime.utc_now(), 300, :second), state: "In Progress"}},
       engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }
@@ -606,15 +595,15 @@ defmodule SymphonyElixir.CoreTest do
       identifier: "MT-601",
       state: "In Progress",
       title: "Stuck issue",
-      description: "Should be re-dispatchable after completed entry cleared",
+      description: "Should be re-dispatchable after cooldown entry cleared",
       labels: []
     }
 
-    # Blocked while completed entry exists for same state
-    refute Orchestrator.should_dispatch_issue_for_test(issue, state_with_completed)
+    # Blocked while cooldown entry exists for same state
+    refute Orchestrator.should_dispatch_issue_for_test(issue, state_with_cooldown)
 
-    # After clearing the completed entry (as release_issue_claim now does), dispatch is allowed
-    state_cleared = %{state_with_completed | completed: Map.delete(state_with_completed.completed, issue_id)}
+    # After clearing the cooldown entry (as release_issue_claim now does), dispatch is allowed
+    state_cleared = %{state_with_cooldown | cooldowns: Map.delete(state_with_cooldown.cooldowns, issue_id)}
     assert Orchestrator.should_dispatch_issue_for_test(issue, state_cleared)
   end
 
@@ -713,7 +702,6 @@ defmodule SymphonyElixir.CoreTest do
     :sys.replace_state(pid, fn _ ->
       initial_state
       |> Map.put(:running, %{issue_id => running_entry})
-      |> Map.put(:claimed, MapSet.new([issue_id]))
       |> Map.put(:retry_attempts, %{})
     end)
 
@@ -752,7 +740,6 @@ defmodule SymphonyElixir.CoreTest do
     :sys.replace_state(pid, fn _ ->
       initial_state
       |> Map.put(:running, %{issue_id => running_entry})
-      |> Map.put(:claimed, MapSet.new([issue_id]))
       |> Map.put(:retry_attempts, %{})
     end)
 
