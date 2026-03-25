@@ -271,11 +271,12 @@ defmodule SymphonyElixir.AgentRunner do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
     project_id = Keyword.get(opts, :project_id)
+    organization_id = Keyword.get(opts, :organization_id)
     comment_watch_state = opts |> Keyword.get(:comment_watch_state) |> CommentWatch.seed(issue.comments)
 
     with {:ok, session} <- Engine.engine_module().start_session(workspace, worker_host: worker_host) do
       session_id = session[:session_id] || "session_#{System.unique_integer([:positive])}"
-      start_session_log(issue, session_id, project_id, engine_update_recipient)
+      start_session_log(issue, session_id, project_id, organization_id, engine_update_recipient)
       send_comment_watch_update(engine_update_recipient, issue, comment_watch_state)
       send_session_stderr_info(engine_update_recipient, issue, session[:stderr_file])
 
@@ -301,7 +302,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp start_session_log(%Issue{id: issue_id} = issue, session_id, project_id, engine_update_recipient) when is_binary(issue_id) and is_binary(session_id) do
+  defp start_session_log(%Issue{id: issue_id} = issue, session_id, project_id, organization_id, engine_update_recipient) when is_binary(issue_id) and is_binary(session_id) do
     config_snapshot = build_config_snapshot()
     workflow_name = SymphonyElixir.Workflow.current_workflow_name()
 
@@ -317,6 +318,7 @@ defmodule SymphonyElixir.AgentRunner do
            issue_identifier: issue.identifier,
            issue_title: issue.title,
            project_id: project_id,
+           organization_id: organization_id,
            config_snapshot: config_snapshot,
            workflow_name: workflow_name,
            github_branch: github_branch
@@ -333,7 +335,7 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp start_session_log(_issue, _session_id, _project_id, _engine_update_recipient), do: :ok
+  defp start_session_log(_issue, _session_id, _project_id, _organization_id, _engine_update_recipient), do: :ok
 
   defp send_session_db_id(recipient, %Issue{id: issue_id}, issue_id, session_id)
        when is_binary(issue_id) and is_pid(recipient) do

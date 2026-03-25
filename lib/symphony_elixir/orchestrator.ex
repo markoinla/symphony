@@ -494,7 +494,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp maybe_dispatch(%State{} = state) do
     state = reconcile_running_issues(state)
 
-    db_claims = Store.list_claimed_issue_ids()
+    db_claims = Store.list_claimed_issue_ids(org_id: org_id(state))
 
     with :ok <- Config.validate!(state.workflow_name),
          {:ok, issues} <- Tracker.fetch_candidate_issues(state.workflow_name),
@@ -1028,7 +1028,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil, comment_watch_state \\ nil) do
-    case Store.claim_issue(issue.id, orchestrator_key(state)) do
+    case Store.claim_issue(issue.id, orchestrator_key(state), org_id: org_id(state)) do
       {:ok, status} when status in [:claimed, :already_owned] ->
         dispatch_claimed_issue(state, issue, attempt, preferred_worker_host, comment_watch_state)
 
@@ -1155,6 +1155,7 @@ defmodule SymphonyElixir.Orchestrator do
         attempt: attempt,
         worker_host: worker_host,
         project_id: project_id,
+        organization_id: if(project, do: project.organization_id),
         comment_watch_state: comment_watch_state
       )
     end)
@@ -1401,13 +1402,14 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp finalize_stale_db_sessions(%State{project_id: project_id, workflow_name: workflow_name}) do
+  defp finalize_stale_db_sessions(%State{project_id: project_id, workflow_name: workflow_name} = state) do
     live_issue_ids = live_session_issue_ids()
 
     {count, _} =
       Store.finalize_stale_sessions(
         project_id: project_id,
         workflow_name: workflow_name,
+        org_id: org_id(state),
         exclude_issue_ids: live_issue_ids
       )
 
@@ -1429,6 +1431,7 @@ defmodule SymphonyElixir.Orchestrator do
       Store.finalize_stale_sessions(
         project_id: project_id,
         workflow_name: workflow_name,
+        org_id: org_id(state),
         exclude_issue_ids: active_issue_ids
       )
 
@@ -1656,6 +1659,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp orchestrator_key(%State{workflow_name: workflow_name, project_id: project_id}) do
     if project_id, do: "#{workflow_name}:#{project_id}", else: workflow_name
   end
+
+  defp org_id(%State{project: %{organization_id: org_id}}), do: org_id
+  defp org_id(_state), do: nil
 
   defp snapshot_project_context(%State{configured_project_id: nil}), do: {nil, nil}
 

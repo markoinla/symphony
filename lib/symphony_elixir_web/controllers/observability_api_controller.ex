@@ -36,7 +36,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   @spec sessions(Conn.t(), map()) :: Conn.t()
   def sessions(conn, params) do
     opts =
-      []
+      [org_id: org_id(conn)]
       |> maybe_put_issue_identifier(params["issue_identifier"])
       |> maybe_put_limit(params["limit"])
       |> maybe_put_project_id(params["project_id"])
@@ -50,7 +50,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   @spec stats(Conn.t(), map()) :: Conn.t()
   def stats(conn, %{"range" => range} = params) when range in @valid_stats_ranges do
     opts =
-      []
+      [org_id: org_id(conn)]
       |> maybe_put_project_id(params["project_id"])
       |> maybe_put_workflow_name(params["workflow_name"])
 
@@ -157,4 +157,11 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   defp format_datetime(%DateTime{} = dt), do: dt |> DateTime.truncate(:second) |> DateTime.to_iso8601()
   defp format_datetime(_), do: nil
+
+  defp org_id(conn) do
+    case conn.assigns[:current_org] do
+      %{id: id} -> id
+      _ -> nil
+    end
+  end
 end

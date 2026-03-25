@@ -489,16 +489,16 @@ defmodule SymphonyElixirWeb.Presenter do
 
   @spec history_payload(keyword()) :: map()
   def history_payload(opts \\ []) do
-    sessions = Store.list_sessions(Keyword.take(opts, [:limit, :offset, :issue_identifier, :status, :project_id, :workflow_name]))
+    sessions = Store.list_sessions(Keyword.take(opts, [:limit, :offset, :issue_identifier, :status, :project_id, :workflow_name, :org_id]))
 
     %{
       sessions: Enum.map(sessions, &session_summary_payload/1)
     }
   end
 
-  @spec projects_payload() :: map()
-  def projects_payload do
-    %{projects: Enum.map(Store.list_projects(), &project_payload/1)}
+  @spec projects_payload(keyword()) :: map()
+  def projects_payload(opts \\ []) do
+    %{projects: Enum.map(Store.list_projects(opts), &project_payload/1)}
   end
 
   @spec project_lookup_payload(integer()) :: {:ok, map()} | {:error, :not_found}
