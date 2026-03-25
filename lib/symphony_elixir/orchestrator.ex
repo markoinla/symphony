@@ -2066,20 +2066,10 @@ defmodule SymphonyElixir.Orchestrator do
       issue_still_matches_label_filter?(issue)
   end
 
-  defp issue_has_skip_label?(%Issue{labels: labels}) when is_list(labels) do
+  defp issue_has_skip_label?(%Issue{} = issue) do
     skip_labels = Config.settings!().tracker.skip_labels
-
-    case skip_labels do
-      list when is_list(list) and list != [] ->
-        normalized_skip = MapSet.new(list, &normalize_issue_state/1)
-        Enum.any?(labels, &(normalize_issue_state(&1) in normalized_skip))
-
-      _ ->
-        false
-    end
+    Issue.has_any_label?(issue, skip_labels)
   end
-
-  defp issue_has_skip_label?(_issue), do: false
 
   defp issue_still_matches_label_filter?(%Issue{labels: labels}) do
     tracker = Config.settings!().tracker

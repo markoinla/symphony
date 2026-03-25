@@ -28,18 +28,18 @@ defmodule SymphonyElixirWeb.ProxyApiController do
 
   @spec register(Conn.t(), map()) :: Conn.t()
   def register(conn, _params) do
-    instance_url = Store.get_setting("proxy.instance_url")
+    base_url = SymphonyElixir.resolve_public_base_url()
     org_id = Store.get_setting("proxy.linear_org_id")
 
     cond do
-      is_nil(instance_url) or instance_url == "" ->
-        error_response(conn, 422, "missing_instance_url", "Set proxy.instance_url before registering.")
+      is_nil(base_url) ->
+        error_response(conn, 422, "missing_base_url", "Set SYMPHONY_PUBLIC_BASE_URL or symphony_public_base_url before registering.")
 
       is_nil(org_id) or org_id == "" ->
         error_response(conn, 422, "missing_org_id", "Set proxy.linear_org_id before registering.")
 
       true ->
-        case ProxyClient.register_instance(instance_url, org_id) do
+        case ProxyClient.register_instance(base_url, org_id) do
           :ok ->
             json(conn, %{ok: true})
 
@@ -57,8 +57,7 @@ defmodule SymphonyElixirWeb.ProxyApiController do
   def status(conn, _params) do
     json(conn, %{
       enabled: ProxyClient.proxy_enabled?(),
-      url: Store.get_setting("proxy.url") || "https://oauth-proxy.m-6bb.workers.dev",
-      instance_url: Store.get_setting("proxy.instance_url"),
+      instance_url: SymphonyElixir.resolve_public_base_url() || "",
       linear_org_id: Store.get_setting("proxy.linear_org_id")
     })
   end

@@ -599,7 +599,6 @@ export function changePassword(currentPassword: string, newPassword: string) {
 
 export type ProxyStatus = {
   enabled: boolean
-  url: string
   instance_url: string | null
   linear_org_id: string | null
 }

@@ -8,9 +8,11 @@ defmodule SymphonyElixirWeb.OAuthController do
 
   use Phoenix.Controller, formats: [:json]
 
+  require Logger
+
   alias Plug.Conn
-  alias SymphonyElixir.Linear.OAuth
-  alias SymphonyElixir.ProxyClient
+  alias SymphonyElixir.Linear.{Client, OAuth}
+  alias SymphonyElixir.{ProxyClient, Store}
 
   @spec authorize(Conn.t(), map()) :: Conn.t()
   def authorize(conn, _params) do
@@ -52,6 +54,8 @@ defmodule SymphonyElixirWeb.OAuthController do
          {:ok, state} <- fetch_param(params, "state"),
          :ok <- OAuth.validate_state(state),
          {:ok, _token_data} <- OAuth.exchange_code(code, redirect_uri) do
+      sync_linear_org_id()
+      maybe_register_instance()
       do_redirect(conn, "/settings?oauth=success")
     else
       {:error, :missing_param} ->
@@ -86,6 +90,7 @@ defmodule SymphonyElixirWeb.OAuthController do
           {:ok, tokens} ->
             ProxyClient.clear_pending_flow(:linear)
             store_proxy_tokens(tokens)
+            sync_linear_org_id()
             maybe_register_instance()
             json(conn, %{status: "complete"})
 
@@ -121,13 +126,24 @@ defmodule SymphonyElixirWeb.OAuthController do
     OAuth.store_tokens(token_data)
   end
 
-  defp maybe_register_instance do
-    instance_url = SymphonyElixir.Store.get_setting("proxy.instance_url")
-    org_id = SymphonyElixir.Store.get_setting("proxy.linear_org_id")
+  defp sync_linear_org_id do
+    case Client.fetch_organization_id() do
+      {:ok, org_id} ->
+        Store.put_setting("proxy.linear_org_id", org_id)
+        Logger.info("Synced Linear organization ID: #{org_id}")
 
-    if is_binary(instance_url) and instance_url != "" and is_binary(org_id) and org_id != "" do
+      {:error, reason} ->
+        Logger.warning("Failed to fetch Linear organization ID: #{inspect(reason)}")
+    end
+  end
+
+  defp maybe_register_instance do
+    base_url = SymphonyElixir.resolve_public_base_url()
+    org_id = Store.get_setting("proxy.linear_org_id")
+
+    if is_binary(base_url) and is_binary(org_id) and org_id != "" do
       Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-        ProxyClient.register_instance(instance_url, org_id)
+        ProxyClient.register_instance(base_url, org_id)
       end)
     end
 

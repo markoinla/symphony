@@ -30,7 +30,6 @@ import {
   pollGitHubProxyOAuth,
   pollLinearProxyOAuth,
   proxyHealthCheck,
-  proxyRegister,
   revokeGitHubOAuth,
   revokeOAuth,
   upsertSetting,
@@ -1122,24 +1121,11 @@ function ChangePasswordSection() {
 
 function ProxySection() {
   const queryClient = useQueryClient()
-  const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
   const proxyQuery = useQuery({ queryKey: ['proxy-status'], queryFn: getProxyStatus })
 
-  const settings = settingsQuery.data?.settings
-  const proxyEnabled = proxyQuery.data?.enabled ?? false
+  const proxyEnabled = proxyQuery.data?.enabled ?? true
 
-  const [proxyUrl, setProxyUrl] = useState('')
-  const [instanceUrl, setInstanceUrl] = useState('')
-  const [orgId, setOrgId] = useState('')
   const [feedback, setFeedback] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (proxyQuery.data) {
-      setProxyUrl(proxyQuery.data.url || '')
-      setInstanceUrl(proxyQuery.data.instance_url || '')
-      setOrgId(proxyQuery.data.linear_org_id || '')
-    }
-  }, [proxyQuery.data])
 
   const toggleMutation = useMutation({
     mutationFn: async (enabled: boolean) => {
@@ -1153,23 +1139,6 @@ function ProxySection() {
     onError: (error: unknown) => setFeedback(formatQueryError(error)),
   })
 
-  const saveMutation = useMutation({
-    mutationFn: async () => {
-      const trimmedUrl = proxyUrl.trim()
-      const trimmedInstance = instanceUrl.trim()
-      const trimmedOrg = orgId.trim()
-      if (trimmedUrl) await upsertSetting('proxy.url', trimmedUrl)
-      if (trimmedInstance) await upsertSetting('proxy.instance_url', trimmedInstance)
-      if (trimmedOrg) await upsertSetting('proxy.linear_org_id', trimmedOrg)
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      await queryClient.invalidateQueries({ queryKey: ['proxy-status'] })
-      setFeedback('Proxy settings saved.')
-    },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
-  })
-
   const healthMutation = useMutation({
     mutationFn: proxyHealthCheck,
     onSuccess: (data) => {
@@ -1178,14 +1147,6 @@ function ProxySection() {
     onError: (error: unknown) => setFeedback(formatQueryError(error)),
   })
 
-  const registerMutation = useMutation({
-    mutationFn: proxyRegister,
-    onSuccess: () => setFeedback('Instance registered with proxy.'),
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
-  })
-
-  const existingProxyUrl = settingValue(settings, 'proxy.url')
-  const existingInstanceUrl = settingValue(settings, 'proxy.instance_url')
 
   return (
     <Card className="space-y-4">
@@ -1229,71 +1190,26 @@ function ProxySection() {
         </Button>
       </div>
 
-      <form
-        className="space-y-4"
-        onSubmit={(e) => {
-          e.preventDefault()
-          setFeedback(null)
-          void saveMutation.mutateAsync()
-        }}
-      >
+      <div className="space-y-3">
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Proxy URL">
-            <Input
-              onChange={(e) => setProxyUrl(e.target.value)}
-              placeholder="https://oauth-proxy.m-6bb.workers.dev"
-              value={proxyUrl}
-            />
-            <p className="mt-1 text-xs text-th-text-4">
-              {existingProxyUrl ? `Current: ${existingProxyUrl}` : 'Default: https://oauth-proxy.m-6bb.workers.dev'}
-            </p>
-          </Field>
           <Field label="Instance URL">
-            <Input
-              onChange={(e) => setInstanceUrl(e.target.value)}
-              placeholder="http://100.64.x.x:4000"
-              value={instanceUrl}
-            />
+            <p className="text-sm text-th-text-2">
+              {proxyQuery.data?.instance_url || <span className="text-th-text-4">Not resolved yet</span>}
+            </p>
             <p className="mt-1 text-xs text-th-text-4">
-              {existingInstanceUrl ? `Current: ${existingInstanceUrl}` : 'Your Symphony instance\u2019s reachable address for webhook forwarding.'}
+              Resolved from public base URL or server IP. Set in the Domain section above.
+            </p>
+          </Field>
+          <Field label="Linear Organization ID">
+            <p className="text-sm text-th-text-2">
+              {proxyQuery.data?.linear_org_id || <span className="text-th-text-4">Automatically set after Linear OAuth</span>}
+            </p>
+            <p className="mt-1 text-xs text-th-text-4">
+              Synced automatically when you connect Linear.
             </p>
           </Field>
         </div>
-        <Field label="Linear Organization ID">
-          <Input
-            className="max-w-md"
-            onChange={(e) => setOrgId(e.target.value)}
-            placeholder="your-linear-org-id"
-            value={orgId}
-          />
-          <p className="mt-1 text-xs text-th-text-4">
-            Used to route webhooks. Find this in Linear Settings &rarr; API.
-          </p>
-        </Field>
-        <div className="flex items-center gap-3">
-          <Button
-            disabled={saveMutation.isPending}
-            type="submit"
-            variant="secondary"
-          >
-            Save
-          </Button>
-          {proxyEnabled && existingInstanceUrl ? (
-            <Button
-              disabled={registerMutation.isPending}
-              onClick={() => {
-                setFeedback(null)
-                void registerMutation.mutateAsync()
-              }}
-              size="sm"
-              type="button"
-              variant="ghost"
-            >
-              Register instance
-            </Button>
-          ) : null}
-        </div>
-      </form>
+      </div>
     </Card>
   )
 }

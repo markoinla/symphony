@@ -74,7 +74,7 @@ defmodule SymphonyElixir.Linear.ActivityMapperTest do
   end
 
   describe "map_event/1 - assistant message" do
-    test "maps claude/assistant_message to response" do
+    test "maps claude/assistant_message to thought" do
       event = %{
         event: :notification,
         timestamp: DateTime.utc_now(),
@@ -90,7 +90,7 @@ defmodule SymphonyElixir.Linear.ActivityMapperTest do
 
       result = ActivityMapper.map_event(event)
 
-      assert result.type == "response"
+      assert result.type == "thought"
       assert result.body == "Here is the fix..."
     end
   end
@@ -130,7 +130,7 @@ defmodule SymphonyElixir.Linear.ActivityMapperTest do
   end
 
   describe "map_event/1 - turn completion" do
-    test "maps turn_completed to response" do
+    test "maps turn_completed to thought" do
       event = %{
         event: :turn_completed,
         timestamp: DateTime.utc_now(),
@@ -141,7 +141,7 @@ defmodule SymphonyElixir.Linear.ActivityMapperTest do
 
       result = ActivityMapper.map_event(event)
 
-      assert result.type == "response"
+      assert result.type == "thought"
       assert result.body =~ "Turn completed"
       assert result.body =~ "0.0512"
       assert result.body =~ "3"

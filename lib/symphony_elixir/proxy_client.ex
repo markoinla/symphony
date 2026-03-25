@@ -26,7 +26,7 @@ defmodule SymphonyElixir.ProxyClient do
 
   @spec proxy_enabled?() :: boolean()
   def proxy_enabled? do
-    Store.get_setting("proxy.enabled") == "true"
+    Store.get_setting("proxy.enabled") != "false"
   end
 
   @spec health_check() :: :ok | {:error, term()}
@@ -165,12 +165,7 @@ defmodule SymphonyElixir.ProxyClient do
   end
 
   @spec proxy_base_url() :: String.t()
-  defp proxy_base_url do
-    (Store.get_setting("proxy.url") ||
-       System.get_env("SYMPHONY_PROXY_URL") ||
-       @default_proxy_url)
-    |> String.trim_trailing("/")
-  end
+  defp proxy_base_url, do: @default_proxy_url
 
   @spec store_pending_flow(provider(), String.t(), String.t()) :: :ok
   def store_pending_flow(provider, state, code_verifier) do

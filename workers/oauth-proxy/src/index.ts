@@ -14,6 +14,7 @@ interface ProviderConfig {
   authorizeUrl: string;
   tokenUrl: string;
   scopes: string;
+  actor?: string;
   clientId: string;
   clientSecret: string;
 }
@@ -43,7 +44,8 @@ const PROVIDERS: Record<Provider, (env: Env) => ProviderConfig> = {
   linear: (env) => ({
     authorizeUrl: "https://linear.app/oauth/authorize",
     tokenUrl: "https://api.linear.app/oauth/token",
-    scopes: "read,write",
+    scopes: "write,read,app:assignable,app:mentionable",
+    actor: "app",
     clientId: env.LINEAR_CLIENT_ID,
     clientSecret: env.LINEAR_CLIENT_SECRET,
   }),
@@ -153,6 +155,9 @@ async function handleAuthorize(url: URL, env: Env): Promise<Response> {
   authUrl.searchParams.set("response_type", "code");
   authUrl.searchParams.set("scope", config.scopes);
   authUrl.searchParams.set("state", state);
+  if (config.actor) {
+    authUrl.searchParams.set("actor", config.actor);
+  }
 
   return new Response(null, {
     status: 302,

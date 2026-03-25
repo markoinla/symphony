@@ -40,7 +40,7 @@ defmodule SymphonyElixir.Linear.ActivityMapper do
       |> maybe_append(turns, &"Turns: #{&1}")
       |> Enum.join(" | ")
 
-    %{type: "response", body: body}
+    %{type: "thought", body: body}
   end
 
   def map_event(%{event: :turn_failed} = msg) do
@@ -81,7 +81,7 @@ defmodule SymphonyElixir.Linear.ActivityMapper do
     content = get_in(msg, [:message, "params", "content"]) || ""
 
     if content != "" do
-      %{type: "response", body: truncate(content, 2000)}
+      %{type: "thought", body: truncate(content, 2000)}
     end
   end
 
