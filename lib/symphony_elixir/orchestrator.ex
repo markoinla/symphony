@@ -236,7 +236,7 @@ defmodule SymphonyElixir.Orchestrator do
     if already_finalized do
       Logger.info(
         "Orchestrator shutdown skipping already-finalized session " <>
-          "issue_id=#{running_entry.issue_id} issue_identifier=#{running_entry.identifier} " <>
+          "issue_id=#{running_entry.issue.id} issue_identifier=#{running_entry.identifier} " <>
           "session_id=#{session_id}"
       )
     else
@@ -245,7 +245,7 @@ defmodule SymphonyElixir.Orchestrator do
       estimated_cost_cents = compute_estimated_cost(input_tokens, output_tokens)
 
       Logger.warning(
-        "Orchestrator shutdown cancelling session issue_id=#{running_entry.issue_id} " <>
+        "Orchestrator shutdown cancelling session issue_id=#{running_entry.issue.id} " <>
           "issue_identifier=#{running_entry.identifier} session_id=#{session_id} " <>
           "terminate_reason=#{inspect(terminate_reason)}"
       )
@@ -1894,7 +1894,7 @@ defmodule SymphonyElixir.Orchestrator do
 
       if error_category == "infra" do
         Logger.warning(
-          "Session finalized with error_category=infra issue_id=#{running_entry.issue_id} " <>
+          "Session finalized with error_category=infra issue_id=#{running_entry.issue.id} " <>
             "issue_identifier=#{running_entry.identifier} session_id=#{session_id} " <>
             "reason=#{inspect(reason)} has_stderr=#{stderr != nil}"
         )
