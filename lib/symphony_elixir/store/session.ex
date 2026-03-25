@@ -32,13 +32,15 @@ defmodule SymphonyElixir.Store.Session do
     field(:estimated_cost_cents, :integer)
     field(:error_category, :string)
     field(:github_branch, :string)
+    field(:organization_id, :binary_id)
 
     belongs_to(:project, SymphonyElixir.Store.Project, define_field: false)
+    belongs_to(:organization, SymphonyElixir.Store.Organization, type: :binary_id, define_field: false)
     has_many(:messages, SymphonyElixir.Store.Message)
   end
 
   @required_fields ~w(issue_id session_id status started_at)a
-  @optional_fields ~w(issue_identifier issue_title ended_at turn_count input_tokens output_tokens total_tokens worker_host workspace_path error project_id agent_session_id dispatch_source hook_results config_snapshot workflow_name stderr workflow estimated_cost_cents error_category github_branch)a
+  @optional_fields ~w(issue_identifier issue_title ended_at turn_count input_tokens output_tokens total_tokens worker_host workspace_path error project_id organization_id agent_session_id dispatch_source hook_results config_snapshot workflow_name stderr workflow estimated_cost_cents error_category github_branch)a
 
   @spec changeset(%__MODULE__{} | Ecto.Changeset.t(), map()) :: Ecto.Changeset.t()
   def changeset(session, attrs) do

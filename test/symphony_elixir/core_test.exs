@@ -629,7 +629,7 @@ defmodule SymphonyElixir.CoreTest do
     assert Orchestrator.should_dispatch_issue_for_test(issue, state)
 
     # Simulate another orchestrator claiming the issue
-    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue(issue_id, "OTHER_WORKFLOW:1")
+    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue(issue_id, "OTHER_WORKFLOW:1", org_id: test_org_id())
 
     # With a DB claim present, the batch check blocks dispatch
     db_claims = SymphonyElixir.Store.list_claimed_issue_ids()
@@ -645,8 +645,8 @@ defmodule SymphonyElixir.CoreTest do
   test "claim_issue returns error when issue is already claimed" do
     issue_id = "issue-double-claim"
 
-    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue(issue_id, "WORKFLOW:1")
-    assert {:error, :already_claimed} = SymphonyElixir.Store.claim_issue(issue_id, "TRIAGE:1")
+    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue(issue_id, "WORKFLOW:1", org_id: test_org_id())
+    assert {:error, :already_claimed} = SymphonyElixir.Store.claim_issue(issue_id, "TRIAGE:1", org_id: test_org_id())
 
     # Cleanup
     :ok = SymphonyElixir.Store.release_issue_claim(issue_id)
@@ -655,17 +655,17 @@ defmodule SymphonyElixir.CoreTest do
   test "claim_issue returns already_owned when same orchestrator re-claims" do
     issue_id = "issue-self-reclaim"
 
-    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue(issue_id, "WORKFLOW:1")
-    assert {:ok, :already_owned} = SymphonyElixir.Store.claim_issue(issue_id, "WORKFLOW:1")
-    assert {:error, :already_claimed} = SymphonyElixir.Store.claim_issue(issue_id, "TRIAGE:1")
+    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue(issue_id, "WORKFLOW:1", org_id: test_org_id())
+    assert {:ok, :already_owned} = SymphonyElixir.Store.claim_issue(issue_id, "WORKFLOW:1", org_id: test_org_id())
+    assert {:error, :already_claimed} = SymphonyElixir.Store.claim_issue(issue_id, "TRIAGE:1", org_id: test_org_id())
 
     # Cleanup
     :ok = SymphonyElixir.Store.release_issue_claim(issue_id)
   end
 
   test "clear_all_issue_claims removes all claims" do
-    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue("issue-clear-1", "WORKFLOW:1")
-    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue("issue-clear-2", "TRIAGE:1")
+    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue("issue-clear-1", "WORKFLOW:1", org_id: test_org_id())
+    assert {:ok, :claimed} = SymphonyElixir.Store.claim_issue("issue-clear-2", "TRIAGE:1", org_id: test_org_id())
 
     claims = SymphonyElixir.Store.list_claimed_issue_ids()
     assert MapSet.member?(claims, "issue-clear-1")
@@ -2251,7 +2251,8 @@ defmodule SymphonyElixir.CoreTest do
         issue_identifier: "MT-900",
         session_id: "session-stale-1",
         status: "running",
-        started_at: started_at
+        started_at: started_at,
+        organization_id: test_org_id()
       })
 
     {:ok, completed_session} =
@@ -2261,7 +2262,8 @@ defmodule SymphonyElixir.CoreTest do
         session_id: "session-stale-2",
         status: "completed",
         started_at: started_at,
-        ended_at: started_at
+        ended_at: started_at,
+        organization_id: test_org_id()
       })
 
     {count, _} = SymphonyElixir.Store.finalize_stale_sessions()
@@ -2281,10 +2283,10 @@ defmodule SymphonyElixir.CoreTest do
     started_at = DateTime.utc_now() |> DateTime.truncate(:second)
 
     {:ok, project1} =
-      SymphonyElixir.Store.create_project(%{name: "proj-stale-1-#{System.unique_integer([:positive])}"})
+      SymphonyElixir.Store.create_project(%{name: "proj-stale-1-#{System.unique_integer([:positive])}", organization_id: test_org_id()})
 
     {:ok, project2} =
-      SymphonyElixir.Store.create_project(%{name: "proj-stale-2-#{System.unique_integer([:positive])}"})
+      SymphonyElixir.Store.create_project(%{name: "proj-stale-2-#{System.unique_integer([:positive])}", organization_id: test_org_id()})
 
     {:ok, session1} =
       SymphonyElixir.Store.create_session(%{
@@ -2293,7 +2295,8 @@ defmodule SymphonyElixir.CoreTest do
         session_id: "session-proj1",
         status: "running",
         started_at: started_at,
-        project_id: project1.id
+        project_id: project1.id,
+        organization_id: test_org_id()
       })
 
     {:ok, session2} =
@@ -2303,7 +2306,8 @@ defmodule SymphonyElixir.CoreTest do
         session_id: "session-proj2",
         status: "running",
         started_at: started_at,
-        project_id: project2.id
+        project_id: project2.id,
+        organization_id: test_org_id()
       })
 
     {count, _} = SymphonyElixir.Store.finalize_stale_sessions(project_id: project1.id)

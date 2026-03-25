@@ -62,7 +62,8 @@ defmodule SymphonyElixirWeb.ObservabilityApiControllerTest do
           config_snapshot: %{"model" => "claude-sonnet-4-20250514", "max_turns" => 20},
           stderr: "warning: unused variable x",
           hook_results: [%{"hook" => "before_run", "exit_code" => 0, "output" => "ok"}],
-          dispatch_source: "orchestrator"
+          dispatch_source: "orchestrator",
+          organization_id: test_org_id()
         },
         overrides
       )

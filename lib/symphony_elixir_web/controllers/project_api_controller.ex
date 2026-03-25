@@ -13,7 +13,7 @@ defmodule SymphonyElixirWeb.ProjectApiController do
 
   @spec index(Conn.t(), map()) :: Conn.t()
   def index(conn, _params) do
-    json(conn, Presenter.projects_payload())
+    json(conn, Presenter.projects_payload(org_id: org_id(conn)))
   end
 
   @spec show(Conn.t(), map()) :: Conn.t()
@@ -29,7 +29,9 @@ defmodule SymphonyElixirWeb.ProjectApiController do
 
   @spec create(Conn.t(), map()) :: Conn.t()
   def create(conn, params) do
-    case Store.create_project(project_attrs(params)) do
+    attrs = params |> project_attrs() |> Map.put(:organization_id, org_id(conn))
+
+    case Store.create_project(attrs) do
       {:ok, project} ->
         ObservabilityPubSub.broadcast_projects_changed()
 
@@ -126,4 +128,11 @@ defmodule SymphonyElixirWeb.ProjectApiController do
 
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
+
+  defp org_id(conn) do
+    case conn.assigns[:current_org] do
+      %{id: id} -> id
+      _ -> nil
+    end
+  end
 end

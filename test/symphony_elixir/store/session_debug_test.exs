@@ -15,7 +15,8 @@ defmodule SymphonyElixir.Store.SessionDebugTest do
           workflow_name: "default",
           config_snapshot: %{"model" => "claude-sonnet-4-20250514"},
           stderr: "some stderr output",
-          hook_results: [%{"hook" => "before_run", "exit_code" => 0}]
+          hook_results: [%{"hook" => "before_run", "exit_code" => 0}],
+          organization_id: SymphonyElixir.TestSupport.test_org_id()
         },
         overrides
       )

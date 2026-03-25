@@ -33,13 +33,23 @@ defmodule SymphonyElixir.SessionLog do
     issue_identifier = Keyword.get(opts, :issue_identifier)
     issue_title = Keyword.get(opts, :issue_title)
     project_id = Keyword.get(opts, :project_id)
+    organization_id = Keyword.get(opts, :organization_id)
     config_snapshot = Keyword.get(opts, :config_snapshot)
     workflow_name = Keyword.get(opts, :workflow_name)
     github_branch = Keyword.get(opts, :github_branch)
     name = via(issue_id, session_id)
 
-    init_arg =
-      {issue_id, session_id, issue_identifier, issue_title, project_id, config_snapshot, workflow_name, github_branch}
+    init_arg = %{
+      issue_id: issue_id,
+      session_id: session_id,
+      issue_identifier: issue_identifier,
+      issue_title: issue_title,
+      project_id: project_id,
+      organization_id: organization_id,
+      config_snapshot: config_snapshot,
+      workflow_name: workflow_name,
+      github_branch: github_branch
+    }
 
     GenServer.start_link(__MODULE__, init_arg, name: name)
   end
@@ -114,7 +124,19 @@ defmodule SymphonyElixir.SessionLog do
   # ── GenServer callbacks ─────────────────────────────────────────────
 
   @impl true
-  def init({issue_id, session_id, issue_identifier, issue_title, project_id, config_snapshot, workflow_name, github_branch}) do
+  def init(%{} = arg) do
+    %{
+      issue_id: issue_id,
+      session_id: session_id,
+      issue_identifier: issue_identifier,
+      issue_title: issue_title,
+      project_id: project_id,
+      organization_id: organization_id,
+      config_snapshot: config_snapshot,
+      workflow_name: workflow_name,
+      github_branch: github_branch
+    } = arg
+
     db_session_id =
       case Store.create_session(%{
              issue_id: issue_id,
@@ -124,6 +146,7 @@ defmodule SymphonyElixir.SessionLog do
              status: "running",
              started_at: DateTime.utc_now(),
              project_id: project_id,
+             organization_id: organization_id,
              config_snapshot: config_snapshot,
              workflow_name: workflow_name,
              workflow: workflow_name,

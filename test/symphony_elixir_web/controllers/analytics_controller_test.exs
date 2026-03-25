@@ -48,7 +48,8 @@ defmodule SymphonyElixirWeb.AnalyticsControllerTest do
           issue_id: "issue-#{System.unique_integer([:positive])}",
           session_id: "sess-#{System.unique_integer([:positive])}",
           status: "completed",
-          started_at: ~U[2026-03-20 10:00:00Z]
+          started_at: ~U[2026-03-20 10:00:00Z],
+          organization_id: test_org_id()
         },
         overrides
       )

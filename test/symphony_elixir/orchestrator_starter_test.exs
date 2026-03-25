@@ -92,8 +92,8 @@ defmodule SymphonyElixir.OrchestratorStarterTest do
       if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
 
       # Create two projects
-      {:ok, project1} = Store.create_project(%{name: "Project A", linear_project_slug: "proj-a"})
-      {:ok, project2} = Store.create_project(%{name: "Project B", linear_project_slug: "proj-b"})
+      {:ok, project1} = Store.create_project(%{name: "Project A", linear_project_slug: "proj-a", organization_id: test_org_id()})
+      {:ok, project2} = Store.create_project(%{name: "Project B", linear_project_slug: "proj-b", organization_id: test_org_id()})
 
       start_supervised!({SymphonyElixir.OrchestratorStarter, []})
 
@@ -141,7 +141,7 @@ defmodule SymphonyElixir.OrchestratorStarterTest do
       if Process.whereis(SymphonyElixir.WorkflowStore), do: SymphonyElixir.WorkflowStore.force_reload()
 
       # Ensure at least one project exists
-      {:ok, project} = Store.create_project(%{name: "Test Project", linear_project_slug: "test-proj"})
+      {:ok, project} = Store.create_project(%{name: "Test Project", linear_project_slug: "test-proj", organization_id: test_org_id()})
 
       start_supervised!({SymphonyElixir.OrchestratorStarter, []})
 

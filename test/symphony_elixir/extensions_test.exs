@@ -870,7 +870,8 @@ defmodule SymphonyElixir.ExtensionsTest do
         workspace_root: "/tmp/symphony",
         env_vars: "FOO=bar",
         created_at: now,
-        updated_at: now
+        updated_at: now,
+        organization_id: test_org_id()
       })
 
     {:ok, other_project} =
@@ -884,7 +885,8 @@ defmodule SymphonyElixir.ExtensionsTest do
         workspace_root: "/tmp/other",
         env_vars: nil,
         created_at: now,
-        updated_at: now
+        updated_at: now,
+        organization_id: test_org_id()
       })
 
     {:ok, _setting} = Store.put_setting("LINEAR_API_KEY", "secret")
@@ -905,7 +907,8 @@ defmodule SymphonyElixir.ExtensionsTest do
         worker_host: "worker-1",
         workspace_path: "/tmp/symphony/MT-HISTORY",
         error: nil,
-        project_id: project.id
+        project_id: project.id,
+        organization_id: test_org_id()
       })
 
     {:ok, legacy_session} =
@@ -924,7 +927,8 @@ defmodule SymphonyElixir.ExtensionsTest do
         worker_host: "worker-legacy",
         workspace_path: "/tmp/symphony/MT-LEGACY",
         error: nil,
-        project_id: nil
+        project_id: nil,
+        organization_id: test_org_id()
       })
 
     {:ok, _other_session} =
@@ -943,7 +947,8 @@ defmodule SymphonyElixir.ExtensionsTest do
         worker_host: "worker-2",
         workspace_path: "/tmp/other/MT-OTHER",
         error: nil,
-        project_id: other_project.id
+        project_id: other_project.id,
+        organization_id: test_org_id()
       })
 
     {:ok, _message} =

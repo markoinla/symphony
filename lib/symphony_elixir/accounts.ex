@@ -65,7 +65,10 @@ defmodule SymphonyElixir.Accounts do
 
   @spec create_default_organization() :: {:ok, Organization.t()} | {:error, Ecto.Changeset.t()}
   def create_default_organization do
-    Store.create_organization(%{name: "Default", slug: "default"})
+    case Store.get_organization_by_slug("default") do
+      nil -> Store.create_organization(%{name: "Default", slug: "default"})
+      org -> {:ok, org}
+    end
   end
 
   @spec get_default_organization() :: Organization.t() | nil
@@ -77,5 +80,14 @@ defmodule SymphonyElixir.Accounts do
           {:ok, UserOrganization.t()} | {:error, Ecto.Changeset.t()}
   def add_user_to_organization(user_id, organization_id, role \\ "member") do
     Store.add_user_to_organization(user_id, organization_id, role)
+  end
+
+  @spec get_user_organization(Ecto.UUID.t()) :: Organization.t() | nil
+  def get_user_organization(user_id) do
+    Organization
+    |> join(:inner, [o], uo in UserOrganization, on: uo.organization_id == o.id)
+    |> where([_o, uo], uo.user_id == ^user_id)
+    |> limit(1)
+    |> Repo.one()
   end
 end

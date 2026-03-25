@@ -19,7 +19,8 @@ defmodule SymphonyElixir.Store.SessionTest do
         session_id: "session-#{System.unique_integer([:positive])}",
         status: "running",
         started_at: DateTime.utc_now(),
-        config_snapshot: config_snapshot
+        config_snapshot: config_snapshot,
+        organization_id: SymphonyElixir.TestSupport.test_org_id()
       }
 
       assert {:ok, session} = Store.create_session(attrs)
@@ -31,7 +32,8 @@ defmodule SymphonyElixir.Store.SessionTest do
         issue_id: "issue-#{System.unique_integer([:positive])}",
         session_id: "session-#{System.unique_integer([:positive])}",
         status: "running",
-        started_at: DateTime.utc_now()
+        started_at: DateTime.utc_now(),
+        organization_id: SymphonyElixir.TestSupport.test_org_id()
       }
 
       assert {:ok, session} = Store.create_session(attrs)
@@ -53,7 +55,8 @@ defmodule SymphonyElixir.Store.SessionTest do
         session_id: "session-#{System.unique_integer([:positive])}",
         status: "running",
         started_at: DateTime.utc_now(),
-        config_snapshot: config_snapshot
+        config_snapshot: config_snapshot,
+        organization_id: SymphonyElixir.TestSupport.test_org_id()
       }
 
       {:ok, session} = Store.create_session(attrs)
@@ -73,7 +76,8 @@ defmodule SymphonyElixir.Store.SessionTest do
         session_id: "session-#{System.unique_integer([:positive])}",
         status: "running",
         started_at: DateTime.utc_now(),
-        workflow: "WORKFLOW"
+        workflow: "WORKFLOW",
+        organization_id: SymphonyElixir.TestSupport.test_org_id()
       }
 
       assert {:ok, session} = Store.create_session(attrs)
@@ -85,7 +89,8 @@ defmodule SymphonyElixir.Store.SessionTest do
         issue_id: "issue-#{System.unique_integer([:positive])}",
         session_id: "session-#{System.unique_integer([:positive])}",
         status: "running",
-        started_at: DateTime.utc_now()
+        started_at: DateTime.utc_now(),
+        organization_id: SymphonyElixir.TestSupport.test_org_id()
       }
 
       assert {:ok, session} = Store.create_session(attrs)
@@ -101,7 +106,8 @@ defmodule SymphonyElixir.Store.SessionTest do
           session_id: "session-#{System.unique_integer([:positive])}",
           status: "running",
           started_at: DateTime.utc_now(),
-          workflow: "WORKFLOW"
+          workflow: "WORKFLOW",
+          organization_id: SymphonyElixir.TestSupport.test_org_id()
         })
 
       {:ok, completed} =
@@ -123,7 +129,8 @@ defmodule SymphonyElixir.Store.SessionTest do
           issue_id: "issue-#{System.unique_integer([:positive])}",
           session_id: "session-#{System.unique_integer([:positive])}",
           status: "running",
-          started_at: DateTime.utc_now()
+          started_at: DateTime.utc_now(),
+          organization_id: SymphonyElixir.TestSupport.test_org_id()
         })
 
       {:ok, completed} =

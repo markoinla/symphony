@@ -325,7 +325,8 @@ defmodule SymphonyElixir.SessionLogTest do
           session_id: session_id,
           issue_identifier: unique_id("SYM-26"),
           issue_title: "Session log test",
-          project_id: nil
+          project_id: nil,
+          organization_id: test_org_id()
         ] ++ if(workflow_name, do: [workflow_name: workflow_name], else: [])
       )
 

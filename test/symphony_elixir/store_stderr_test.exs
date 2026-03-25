@@ -10,7 +10,8 @@ defmodule SymphonyElixir.StoreStderrTest do
         issue_identifier: "SYM-168",
         session_id: "session-stderr-1",
         status: "running",
-        started_at: DateTime.utc_now()
+        started_at: DateTime.utc_now(),
+        organization_id: SymphonyElixir.TestSupport.test_org_id()
       })
 
     stderr_content = "Warning: something went wrong\nError: details here\n"
@@ -36,7 +37,8 @@ defmodule SymphonyElixir.StoreStderrTest do
         issue_identifier: "SYM-168",
         session_id: "engine-session-stderr-2",
         status: "running",
-        started_at: DateTime.utc_now()
+        started_at: DateTime.utc_now(),
+        organization_id: SymphonyElixir.TestSupport.test_org_id()
       })
 
     stderr_content = "some stderr output"
@@ -59,7 +61,8 @@ defmodule SymphonyElixir.StoreStderrTest do
         issue_identifier: "SYM-168",
         session_id: "session-stderr-3",
         status: "running",
-        started_at: DateTime.utc_now()
+        started_at: DateTime.utc_now(),
+        organization_id: SymphonyElixir.TestSupport.test_org_id()
       })
 
     # First update with stderr
@@ -87,7 +90,8 @@ defmodule SymphonyElixir.StoreStderrTest do
         issue_identifier: "SYM-168",
         session_id: "session-stderr-4",
         status: "running",
-        started_at: DateTime.utc_now()
+        started_at: DateTime.utc_now(),
+        organization_id: SymphonyElixir.TestSupport.test_org_id()
       })
 
     {:ok, completed} =
@@ -108,7 +112,8 @@ defmodule SymphonyElixir.StoreStderrTest do
         issue_identifier: "SYM-FALLBACK",
         session_id: "initial-placeholder",
         status: "running",
-        started_at: DateTime.utc_now()
+        started_at: DateTime.utc_now(),
+        organization_id: SymphonyElixir.TestSupport.test_org_id()
       })
 
     # Try to complete using an engine session_id that doesn't match any session.
