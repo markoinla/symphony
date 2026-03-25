@@ -21,7 +21,14 @@ services:
       - "4000:4000"
     volumes:
       - ${HOST_HOME}:${HOST_HOME}
+      - ${WORKFLOWS_DIR:-${HOST_HOME}/.symphony/workflows}:/workflows
       - /tmp/symphony_workspaces:/tmp/symphony_workspaces
+    command:
+      - "--i-understand-that-this-will-be-running-without-the-usual-guardrails"
+      - "--port"
+      - "4000"
+      - "--workflows"
+      - "/workflows"
     environment:
       - HOME=${HOST_HOME}
       - PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${HOST_HOME}/.local/bin:${HOST_HOME}/.npm-global/bin:${HOST_HOME}/.nvm/versions/node/v22.14.0/bin

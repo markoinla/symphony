@@ -57,19 +57,62 @@ Symphony stops the active agent for that issue and cleans up matching workspaces
 One command to set up everything on Ubuntu 22.04/24.04:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/markoinla/symphony/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/markoinla/symphony/main/install.sh | sudo bash
 ```
 
 This installs Docker, Node.js, Claude Code CLI, and GitHub CLI, then starts Symphony with
-Postgres and Caddy (for automatic HTTPS). After install:
+Postgres and Caddy (for automatic HTTPS). Workflow files are installed to
+`~/.symphony/workflows/` where you can edit them — changes are picked up automatically.
 
-1. Open `http://<your-server-ip>:4000` and set your password
+After install:
+
+1. Open `http://<your-server-ip>` and set your password
 2. **Settings** → Connect Linear OAuth
 3. **Projects** → Create a project (name, GitHub repo, Linear org/project slug)
 4. Optionally configure a domain in Settings for automatic HTTPS
 
-To update: `install.sh --update`
-To reset password: `install.sh --reset-password`
+#### Workflows
+
+Default workflow files are installed to `~/.symphony/workflows/`:
+
+```
+~/.symphony/workflows/
+├── WORKFLOW.md
+├── ENRICHMENT.md
+├── EPIC_SPLITTER.md
+├── MENTION.md
+├── REVIEW.md
+└── TRIAGE.md
+```
+
+Edit these files to customize agent behavior — Symphony hot-reloads changes automatically.
+To add a new workflow, drop any `.md` file with valid YAML front matter into the directory.
+
+#### Management commands
+
+**Update** — pulls latest images and restarts services:
+
+```bash
+sudo bash /opt/symphony/install.sh --update
+```
+
+**Reset password** — clears the dashboard password so you can set a new one:
+
+```bash
+sudo bash /opt/symphony/install.sh --reset-password
+```
+
+**Uninstall** — stops all services and removes data:
+
+```bash
+sudo bash /opt/symphony/install.sh --uninstall
+```
+
+**View logs:**
+
+```bash
+cd /opt/symphony && docker compose -f docker-compose.prod.yml logs -f
+```
 
 ### Option B: Manual Docker Compose
 

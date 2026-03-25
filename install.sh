@@ -9,6 +9,7 @@ INSTALL_DIR="/opt/symphony"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
 SEED_DIR="${INSTALL_DIR}/plugin-seed"
 PLUGIN_VERSION="1.0.0"
+WORKFLOW_FILES=(WORKFLOW.md ENRICHMENT.md TRIAGE.md MENTION.md REVIEW.md EPIC_SPLITTER.md)
 
 # ── Colors ──────────────────────────────────────────────────────────────────────
 
@@ -41,6 +42,9 @@ handle_update() {
 
   install_skills
   info "Updated agent skills"
+
+  install_workflows
+  info "Updated workflow files"
 
   docker compose -f docker-compose.prod.yml pull
   docker compose -f docker-compose.prod.yml up -d
@@ -219,6 +223,57 @@ SEED_EOF
   info "Installed agent skills (v${PLUGIN_VERSION})"
 }
 
+# ── Workflow files ───────────────────────────────────────────────────────────────
+
+install_workflows() {
+  header "Workflow files"
+
+  # WORKFLOWS_DIR is set in generate_env / loaded from .env
+  local wf_dir="${WORKFLOWS_DIR:-${HOST_HOME:?}/.symphony/workflows}"
+  local checksums="${wf_dir}/.checksums"
+  mkdir -p "${wf_dir}"
+
+  local installed=0 skipped=0
+  local -a downloaded=()
+
+  for wf in "${WORKFLOW_FILES[@]}"; do
+    # Skip files the user has modified (checksum differs from original)
+    if [[ -f "${wf_dir}/${wf}" ]] && [[ -f "${checksums}" ]]; then
+      local saved current
+      saved=$(grep "  ${wf}\$" "${checksums}" | awk '{print $1}' || true)
+      current=$(sha256sum "${wf_dir}/${wf}" | awk '{print $1}')
+      if [[ -n "${saved}" ]] && [[ "${saved}" != "${current}" ]]; then
+        warn "Skipping ${wf} (locally modified)"
+        skipped=$((skipped + 1))
+        continue
+      fi
+    fi
+
+    curl -fsSL "${RAW_BASE}/${wf}" -o "${wf_dir}/${wf}"
+    downloaded+=("${wf}")
+    installed=$((installed + 1))
+  done
+
+  # Update checksums only for files we downloaded (preserve old entries for skipped files)
+  for wf in "${downloaded[@]}"; do
+    # Remove old entry for this file if present
+    if [[ -f "${checksums}" ]]; then
+      sed -i "/${wf}\$/d" "${checksums}"
+    fi
+    sha256sum "${wf_dir}/${wf}" >> "${checksums}"
+  done
+
+  # Ensure the regular user owns the directory
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    chown -R "${SUDO_USER}:${SUDO_USER}" "$(dirname "${wf_dir}")"
+  fi
+
+  info "Installed ${installed} workflow files to ${wf_dir}"
+  if [[ "${skipped}" -gt 0 ]]; then
+    warn "Skipped ${skipped} locally modified file(s)"
+  fi
+}
+
 # ── Generate .env ───────────────────────────────────────────────────────────────
 
 generate_env() {
@@ -239,8 +294,11 @@ generate_env() {
   POSTGRES_PASSWORD="$(openssl rand -base64 32)"
   SECRET_KEY_BASE="$(openssl rand -base64 64)"
 
+  WORKFLOWS_DIR="${HOST_HOME}/.symphony/workflows"
+
   cat > "${INSTALL_DIR}/.env" <<EOF
 HOST_HOME=${HOST_HOME}
+WORKFLOWS_DIR=${WORKFLOWS_DIR}
 POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 SYMPHONY_SECRET_KEY_BASE=${SECRET_KEY_BASE}
 DATABASE_URL=ecto://symphony:${POSTGRES_PASSWORD}@postgres:5432/symphony
@@ -304,6 +362,7 @@ main() {
   download_files
   install_skills
   generate_env
+  install_workflows
   start_services
   print_success
 }
