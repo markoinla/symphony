@@ -343,6 +343,7 @@ export type OAuthStatus = {
   status: 'connected' | 'expired' | 'disconnected'
   expires_at: string | null
   credentials_source: 'env' | 'store' | 'none'
+  proxy_available: boolean
 }
 
 export function getOAuthStatus() {
@@ -615,6 +616,17 @@ export function proxyHealthCheck() {
 
 export function proxyRegister() {
   return requestJson<{ ok: boolean }>('/api/v1/proxy/register', {
+    method: 'POST',
+  })
+}
+
+export type ProxyPingResult = {
+  proxy: { ok: boolean; error?: string }
+  webhook: { ok: boolean; registered?: boolean; instance_url?: string; error?: string }
+}
+
+export function proxyPing() {
+  return requestJson<ProxyPingResult>('/api/v1/proxy/ping', {
     method: 'POST',
   })
 }

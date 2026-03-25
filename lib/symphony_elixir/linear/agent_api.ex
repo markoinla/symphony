@@ -73,18 +73,18 @@ defmodule SymphonyElixir.Linear.AgentAPI do
   @spec complete_session(String.t(), :completed | :failed | :stopped) :: :ok | {:error, term()}
   def complete_session(agent_session_id, outcome)
       when is_binary(agent_session_id) and outcome in [:completed, :failed, :stopped] do
-    body =
-      case outcome do
-        :completed -> "Agent session completed successfully."
-        :failed -> "Agent session ended with errors."
-        :stopped -> "Agent session stopped by user."
-      end
+    # Successful completions don't need a final message — Linear auto-transitions
+    # the session to "complete" after inactivity.
+    case outcome do
+      :completed ->
+        :ok
 
-    # Note: Linear's API restricts `signal: "stop"` to prompt-type activities,
-    # which cannot be created by OAuth apps. We send a final response activity
-    # instead, and Linear will auto-transition the session to "complete" after
-    # inactivity.
-    create_activity(agent_session_id, %{type: "response", body: body})
+      :failed ->
+        create_activity(agent_session_id, %{type: "error", body: "Agent session ended with errors."})
+
+      :stopped ->
+        create_activity(agent_session_id, %{type: "response", body: "Agent session stopped by user."})
+    end
   end
 
   @spec update_session(String.t(), keyword()) :: :ok | {:error, term()}

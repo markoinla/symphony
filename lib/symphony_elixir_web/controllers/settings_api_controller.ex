@@ -8,8 +8,7 @@ defmodule SymphonyElixirWeb.SettingsApiController do
   require Logger
 
   alias Plug.Conn
-  alias SymphonyElixir.Caddy
-  alias SymphonyElixir.Store
+  alias SymphonyElixir.{Caddy, ProxyClient, Store}
   alias SymphonyElixirWeb.{ObservabilityPubSub, Presenter}
 
   @spec index(Conn.t(), map()) :: Conn.t()
@@ -67,7 +66,10 @@ defmodule SymphonyElixirWeb.SettingsApiController do
       {:error, reason} -> Logger.warning("Caddy domain configuration failed: #{inspect(reason)}")
     end
 
-    Store.put_setting("symphony_public_base_url", "https://#{value}")
+    domain = value |> String.replace(~r{^https?://}, "") |> String.trim_trailing("/")
+    base_url = "https://#{domain}"
+    Store.put_setting("symphony_public_base_url", base_url)
+    maybe_register_proxy(base_url)
   end
 
   defp maybe_configure_caddy_domain(_key, _value), do: :ok
@@ -79,9 +81,36 @@ defmodule SymphonyElixirWeb.SettingsApiController do
     end
 
     Store.delete_setting("symphony_public_base_url")
+    maybe_deregister_proxy()
   end
 
   defp maybe_remove_caddy_domain(_key), do: :ok
+
+  defp maybe_register_proxy(base_url) do
+    org_id = Store.get_setting("proxy.linear_org_id")
+
+    if ProxyClient.proxy_enabled?() and is_binary(org_id) and org_id != "" do
+      Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
+        case ProxyClient.register_instance(base_url, org_id) do
+          :ok -> Logger.info("Re-registered with proxy after domain change: #{base_url}")
+          {:error, reason} -> Logger.warning("Proxy re-registration failed: #{inspect(reason)}")
+        end
+      end)
+    end
+  end
+
+  defp maybe_deregister_proxy do
+    org_id = Store.get_setting("proxy.linear_org_id")
+
+    if ProxyClient.proxy_enabled?() and is_binary(org_id) and org_id != "" do
+      Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
+        case ProxyClient.deregister_instance(org_id) do
+          :ok -> Logger.info("Deregistered from proxy after domain removal")
+          {:error, reason} -> Logger.warning("Proxy deregistration failed: #{inspect(reason)}")
+        end
+      end)
+    end
+  end
 
   defp error_response(conn, status, code, message) do
     conn

@@ -4,13 +4,9 @@ defmodule SymphonyElixir.Linear.ActivityMapperTest do
   alias SymphonyElixir.Linear.ActivityMapper
 
   describe "map_event/1 - session lifecycle" do
-    test "maps session_started to ephemeral thought" do
+    test "session_started returns nil (handled by WebhookDispatcher)" do
       event = %{event: :session_started, timestamp: DateTime.utc_now()}
-      result = ActivityMapper.map_event(event)
-
-      assert result.type == "thought"
-      assert result.ephemeral == true
-      assert result.body =~ "Starting session"
+      assert ActivityMapper.map_event(event) == nil
     end
   end
 
@@ -74,7 +70,7 @@ defmodule SymphonyElixir.Linear.ActivityMapperTest do
   end
 
   describe "map_event/1 - assistant message" do
-    test "maps claude/assistant_message to thought" do
+    test "maps claude/assistant_message to response" do
       event = %{
         event: :notification,
         timestamp: DateTime.utc_now(),
@@ -90,7 +86,7 @@ defmodule SymphonyElixir.Linear.ActivityMapperTest do
 
       result = ActivityMapper.map_event(event)
 
-      assert result.type == "thought"
+      assert result.type == "response"
       assert result.body == "Here is the fix..."
     end
   end

@@ -93,6 +93,7 @@ defmodule SymphonyElixirWeb.Router do
     post("/oauth/github/proxy-poll", GitHubOAuthController, :proxy_poll)
     get("/proxy/status", ProxyApiController, :status)
     post("/proxy/health", ProxyApiController, :health)
+    post("/proxy/ping", ProxyApiController, :ping)
     post("/proxy/register", ProxyApiController, :register)
     post("/auth/change-password", AuthController, :change_password)
 

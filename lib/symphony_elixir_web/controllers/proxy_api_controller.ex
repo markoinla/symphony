@@ -62,6 +62,36 @@ defmodule SymphonyElixirWeb.ProxyApiController do
     })
   end
 
+  @spec ping(Conn.t(), map()) :: Conn.t()
+  def ping(conn, _params) do
+    org_id = Store.get_setting("proxy.linear_org_id")
+
+    if is_nil(org_id) or org_id == "" do
+      json(conn, %{
+        proxy: %{ok: false, error: "No Linear organization ID. Connect Linear OAuth first."},
+        webhook: %{ok: false, error: "Cannot test without organization ID."}
+      })
+    else
+      proxy_result =
+        case ProxyClient.health_check() do
+          :ok -> %{ok: true}
+          {:error, reason} -> %{ok: false, error: inspect(reason)}
+        end
+
+      webhook_result =
+        if proxy_result.ok do
+          case ProxyClient.ping_instance(org_id) do
+            {:ok, body} -> body
+            {:error, reason} -> %{ok: false, error: inspect(reason)}
+          end
+        else
+          %{ok: false, error: "Skipped — proxy is unreachable."}
+        end
+
+      json(conn, %{proxy: proxy_result, webhook: webhook_result})
+    end
+  end
+
   defp error_response(conn, status, code, message) do
     conn
     |> put_status(status)

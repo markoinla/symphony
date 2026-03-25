@@ -107,8 +107,8 @@ defmodule SymphonyElixir.Application do
       []
     else
       [
-        SymphonyElixir.OrchestratorStarter,
         SymphonyElixir.HttpServer,
+        SymphonyElixir.OrchestratorStarter,
         SymphonyElixir.StatusDashboard,
         {Task, &register_with_proxy/0}
       ]

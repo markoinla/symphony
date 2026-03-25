@@ -106,11 +106,21 @@ export default {
           return new Response("Method Not Allowed", { status: 405 });
         }
         return handleRegister(request, env);
+      case "/deregister":
+        if (request.method !== "POST") {
+          return new Response("Method Not Allowed", { status: 405 });
+        }
+        return handleDeregister(request, env);
       case "/webhooks/linear":
         if (request.method !== "POST") {
           return new Response("Method Not Allowed", { status: 405 });
         }
         return handleWebhookLinear(request, env);
+      case "/ping-instance":
+        if (request.method !== "POST") {
+          return new Response("Method Not Allowed", { status: 405 });
+        }
+        return handlePingInstance(request, env);
       default:
         return new Response("Not Found", { status: 404 });
     }
@@ -327,6 +337,36 @@ async function handleRegister(request: Request, env: Env): Promise<Response> {
 }
 
 /**
+ * Remove a registered instance, stopping webhook forwarding.
+ *
+ * Authenticated via REGISTRATION_SECRET. Body: { linear_org_id }
+ */
+async function handleDeregister(request: Request, env: Env): Promise<Response> {
+  const authHeader = request.headers.get("Authorization");
+  if (!authHeader || authHeader !== `Bearer ${env.REGISTRATION_SECRET}`) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  let body: { linear_org_id?: string };
+  try {
+    body = (await request.json()) as { linear_org_id?: string };
+  } catch {
+    return Response.json({ error: "invalid JSON body" }, { status: 400 });
+  }
+
+  if (!body.linear_org_id) {
+    return Response.json(
+      { error: "missing required field: linear_org_id" },
+      { status: 400 },
+    );
+  }
+
+  await env.OAUTH_KV.delete(`instance:${body.linear_org_id}`);
+
+  return Response.json({ ok: true, linear_org_id: body.linear_org_id });
+}
+
+/**
  * Verify HMAC-SHA256 signature from Linear webhook.
  */
 async function verifyLinearSignature(
@@ -426,6 +466,74 @@ async function handleWebhookLinear(request: Request, env: Env): Promise<Response
   }
 
   return Response.json({ ok: true });
+}
+
+/**
+ * Ping a registered instance to verify webhook forwarding will work.
+ * Authenticated via REGISTRATION_SECRET. Body: { linear_org_id }
+ *
+ * The proxy looks up the registered instance URL and tries to reach
+ * its health endpoint, returning the result.
+ */
+async function handlePingInstance(request: Request, env: Env): Promise<Response> {
+  const authHeader = request.headers.get("Authorization");
+  if (!authHeader || authHeader !== `Bearer ${env.REGISTRATION_SECRET}`) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  let body: { linear_org_id?: string };
+  try {
+    body = (await request.json()) as { linear_org_id?: string };
+  } catch {
+    return Response.json({ error: "invalid JSON body" }, { status: 400 });
+  }
+
+  if (!body.linear_org_id) {
+    return Response.json(
+      { error: "missing required field: linear_org_id" },
+      { status: 400 },
+    );
+  }
+
+  const instanceRaw = await env.OAUTH_KV.get(`instance:${body.linear_org_id}`);
+  if (!instanceRaw) {
+    return Response.json({
+      ok: false,
+      registered: false,
+      error: "No instance registered for this organization.",
+    });
+  }
+
+  const instance = JSON.parse(instanceRaw) as InstanceEntry;
+
+  try {
+    const res = await fetch(`${instance.instance_url}/healthz`, {
+      method: "GET",
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    if (res.ok) {
+      return Response.json({
+        ok: true,
+        registered: true,
+        instance_url: instance.instance_url,
+      });
+    }
+
+    return Response.json({
+      ok: false,
+      registered: true,
+      instance_url: instance.instance_url,
+      error: `Instance returned HTTP ${res.status}`,
+    });
+  } catch (err) {
+    return Response.json({
+      ok: false,
+      registered: true,
+      instance_url: instance.instance_url,
+      error: `Could not reach instance: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
 }
 
 function errorPage(message: string): Response {

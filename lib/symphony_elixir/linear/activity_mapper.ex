@@ -8,9 +8,8 @@ defmodule SymphonyElixir.Linear.ActivityMapper do
 
   @spec map_event(map()) :: map() | nil
 
-  def map_event(%{event: :session_started}) do
-    %{type: "thought", body: "Starting session...", ephemeral: true}
-  end
+  # :session_started is handled directly by WebhookDispatcher.emit_initial_thought/2
+  def map_event(%{event: :session_started}), do: nil
 
   def map_event(%{event: :notification} = msg) do
     method = get_method(msg)
@@ -81,7 +80,7 @@ defmodule SymphonyElixir.Linear.ActivityMapper do
     content = get_in(msg, [:message, "params", "content"]) || ""
 
     if content != "" do
-      %{type: "thought", body: truncate(content, 2000)}
+      %{type: "response", body: truncate(content, 2000)}
     end
   end
 

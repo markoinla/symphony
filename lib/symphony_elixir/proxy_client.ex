@@ -66,6 +66,56 @@ defmodule SymphonyElixir.ProxyClient do
     end
   end
 
+  @spec deregister_instance(String.t()) :: :ok | {:error, term()}
+  def deregister_instance(linear_org_id) when is_binary(linear_org_id) do
+    url = "#{proxy_base_url()}/deregister"
+    secret = registration_secret()
+
+    case req_post(url,
+           json: %{"linear_org_id" => linear_org_id},
+           headers: [{"authorization", "Bearer #{secret}"}],
+           receive_timeout: 15_000
+         ) do
+      {:ok, %{status: 200}} ->
+        Logger.info("Deregistered instance from proxy for org: #{linear_org_id}")
+        :ok
+
+      {:ok, %{status: 401}} ->
+        {:error, :unauthorized}
+
+      {:ok, %{status: status, body: body}} ->
+        {:error, {:unexpected_status, status, body}}
+
+      {:error, reason} ->
+        {:error, {:request_failed, reason}}
+    end
+  end
+
+  @spec ping_instance(String.t()) ::
+          {:ok, map()} | {:error, term()}
+  def ping_instance(linear_org_id) when is_binary(linear_org_id) do
+    url = "#{proxy_base_url()}/ping-instance"
+    secret = registration_secret()
+
+    case req_post(url,
+           json: %{"linear_org_id" => linear_org_id},
+           headers: [{"authorization", "Bearer #{secret}"}],
+           receive_timeout: 15_000
+         ) do
+      {:ok, %{status: 200, body: body}} ->
+        {:ok, body}
+
+      {:ok, %{status: 401}} ->
+        {:error, :unauthorized}
+
+      {:ok, %{status: _status, body: body}} ->
+        {:ok, body}
+
+      {:error, reason} ->
+        {:error, {:request_failed, reason}}
+    end
+  end
+
   @spec start_oauth_flow(provider()) ::
           {:ok, %{url: String.t(), state: String.t(), code_verifier: String.t()}}
   def start_oauth_flow(provider) when provider in [:linear, :github] do

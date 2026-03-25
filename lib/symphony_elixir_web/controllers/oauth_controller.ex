@@ -78,7 +78,8 @@ defmodule SymphonyElixirWeb.OAuthController do
     json(conn, %{
       status: Atom.to_string(status),
       expires_at: expires_at,
-      credentials_source: Atom.to_string(OAuth.credentials_source())
+      credentials_source: Atom.to_string(OAuth.credentials_source()),
+      proxy_available: ProxyClient.proxy_enabled?()
     })
   end
 

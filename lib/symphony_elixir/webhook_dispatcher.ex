@@ -9,7 +9,6 @@ defmodule SymphonyElixir.WebhookDispatcher do
   require Logger
 
   alias SymphonyElixir.{AgentSession, Config, Orchestrator, Settings, Store, Workflow}
-  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.{Adapter, AgentAPI, Issue}
 
   @spec dispatch_created(map(), keyword()) :: :ok | {:error, term()}
@@ -349,18 +348,14 @@ defmodule SymphonyElixir.WebhookDispatcher do
   end
 
   defp issue_has_skip_label?(%Issue{} = issue) do
-    skip_labels = collect_skip_labels()
-    Issue.has_any_label?(issue, skip_labels)
-  end
+    {_name, config} = resolve_mention_workflow()
 
-  defp collect_skip_labels do
-    Workflow.workflow_names()
-    |> Enum.flat_map(fn name ->
-      case Config.settings(name) do
-        {:ok, %Schema{tracker: %{skip_labels: labels}}} when is_list(labels) -> labels
-        _ -> []
-      end
-    end)
-    |> Enum.uniq()
+    case config.tracker.skip_labels do
+      labels when is_list(labels) and labels != [] ->
+        Issue.has_any_label?(issue, labels)
+
+      _ ->
+        false
+    end
   end
 end

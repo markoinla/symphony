@@ -18,6 +18,7 @@ import {
 
 import {
   type AgentSettingsDefaults,
+  type ProxyPingResult,
   type Setting,
   changePassword,
   deleteSetting,
@@ -29,7 +30,7 @@ import {
   getSettings,
   pollGitHubProxyOAuth,
   pollLinearProxyOAuth,
-  proxyHealthCheck,
+  proxyPing,
   revokeGitHubOAuth,
   revokeOAuth,
   upsertSetting,
@@ -315,6 +316,7 @@ function LinearOAuthSection() {
   const oauthStatus = statusQuery.data?.status ?? 'disconnected'
   const credentialsSource = statusQuery.data?.credentials_source ?? 'none'
   const credentialsFromEnv = credentialsSource === 'env'
+  const proxyAvailable = statusQuery.data?.proxy_available ?? false
 
   const initialFeedback = useMemo(() => {
     const params = new URLSearchParams(window.location.search)
@@ -453,11 +455,15 @@ function LinearOAuthSection() {
             </div>
           </div>
         </div>
-      ) : credentialsFromEnv ? (
+      ) : credentialsFromEnv || proxyAvailable ? (
         <div className="rounded-lg border border-th-border bg-th-inset p-4">
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-1 text-sm text-th-text-2">
-              <div className="text-xs text-th-text-4">Credentials: via environment variable</div>
+              {credentialsFromEnv ? (
+                <div className="text-xs text-th-text-4">Credentials: via environment variable</div>
+              ) : (
+                <div className="text-xs text-th-text-4">Credentials: via proxy</div>
+              )}
             </div>
             <Button
               disabled={connectMutation.isPending}
@@ -535,6 +541,7 @@ function GitHubOAuthSection() {
   const oauthStatus = statusQuery.data?.status ?? 'disconnected'
   const credentialsSource = statusQuery.data?.credentials_source ?? 'none'
   const credentialsFromEnv = credentialsSource === 'env'
+  const proxyAvailable = statusQuery.data?.proxy_available ?? false
 
   const initialFeedback = useMemo(() => {
     const params = new URLSearchParams(window.location.search)
@@ -668,11 +675,15 @@ function GitHubOAuthSection() {
             </div>
           </div>
         </div>
-      ) : credentialsFromEnv ? (
+      ) : credentialsFromEnv || proxyAvailable ? (
         <div className="rounded-lg border border-th-border bg-th-inset p-4">
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-1 text-sm text-th-text-2">
-              <div className="text-xs text-th-text-4">Credentials: via environment variable</div>
+              {credentialsFromEnv ? (
+                <div className="text-xs text-th-text-4">Credentials: via environment variable</div>
+              ) : (
+                <div className="text-xs text-th-text-4">Credentials: via proxy</div>
+              )}
             </div>
             <Button
               disabled={connectMutation.isPending}
@@ -1126,6 +1137,7 @@ function ProxySection() {
   const proxyEnabled = proxyQuery.data?.enabled ?? true
 
   const [feedback, setFeedback] = useState<string | null>(null)
+  const [pingResult, setPingResult] = useState<ProxyPingResult | null>(null)
 
   const toggleMutation = useMutation({
     mutationFn: async (enabled: boolean) => {
@@ -1135,18 +1147,22 @@ function ProxySection() {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
       await queryClient.invalidateQueries({ queryKey: ['proxy-status'] })
       setFeedback(proxyEnabled ? 'Proxy disabled.' : 'Proxy enabled.')
+      setPingResult(null)
     },
     onError: (error: unknown) => setFeedback(formatQueryError(error)),
   })
 
-  const healthMutation = useMutation({
-    mutationFn: proxyHealthCheck,
+  const pingMutation = useMutation({
+    mutationFn: proxyPing,
     onSuccess: (data) => {
-      setFeedback(data.ok ? 'Proxy is reachable.' : `Proxy unreachable: ${data.error ?? 'unknown error'}`)
+      setPingResult(data)
+      setFeedback(null)
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => {
+      setFeedback(formatQueryError(error))
+      setPingResult(null)
+    },
   })
-
 
   return (
     <Card className="space-y-4">
@@ -1168,6 +1184,7 @@ function ProxySection() {
           disabled={toggleMutation.isPending}
           onClick={() => {
             setFeedback(null)
+            setPingResult(null)
             void toggleMutation.mutateAsync(!proxyEnabled)
           }}
           size="sm"
@@ -1177,18 +1194,43 @@ function ProxySection() {
           {proxyEnabled ? 'Disable proxy' : 'Enable proxy'}
         </Button>
         <Button
-          disabled={healthMutation.isPending}
+          disabled={pingMutation.isPending}
           onClick={() => {
             setFeedback(null)
-            void healthMutation.mutateAsync()
+            setPingResult(null)
+            void pingMutation.mutateAsync()
           }}
           size="sm"
           type="button"
           variant="ghost"
         >
-          Test connectivity
+          {pingMutation.isPending ? 'Testing...' : 'Test connectivity'}
         </Button>
       </div>
+
+      {pingResult ? (
+        <div className="space-y-2">
+          <div className={`flex items-center gap-2 rounded-lg border px-4 py-3 text-sm ${pingResult.proxy.ok ? 'border-th-success/30 bg-th-success/5 text-th-success' : 'border-th-danger/30 bg-th-danger/5 text-th-danger'}`}>
+            <span>{pingResult.proxy.ok ? 'Pass' : 'Fail'}:</span>
+            <span>{pingResult.proxy.ok ? 'Proxy is reachable' : `Proxy unreachable — ${pingResult.proxy.error ?? 'unknown error'}`}</span>
+          </div>
+          <div className={`flex items-center gap-2 rounded-lg border px-4 py-3 text-sm ${pingResult.webhook.ok ? 'border-th-success/30 bg-th-success/5 text-th-success' : 'border-th-danger/30 bg-th-danger/5 text-th-danger'}`}>
+            <span>{pingResult.webhook.ok ? 'Pass' : 'Fail'}:</span>
+            <span>
+              {pingResult.webhook.ok
+                ? 'Proxy can reach this instance — webhook forwarding will work'
+                : pingResult.webhook.registered === false
+                  ? 'No instance registered with proxy. Connect Linear OAuth or set a domain first.'
+                  : `Proxy cannot reach this instance — ${pingResult.webhook.error ?? 'unknown error'}`}
+            </span>
+          </div>
+          {!pingResult.webhook.ok && pingResult.webhook.registered !== false ? (
+            <p className="text-xs text-th-text-4">
+              Webhook forwarding requires a publicly accessible URL. If you are behind NAT, use a tunnel (e.g. cloudflared) and set the tunnel URL as your domain above.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="space-y-3">
         <div className="grid gap-4 sm:grid-cols-2">
