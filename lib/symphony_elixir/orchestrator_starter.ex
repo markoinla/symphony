@@ -25,7 +25,6 @@ defmodule SymphonyElixir.OrchestratorStarter do
     Process.monitor(SymphonyElixir.OrchestratorSupervisor)
     ObservabilityPubSub.subscribe_projects()
     ObservabilityPubSub.subscribe_agents()
-    SymphonyElixir.Store.clear_all_issue_claims()
     ensure_orchestrators()
     schedule_reconcile()
     {:ok, %{}}
@@ -105,6 +104,7 @@ defmodule SymphonyElixir.OrchestratorStarter do
       |> MapSet.new()
 
     stop_stale_orchestrators(expected_keys)
+    release_orphaned_claims(expected_keys)
   end
 
   defp ensure_workflow_orchestrators({workflow_name, _path}, projects) do
@@ -135,6 +135,15 @@ defmodule SymphonyElixir.OrchestratorStarter do
       nil ->
         :ok
     end
+  end
+
+  defp release_orphaned_claims(expected_keys) do
+    SymphonyElixir.Store.list_claimed_orchestrator_keys()
+    |> Enum.reject(fn key -> MapSet.member?(expected_keys, key) end)
+    |> Enum.each(fn key ->
+      count = SymphonyElixir.Store.release_claims_by_orchestrator_key(key)
+      Logger.info("Released #{count} orphaned claim(s) for defunct orchestrator_key=#{key}")
+    end)
   end
 
   defp ensure_started(opts) do

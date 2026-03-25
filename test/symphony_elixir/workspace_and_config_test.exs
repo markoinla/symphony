@@ -699,7 +699,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
       running: %{},
-      claimed: MapSet.new(),
       engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }
@@ -721,7 +720,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
       running: %{},
-      claimed: MapSet.new(),
       engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }
@@ -741,7 +739,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
       running: %{},
-      claimed: MapSet.new(),
       engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }
@@ -760,9 +757,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   test "todo parent issue with children is not dispatch-eligible" do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
-      completed: %{},
       running: %{},
-      claimed: MapSet.new(),
       engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }
@@ -789,9 +784,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
-      completed: %{},
       running: %{},
-      claimed: MapSet.new(),
       engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }
@@ -846,7 +839,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
       running: %{},
-      claimed: MapSet.new(),
       engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }
@@ -871,7 +863,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
       running: %{},
-      claimed: MapSet.new(),
       engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }
@@ -899,7 +890,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
       running: %{},
-      claimed: MapSet.new(),
       engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }
@@ -947,8 +937,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
       running: %{},
-      claimed: MapSet.new(),
-      completed: %{"done-1" => %{state: "Backlog", count: 1}},
+      cooldowns: %{"done-1" => %{expires_at: DateTime.add(DateTime.utc_now(), 300, :second), state: "Backlog"}},
       engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }
@@ -972,8 +961,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     state = %Orchestrator.State{
       max_concurrent_agents: 3,
       running: %{},
-      claimed: MapSet.new(),
-      completed: %{"rework-1" => %{state: "In Progress", count: 1}},
+      cooldowns: %{"rework-1" => %{expires_at: DateTime.add(DateTime.utc_now(), 300, :second), state: "In Progress"}},
       engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
       retry_attempts: %{}
     }

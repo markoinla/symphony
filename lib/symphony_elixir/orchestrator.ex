@@ -47,8 +47,6 @@ defmodule SymphonyElixir.Orchestrator do
     Runtime state for the orchestrator polling loop.
     """
 
-    @type completed_entry :: %{state: String.t() | nil, count: non_neg_integer()}
-
     @type t :: %__MODULE__{
             workflow_name: String.t() | nil,
             poll_interval_ms: non_neg_integer() | nil,
@@ -61,8 +59,8 @@ defmodule SymphonyElixir.Orchestrator do
             project_id: integer() | nil,
             project: Project.t() | nil,
             running: %{optional(String.t()) => map()},
-            completed: %{optional(String.t()) => completed_entry()},
-            claimed: MapSet.t(String.t()),
+            completion_counts: %{optional(String.t()) => %{state: String.t() | nil, count: non_neg_integer()}},
+            cooldowns: %{optional(String.t()) => %{expires_at: DateTime.t(), state: String.t()}},
             retry_attempts: map(),
             engine_totals: map() | nil,
             engine_rate_limits: map() | nil
@@ -80,8 +78,8 @@ defmodule SymphonyElixir.Orchestrator do
       :project_id,
       :project,
       running: %{},
-      completed: %{},
-      claimed: MapSet.new(),
+      completion_counts: %{},
+      cooldowns: %{},
       retry_attempts: %{},
       engine_totals: nil,
       engine_rate_limits: nil
@@ -187,7 +185,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @impl true
-  def terminate(terminate_reason, %State{running: running}) do
+  def terminate(terminate_reason, %State{running: running, retry_attempts: retry_attempts}) do
     session_count = map_size(running)
 
     if session_count > 0 do
@@ -205,6 +203,11 @@ defmodule SymphonyElixir.Orchestrator do
     # permanently stuck after a shutdown.  Individual release calls above
     # only cover the normal completion path; terminate/2 must sweep them.
     Enum.each(running, fn {issue_id, _running_entry} ->
+      Store.release_issue_claim(issue_id)
+    end)
+
+    # Also release claims for issues pending retry
+    Enum.each(retry_attempts, fn {issue_id, _} ->
       Store.release_issue_claim(issue_id)
     end)
 
@@ -720,8 +723,8 @@ defmodule SymphonyElixir.Orchestrator do
         %{
           state
           | running: Map.delete(state.running, issue_id),
-            claimed: MapSet.delete(state.claimed, issue_id),
-            completed: Map.delete(state.completed, issue_id),
+            cooldowns: Map.delete(state.cooldowns, issue_id),
+            completion_counts: Map.delete(state.completion_counts, issue_id),
             retry_attempts: Map.delete(state.retry_attempts, issue_id)
         }
 
@@ -749,25 +752,67 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  @tool_stall_multiplier 3
+
   defp restart_stalled_issue(state, issue_id, running_entry, now, timeout_ms) do
     elapsed_ms = stall_elapsed_ms(running_entry, now)
 
     if is_integer(elapsed_ms) and elapsed_ms > timeout_ms do
-      identifier = Map.get(running_entry, :identifier, issue_id)
-      session_id = running_entry_session_id(running_entry)
-
-      Logger.warning("Issue stalled: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} elapsed_ms=#{elapsed_ms}; restarting with backoff")
-
-      next_attempt = next_retry_attempt_from_running(running_entry)
-
-      state
-      |> terminate_running_issue(issue_id, false)
-      |> schedule_issue_retry(issue_id, next_attempt, %{
-        identifier: identifier,
-        error: "stalled for #{elapsed_ms}ms without codex activity"
-      })
+      if tool_in_flight?(running_entry) and not stalled_past_tool_limit?(running_entry, elapsed_ms, timeout_ms) do
+        state
+      else
+        do_restart_stalled_issue(state, issue_id, running_entry, elapsed_ms)
+      end
     else
       state
+    end
+  end
+
+  defp stalled_past_tool_limit?(running_entry, elapsed_ms, base_timeout_ms) do
+    if engine_process_alive?(running_entry) do
+      # Process is confirmed alive — not stalled, let the engine's own
+      # turn_timeout handle genuinely hung turns
+      false
+    else
+      # Can't confirm process is alive (SSH worker or missing PID) —
+      # fall back to multiplied cap
+      elapsed_ms > base_timeout_ms * @tool_stall_multiplier
+    end
+  end
+
+  defp do_restart_stalled_issue(state, issue_id, running_entry, elapsed_ms) do
+    identifier = Map.get(running_entry, :identifier, issue_id)
+    session_id = running_entry_session_id(running_entry)
+
+    Logger.warning("Issue stalled: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} elapsed_ms=#{elapsed_ms}; restarting with backoff")
+
+    next_attempt = next_retry_attempt_from_running(running_entry)
+
+    state
+    |> terminate_running_issue(issue_id, false)
+    |> schedule_issue_retry(issue_id, next_attempt, %{
+      identifier: identifier,
+      error: "stalled for #{elapsed_ms}ms without engine activity"
+    })
+  end
+
+  defp tool_in_flight?(running_entry) do
+    case get_in(running_entry, [:last_engine_message, :message]) do
+      %{"method" => "claude/tool_use"} -> true
+      _ -> false
+    end
+  end
+
+  defp engine_process_alive?(running_entry) do
+    pid = Map.get(running_entry, :engine_pid)
+    worker_host = Map.get(running_entry, :worker_host)
+
+    with true <- is_binary(pid),
+         true <- worker_host in [nil, "local"],
+         {_pid_int, ""} <- Integer.parse(pid) do
+      File.exists?("/proc/#{pid}")
+    else
+      _ -> false
     end
   end
 
@@ -850,17 +895,16 @@ defmodule SymphonyElixir.Orchestrator do
         ) :: boolean()
   defp should_dispatch_issue?(
          %Issue{} = issue,
-         %State{running: running, claimed: claimed, completed: completed} = state,
+         %State{running: running} = state,
          active_states,
          terminal_states,
          db_claims
        ) do
     candidate_issue?(issue, active_states, terminal_states) and
       !todo_issue_dispatch_blocked?(issue, terminal_states) and
-      !MapSet.member?(claimed, issue.id) and
       !Enum.member?(db_claims, issue.id) and
       !Map.has_key?(running, issue.id) and
-      !issue_completed_in_current_state?(issue, completed) and
+      !issue_in_cooldown?(issue, state.cooldowns) and
       available_slots(state) > 0 and
       state_slots_available?(issue, running) and
       worker_slots_available?(state)
@@ -869,10 +913,11 @@ defmodule SymphonyElixir.Orchestrator do
   defp should_dispatch_issue?(_issue, _state, _active_states, _terminal_states, _db_claims),
     do: false
 
-  defp issue_completed_in_current_state?(%Issue{id: id, state: current_state}, completed) do
-    case Map.get(completed, id) do
-      %{state: completed_state} ->
-        normalize_issue_state(current_state || "") == normalize_issue_state(completed_state || "")
+  defp issue_in_cooldown?(%Issue{id: id, state: current_state}, cooldowns) do
+    case Map.get(cooldowns, id) do
+      %{expires_at: expires_at, state: cooldown_state} ->
+        normalize_issue_state(current_state || "") == normalize_issue_state(cooldown_state || "") and
+          DateTime.compare(DateTime.utc_now(), expires_at) == :lt
 
       _ ->
         false
@@ -1078,7 +1123,6 @@ defmodule SymphonyElixir.Orchestrator do
         %{
           state
           | running: running,
-            claimed: MapSet.put(state.claimed, issue.id),
             retry_attempts: Map.delete(state.retry_attempts, issue.id)
         }
 
@@ -1206,7 +1250,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp revalidate_issue_for_dispatch(issue, _issue_fetcher, _terminal_states), do: {:ok, issue}
 
   defp complete_issue(%State{} = state, issue_id, issue_state) do
-    prev = Map.get(state.completed, issue_id)
+    prev = Map.get(state.completion_counts, issue_id)
 
     entry =
       case prev do
@@ -1214,11 +1258,13 @@ defmodule SymphonyElixir.Orchestrator do
         _ -> %{state: issue_state, count: 1}
       end
 
-    %{
-      state
-      | completed: Map.put(state.completed, issue_id, entry),
-        retry_attempts: Map.delete(state.retry_attempts, issue_id)
-    }
+    %{state | completion_counts: Map.put(state.completion_counts, issue_id, entry), retry_attempts: Map.delete(state.retry_attempts, issue_id)}
+  end
+
+  defp set_cooldown(%State{} = state, issue_id, issue_state) do
+    cooldown_ms = Config.settings!(state.workflow_name).agent.retry_cooldown_ms
+    expires_at = DateTime.add(DateTime.utc_now(), cooldown_ms, :millisecond)
+    %{state | cooldowns: Map.put(state.cooldowns, issue_id, %{expires_at: expires_at, state: issue_state})}
   end
 
   defp running_entry_issue_state(%{issue: %Issue{state: state}}), do: state
@@ -1405,14 +1451,14 @@ defmodule SymphonyElixir.Orchestrator do
         Logger.info("#{reason}: #{issue_context(issue)}; releasing claim")
         state = release_issue_claim(state, issue.id)
 
-        # For failure exhaustion, add a completed guard so the issue is not
+        # For failure exhaustion, set a cooldown so the issue is not
         # immediately re-dispatched into another crash loop.  Continuation
         # exhaustion intentionally leaves the entry cleared so the issue can
         # be retried on the next poll (e.g. a "Merging" issue whose PR is
         # now ready).
         state =
           if metadata[:delay_type] != :continuation do
-            complete_issue(state, issue.id, issue.state)
+            set_cooldown(state, issue.id, issue.state)
           else
             state
           end
@@ -1427,7 +1473,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp retry_limit_reached(state, issue, attempt, metadata) do
     max_continuations = Config.settings!().agent.max_continuations
     max_failure_retries = Config.settings!().agent.max_failure_retries
-    completion_entry = Map.get(state.completed, issue.id)
+    completion_entry = Map.get(state.completion_counts, issue.id)
     completion_count = if completion_entry, do: completion_entry.count, else: 0
 
     cond do
@@ -1465,12 +1511,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp release_issue_claim(%State{} = state, issue_id) do
     Store.release_issue_claim(issue_id)
-
-    %{
-      state
-      | claimed: MapSet.delete(state.claimed, issue_id),
-        completed: Map.delete(state.completed, issue_id)
-    }
+    %{state | cooldowns: Map.delete(state.cooldowns, issue_id), completion_counts: Map.delete(state.completion_counts, issue_id)}
   end
 
   defp retry_delay(attempt, metadata) when is_integer(attempt) and attempt > 0 and is_map(metadata) do

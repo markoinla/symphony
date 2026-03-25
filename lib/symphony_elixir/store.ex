@@ -234,6 +234,15 @@ defmodule SymphonyElixir.Store do
     |> MapSet.new()
   end
 
+  @spec list_claimed_orchestrator_keys() :: MapSet.t(String.t())
+  def list_claimed_orchestrator_keys do
+    IssueClaim
+    |> select([c], c.orchestrator_key)
+    |> distinct(true)
+    |> Repo.all()
+    |> MapSet.new()
+  end
+
   @spec release_claims_by_orchestrator_key(String.t()) :: non_neg_integer()
   def release_claims_by_orchestrator_key(orchestrator_key) when is_binary(orchestrator_key) do
     {count, _} =
