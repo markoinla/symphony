@@ -1,5 +1,14 @@
 {
   "enabledPlugins": {
-    "skill-creator@claude-plugins-official": true
+    "skill-creator@claude-plugins-official": true,
+    "symphony-agent-skills@symphony-skills": true
+  },
+  "extraKnownMarketplaces": {
+    "symphony-skills": {
+      "source": {
+        "source": "github",
+        "repo": "markoinla/symphony"
+      }
+    }
   }
 }

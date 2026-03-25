@@ -1,0 +1,19 @@
+{
+  "name": "symphony-skills",
+  "owner": {
+    "name": "Symphony"
+  },
+  "metadata": {
+    "description": "Agent skills for Symphony orchestration workflows",
+    "version": "1.0.0",
+    "pluginRoot": "./plugins"
+  },
+  "plugins": [
+    {
+      "name": "symphony-agent-skills",
+      "source": "./plugins/symphony-agent-skills",
+      "description": "Core agent skills for Symphony workflows: commit, push, pull, land, and Linear integration",
+      "version": "1.0.0"
+    }
+  ]
+}

@@ -7,6 +7,8 @@ REPO="markoinla/symphony"
 BRANCH="main"
 INSTALL_DIR="/opt/symphony"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
+SEED_DIR="${INSTALL_DIR}/plugin-seed"
+PLUGIN_VERSION="1.0.0"
 
 # ── Colors ──────────────────────────────────────────────────────────────────────
 
@@ -37,6 +39,9 @@ handle_update() {
   curl -fsSL "${RAW_BASE}/deploy/Caddyfile" -o "${INSTALL_DIR}/Caddyfile"
   info "Updated Caddyfile"
 
+  install_skills
+  info "Updated agent skills"
+
   docker compose -f docker-compose.prod.yml pull
   docker compose -f docker-compose.prod.yml up -d
   info "Symphony updated successfully."
@@ -65,17 +70,6 @@ handle_uninstall() {
   info "Symphony has been uninstalled."
   exit 0
 }
-
-# ── Parse flags ─────────────────────────────────────────────────────────────────
-
-for arg in "$@"; do
-  case "$arg" in
-    --update)         handle_update ;;
-    --reset-password) handle_reset_password ;;
-    --uninstall)      handle_uninstall ;;
-    *)                err "Unknown flag: $arg"; exit 1 ;;
-  esac
-done
 
 # ── Root check ──────────────────────────────────────────────────────────────────
 
@@ -172,6 +166,59 @@ download_files() {
   info "Downloaded Caddyfile"
 }
 
+# ── Agent skills (plugin seed) ────────────────────────────────────────────────
+
+install_skills() {
+  header "Agent skills"
+
+  local PLUGIN_BASE="plugins/symphony-agent-skills"
+  local CACHE_DIR="${SEED_DIR}/cache/symphony-skills/symphony-agent-skills/${PLUGIN_VERSION}"
+  local MARKETPLACE_DIR="${SEED_DIR}/marketplaces/symphony-skills"
+
+  mkdir -p "${CACHE_DIR}/skills/commit"
+  mkdir -p "${CACHE_DIR}/skills/push"
+  mkdir -p "${CACHE_DIR}/skills/pull"
+  mkdir -p "${CACHE_DIR}/skills/land"
+  mkdir -p "${CACHE_DIR}/skills/linear"
+  mkdir -p "${CACHE_DIR}/.claude-plugin"
+  mkdir -p "${MARKETPLACE_DIR}/.claude-plugin"
+
+  # Download plugin manifest
+  curl -fsSL "${RAW_BASE}/${PLUGIN_BASE}/.claude-plugin/plugin.json" \
+    -o "${CACHE_DIR}/.claude-plugin/plugin.json"
+
+  # Download skill files
+  local SKILLS=(commit push pull linear)
+  for skill in "${SKILLS[@]}"; do
+    curl -fsSL "${RAW_BASE}/${PLUGIN_BASE}/skills/${skill}/SKILL.md" \
+      -o "${CACHE_DIR}/skills/${skill}/SKILL.md"
+  done
+
+  # Land skill has SKILL.md + land_watch.py
+  curl -fsSL "${RAW_BASE}/${PLUGIN_BASE}/skills/land/SKILL.md" \
+    -o "${CACHE_DIR}/skills/land/SKILL.md"
+  curl -fsSL "${RAW_BASE}/${PLUGIN_BASE}/skills/land/land_watch.py" \
+    -o "${CACHE_DIR}/skills/land/land_watch.py"
+
+  # Download marketplace definition
+  curl -fsSL "${RAW_BASE}/.claude-plugin/marketplace.json" \
+    -o "${MARKETPLACE_DIR}/.claude-plugin/marketplace.json"
+
+  # Write known_marketplaces.json
+  cat > "${SEED_DIR}/known_marketplaces.json" <<'SEED_EOF'
+{
+  "symphony-skills": {
+    "source": {
+      "source": "github",
+      "repo": "markoinla/symphony"
+    }
+  }
+}
+SEED_EOF
+
+  info "Installed agent skills (v${PLUGIN_VERSION})"
+}
+
 # ── Generate .env ───────────────────────────────────────────────────────────────
 
 generate_env() {
@@ -198,6 +245,7 @@ POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
 SYMPHONY_SECRET_KEY_BASE=${SECRET_KEY_BASE}
 DATABASE_URL=ecto://symphony:${POSTGRES_PASSWORD}@postgres:5432/symphony
 SYMPHONY_PROXY_REGISTRATION_SECRET=zy9eWdmJ6nWHrFF1WL0u2tLEqbh7FpqpZHzlJy5HC64=
+CLAUDE_CODE_PLUGIN_SEED_DIR=${SEED_DIR}
 EOF
 
   info "Generated .env at ${INSTALL_DIR}/.env"
@@ -231,6 +279,17 @@ print_success() {
   echo ""
 }
 
+# ── Parse flags ─────────────────────────────────────────────────────────────────
+
+for arg in "$@"; do
+  case "$arg" in
+    --update)         handle_update ;;
+    --reset-password) handle_reset_password ;;
+    --uninstall)      handle_uninstall ;;
+    *)                err "Unknown flag: $arg"; exit 1 ;;
+  esac
+done
+
 # ── Main ────────────────────────────────────────────────────────────────────────
 
 main() {
@@ -243,6 +302,7 @@ main() {
   install_claude
   install_gh
   download_files
+  install_skills
   generate_env
   start_services
   print_success
