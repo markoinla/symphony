@@ -168,10 +168,12 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
       assert SymphonyElixir.AgentSession.active?(issue_id)
 
       payload = %{
-        "data" => %{
+        "agentSession" => %{
           "id" => agent_session_id
         },
-        "signal" => "stop"
+        "agentActivity" => %{
+          "signal" => "stop"
+        }
       }
 
       assert :ok = WebhookDispatcher.dispatch_prompted(payload)
@@ -185,11 +187,10 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
 
     test "non-stop signal proceeds with normal prompt injection" do
       payload = %{
-        "data" => %{
-          "id" => "nonexistent-session",
-          "agentActivity" => %{"body" => "Do something"}
+        "agentSession" => %{
+          "id" => "nonexistent-session"
         },
-        "signal" => nil
+        "agentActivity" => %{"body" => "Do something"}
       }
 
       # Without a stop signal, it proceeds with normal flow (and fails because session doesn't exist)
@@ -198,10 +199,12 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
 
     test "stop signal returns error when no session exists" do
       payload = %{
-        "data" => %{
+        "agentSession" => %{
           "id" => "nonexistent-session"
         },
-        "signal" => "stop"
+        "agentActivity" => %{
+          "signal" => "stop"
+        }
       }
 
       assert {:error, :session_not_found} = WebhookDispatcher.dispatch_prompted(payload)
@@ -242,6 +245,53 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
     end
   end
 
+  describe "dispatch_created skip_labels" do
+    test "skips dispatch when issue has a configured skip label" do
+      issue_id = "test-skip-#{System.unique_integer([:positive])}"
+
+      # Re-write workflow with skip_labels configured
+      workflow_path = Workflow.workflow_file_paths() |> List.first()
+      write_workflow_file!(workflow_path, tracker_skip_labels: ["needs-human-review", "reviewed-by-agent"])
+
+      # Use a stub that returns an issue with the skip label
+      Application.put_env(:symphony_elixir, :linear_client_module, __MODULE__.SkipLabelStubClient)
+
+      payload = %{
+        "data" => %{
+          "id" => "agent-sess-skip-#{System.unique_integer([:positive])}",
+          "issueId" => issue_id
+        }
+      }
+
+      assert {:error, :skip_label} = WebhookDispatcher.dispatch_created(payload)
+
+      # Issue claim should have been released
+      refute issue_id in Store.list_claimed_issue_ids()
+    end
+
+    test "dispatches normally when issue has no skip labels" do
+      issue_id = "test-no-skip-#{System.unique_integer([:positive])}"
+
+      workflow_path = Workflow.workflow_file_paths() |> List.first()
+      write_workflow_file!(workflow_path, tracker_skip_labels: ["needs-human-review", "reviewed-by-agent"])
+
+      Application.put_env(:symphony_elixir, :linear_client_module, __MODULE__.NoSkipLabelStubClient)
+
+      # Pre-claim so the second call hits the already_claimed branch (avoids spawning a real agent)
+      Store.claim_issue(issue_id, "orchestrator")
+
+      payload = %{
+        "data" => %{
+          "id" => "agent-sess-noskip-#{System.unique_integer([:positive])}",
+          "issueId" => issue_id
+        }
+      }
+
+      # Should succeed (not blocked by skip labels); already-claimed path returns :ok
+      assert :ok = WebhookDispatcher.dispatch_created(payload)
+    end
+  end
+
   defmodule StubClient do
     def graphql(_query, _variables) do
       {:ok, %{"data" => %{"createAgentActivity" => %{"success" => true}}}}
@@ -249,6 +299,54 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
 
     def fetch_issue_states_by_ids(_ids) do
       {:ok, []}
+    end
+  end
+
+  defmodule SkipLabelStubClient do
+    alias SymphonyElixir.Linear.Issue
+
+    def graphql(_query, _variables) do
+      {:ok, %{"data" => %{"createAgentActivity" => %{"success" => true}}}}
+    end
+
+    def fetch_issue_states_by_ids(ids) do
+      issues =
+        Enum.map(ids, fn id ->
+          %Issue{
+            id: id,
+            identifier: "TEST-1",
+            title: "Test issue",
+            state: "Human Review",
+            labels: ["needs-human-review"],
+            comments: []
+          }
+        end)
+
+      {:ok, issues}
+    end
+  end
+
+  defmodule NoSkipLabelStubClient do
+    alias SymphonyElixir.Linear.Issue
+
+    def graphql(_query, _variables) do
+      {:ok, %{"data" => %{"createAgentActivity" => %{"success" => true}}}}
+    end
+
+    def fetch_issue_states_by_ids(ids) do
+      issues =
+        Enum.map(ids, fn id ->
+          %Issue{
+            id: id,
+            identifier: "TEST-2",
+            title: "Test issue no skip",
+            state: "Human Review",
+            labels: ["some-other-label"],
+            comments: []
+          }
+        end)
+
+      {:ok, issues}
     end
   end
 end

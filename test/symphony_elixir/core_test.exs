@@ -676,6 +676,45 @@ defmodule SymphonyElixir.CoreTest do
     assert SymphonyElixir.Store.list_claimed_issue_ids() == MapSet.new()
   end
 
+  test "issue with skip label is not dispatched" do
+    workflow_path = Workflow.workflow_file_paths() |> List.first()
+
+    write_workflow_file!(workflow_path,
+      tracker_skip_labels: ["reviewed-by-agent", "needs-human-review"]
+    )
+
+    state = %Orchestrator.State{
+      running: %{},
+      retry_attempts: %{},
+      cooldowns: %{},
+      poll_interval_ms: 30_000,
+      poll_check_in_progress: false,
+      workflow_name: Workflow.default_workflow_name()
+    }
+
+    skip_issue = %Issue{
+      id: "issue-skip-label",
+      identifier: "MT-SKIP",
+      state: "Todo",
+      title: "Has skip label",
+      description: "Should not dispatch",
+      labels: ["needs-human-review"]
+    }
+
+    refute Orchestrator.should_dispatch_issue_for_test(skip_issue, state)
+
+    clean_issue = %Issue{
+      id: "issue-no-skip-label",
+      identifier: "MT-NOSKIP",
+      state: "Todo",
+      title: "No skip label",
+      description: "Should dispatch",
+      labels: ["some-other-label"]
+    }
+
+    assert Orchestrator.should_dispatch_issue_for_test(clean_issue, state)
+  end
+
   test "abnormal worker exit increments retry attempt progressively" do
     issue_id = "issue-crash"
     ref = make_ref()

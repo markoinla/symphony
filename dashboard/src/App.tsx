@@ -120,7 +120,12 @@ function RootLayout() {
   const authQuery = useQuery({
     queryKey: ['auth-status'],
     queryFn: getAuthStatus,
-    retry: false,
+    retry: (failureCount, error) => {
+      // Don't retry auth failures, but keep retrying network errors (backend not up yet)
+      if (error instanceof ApiError) return false
+      return failureCount < 10
+    },
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10_000),
     staleTime: 30_000,
   })
 
@@ -139,6 +144,15 @@ function RootLayout() {
 
   if (isPublicPage) {
     return <Outlet />
+  }
+
+  // Don't render child routes until auth resolves — prevents query spam when backend is starting
+  if (authQuery.isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-th-bg text-th-text-4">
+        <p className="text-sm">Connecting...</p>
+      </div>
+    )
   }
 
   const handleLogout = async () => {

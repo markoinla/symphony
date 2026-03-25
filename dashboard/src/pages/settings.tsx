@@ -9,6 +9,7 @@ import {
   Key,
   Link2,
   Lock,
+  Radio,
   Settings,
   Sliders,
   Trash2,
@@ -17,6 +18,7 @@ import {
 
 import {
   type AgentSettingsDefaults,
+  type ProxyPingResult,
   type Setting,
   changePassword,
   deleteSetting,
@@ -24,7 +26,11 @@ import {
   getGitHubOAuthStatus,
   getOAuthAuthorizeUrl,
   getOAuthStatus,
+  getProxyStatus,
   getSettings,
+  pollGitHubProxyOAuth,
+  pollLinearProxyOAuth,
+  proxyPing,
   revokeGitHubOAuth,
   revokeOAuth,
   upsertSetting,
@@ -103,6 +109,34 @@ function buildAgentSettingDrafts(
   )
 }
 
+function startPolling(
+  pollFn: () => Promise<{ status: string }>,
+  onComplete: () => void,
+  onError: (error: string) => void,
+  intervalMs = 2000,
+  maxAttempts = 150,
+) {
+  let attempts = 0
+  const timer = setInterval(async () => {
+    attempts++
+    if (attempts > maxAttempts) {
+      clearInterval(timer)
+      onError('OAuth flow timed out.')
+      return
+    }
+    try {
+      const result = await pollFn()
+      if (result.status === 'complete') {
+        clearInterval(timer)
+        onComplete()
+      }
+    } catch {
+      clearInterval(timer)
+      onError('OAuth flow expired or failed.')
+    }
+  }, intervalMs)
+}
+
 export function SettingsView() {
   return (
     <div className="space-y-6">
@@ -138,6 +172,7 @@ export function SettingsView() {
             <LinearApiKeySection />
             <LinearOAuthSection />
             <GitHubOAuthSection />
+            <ProxySection />
             <DomainSection />
           </div>
         </TabsContent>
@@ -281,6 +316,7 @@ function LinearOAuthSection() {
   const oauthStatus = statusQuery.data?.status ?? 'disconnected'
   const credentialsSource = statusQuery.data?.credentials_source ?? 'none'
   const credentialsFromEnv = credentialsSource === 'env'
+  const proxyAvailable = statusQuery.data?.proxy_available ?? false
 
   const initialFeedback = useMemo(() => {
     const params = new URLSearchParams(window.location.search)
@@ -317,9 +353,27 @@ function LinearOAuthSection() {
     onError: (error: unknown) => setFeedback(formatQueryError(error)),
   })
 
+  const [polling, setPolling] = useState(false)
+
   const connectMutation = useMutation({
     mutationFn: getOAuthAuthorizeUrl,
-    onSuccess: (data) => { window.location.href = data.authorize_url },
+    onSuccess: (data) => {
+      if (data.flow === 'proxy') {
+        window.open(data.authorize_url, '_blank')
+        setPolling(true)
+        startPolling(pollLinearProxyOAuth, () => {
+          setPolling(false)
+          setFeedback('Successfully connected to Linear via proxy.')
+          void queryClient.invalidateQueries({ queryKey: ['oauth-status'] })
+          void queryClient.invalidateQueries({ queryKey: ['settings'] })
+        }, (error) => {
+          setPolling(false)
+          setFeedback(typeof error === 'string' ? error : 'Proxy OAuth flow failed.')
+        })
+      } else {
+        window.location.href = data.authorize_url
+      }
+    },
     onError: (error: unknown) => setFeedback(formatQueryError(error)),
   })
 
@@ -356,6 +410,12 @@ function LinearOAuthSection() {
       </CardHeader>
 
       {feedback ? <FeedbackBanner message={feedback} /> : null}
+
+      {polling ? (
+        <div className="rounded-lg border border-th-border bg-th-inset p-4 text-sm text-th-text-2">
+          Waiting for authorization in browser tab... Complete the OAuth flow and this will update automatically.
+        </div>
+      ) : null}
 
       {oauthStatus === 'connected' || oauthStatus === 'expired' ? (
         <div className="rounded-lg border border-th-border bg-th-inset p-4">
@@ -395,11 +455,15 @@ function LinearOAuthSection() {
             </div>
           </div>
         </div>
-      ) : credentialsFromEnv ? (
+      ) : credentialsFromEnv || proxyAvailable ? (
         <div className="rounded-lg border border-th-border bg-th-inset p-4">
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-1 text-sm text-th-text-2">
-              <div className="text-xs text-th-text-4">Credentials: via environment variable</div>
+              {credentialsFromEnv ? (
+                <div className="text-xs text-th-text-4">Credentials: via environment variable</div>
+              ) : (
+                <div className="text-xs text-th-text-4">Credentials: via proxy</div>
+              )}
             </div>
             <Button
               disabled={connectMutation.isPending}
@@ -477,6 +541,7 @@ function GitHubOAuthSection() {
   const oauthStatus = statusQuery.data?.status ?? 'disconnected'
   const credentialsSource = statusQuery.data?.credentials_source ?? 'none'
   const credentialsFromEnv = credentialsSource === 'env'
+  const proxyAvailable = statusQuery.data?.proxy_available ?? false
 
   const initialFeedback = useMemo(() => {
     const params = new URLSearchParams(window.location.search)
@@ -513,9 +578,27 @@ function GitHubOAuthSection() {
     onError: (error: unknown) => setFeedback(formatQueryError(error)),
   })
 
+  const [polling, setPolling] = useState(false)
+
   const connectMutation = useMutation({
     mutationFn: getGitHubOAuthAuthorizeUrl,
-    onSuccess: (data) => { window.location.href = data.authorize_url },
+    onSuccess: (data) => {
+      if (data.flow === 'proxy') {
+        window.open(data.authorize_url, '_blank')
+        setPolling(true)
+        startPolling(pollGitHubProxyOAuth, () => {
+          setPolling(false)
+          setFeedback('Successfully connected to GitHub via proxy.')
+          void queryClient.invalidateQueries({ queryKey: ['github-oauth-status'] })
+          void queryClient.invalidateQueries({ queryKey: ['settings'] })
+        }, (error) => {
+          setPolling(false)
+          setFeedback(typeof error === 'string' ? error : 'Proxy OAuth flow failed.')
+        })
+      } else {
+        window.location.href = data.authorize_url
+      }
+    },
     onError: (error: unknown) => setFeedback(formatQueryError(error)),
   })
 
@@ -553,6 +636,12 @@ function GitHubOAuthSection() {
 
       {feedback ? <FeedbackBanner message={feedback} /> : null}
 
+      {polling ? (
+        <div className="rounded-lg border border-th-border bg-th-inset p-4 text-sm text-th-text-2">
+          Waiting for authorization in browser tab... Complete the OAuth flow and this will update automatically.
+        </div>
+      ) : null}
+
       {oauthStatus === 'connected' || oauthStatus === 'expired' ? (
         <div className="rounded-lg border border-th-border bg-th-inset p-4">
           <div className="flex items-center justify-between gap-4">
@@ -586,11 +675,15 @@ function GitHubOAuthSection() {
             </div>
           </div>
         </div>
-      ) : credentialsFromEnv ? (
+      ) : credentialsFromEnv || proxyAvailable ? (
         <div className="rounded-lg border border-th-border bg-th-inset p-4">
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-1 text-sm text-th-text-2">
-              <div className="text-xs text-th-text-4">Credentials: via environment variable</div>
+              {credentialsFromEnv ? (
+                <div className="text-xs text-th-text-4">Credentials: via environment variable</div>
+              ) : (
+                <div className="text-xs text-th-text-4">Credentials: via proxy</div>
+              )}
             </div>
             <Button
               disabled={connectMutation.isPending}
@@ -1033,6 +1126,132 @@ function ChangePasswordSection() {
           {mutation.isPending ? 'Changing...' : 'Change password'}
         </Button>
       </form>
+    </Card>
+  )
+}
+
+function ProxySection() {
+  const queryClient = useQueryClient()
+  const proxyQuery = useQuery({ queryKey: ['proxy-status'], queryFn: getProxyStatus })
+
+  const proxyEnabled = proxyQuery.data?.enabled ?? true
+
+  const [feedback, setFeedback] = useState<string | null>(null)
+  const [pingResult, setPingResult] = useState<ProxyPingResult | null>(null)
+
+  const toggleMutation = useMutation({
+    mutationFn: async (enabled: boolean) => {
+      await upsertSetting('proxy.enabled', enabled ? 'true' : 'false')
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      await queryClient.invalidateQueries({ queryKey: ['proxy-status'] })
+      setFeedback(proxyEnabled ? 'Proxy disabled.' : 'Proxy enabled.')
+      setPingResult(null)
+    },
+    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+  })
+
+  const pingMutation = useMutation({
+    mutationFn: proxyPing,
+    onSuccess: (data) => {
+      setPingResult(data)
+      setFeedback(null)
+    },
+    onError: (error: unknown) => {
+      setFeedback(formatQueryError(error))
+      setPingResult(null)
+    },
+  })
+
+  return (
+    <Card className="space-y-4">
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Radio className="h-4 w-4 text-th-text-3" />
+          <CardTitle>OAuth &amp; Webhook Proxy</CardTitle>
+          {proxyEnabled ? <Badge tone="running">Enabled</Badge> : <Badge tone="neutral">Disabled</Badge>}
+        </div>
+        <CardDescription>
+          Route OAuth flows and Linear webhooks through a Cloudflare Worker proxy. Required when Symphony is behind NAT or lacks a public URL.
+        </CardDescription>
+      </CardHeader>
+
+      {feedback ? <FeedbackBanner message={feedback} /> : null}
+
+      <div className="flex items-center gap-3">
+        <Button
+          disabled={toggleMutation.isPending}
+          onClick={() => {
+            setFeedback(null)
+            setPingResult(null)
+            void toggleMutation.mutateAsync(!proxyEnabled)
+          }}
+          size="sm"
+          type="button"
+          variant={proxyEnabled ? 'danger' : 'secondary'}
+        >
+          {proxyEnabled ? 'Disable proxy' : 'Enable proxy'}
+        </Button>
+        <Button
+          disabled={pingMutation.isPending}
+          onClick={() => {
+            setFeedback(null)
+            setPingResult(null)
+            void pingMutation.mutateAsync()
+          }}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
+          {pingMutation.isPending ? 'Testing...' : 'Test connectivity'}
+        </Button>
+      </div>
+
+      {pingResult ? (
+        <div className="space-y-2">
+          <div className={`flex items-center gap-2 rounded-lg border px-4 py-3 text-sm ${pingResult.proxy.ok ? 'border-th-success/30 bg-th-success/5 text-th-success' : 'border-th-danger/30 bg-th-danger/5 text-th-danger'}`}>
+            <span>{pingResult.proxy.ok ? 'Pass' : 'Fail'}:</span>
+            <span>{pingResult.proxy.ok ? 'Proxy is reachable' : `Proxy unreachable — ${pingResult.proxy.error ?? 'unknown error'}`}</span>
+          </div>
+          <div className={`flex items-center gap-2 rounded-lg border px-4 py-3 text-sm ${pingResult.webhook.ok ? 'border-th-success/30 bg-th-success/5 text-th-success' : 'border-th-danger/30 bg-th-danger/5 text-th-danger'}`}>
+            <span>{pingResult.webhook.ok ? 'Pass' : 'Fail'}:</span>
+            <span>
+              {pingResult.webhook.ok
+                ? 'Proxy can reach this instance — webhook forwarding will work'
+                : pingResult.webhook.registered === false
+                  ? 'No instance registered with proxy. Connect Linear OAuth or set a domain first.'
+                  : `Proxy cannot reach this instance — ${pingResult.webhook.error ?? 'unknown error'}`}
+            </span>
+          </div>
+          {!pingResult.webhook.ok && pingResult.webhook.registered !== false ? (
+            <p className="text-xs text-th-text-4">
+              Webhook forwarding requires a publicly accessible URL. If you are behind NAT, use a tunnel (e.g. cloudflared) and set the tunnel URL as your domain above.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="space-y-3">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Instance URL">
+            <p className="text-sm text-th-text-2">
+              {proxyQuery.data?.instance_url || <span className="text-th-text-4">Not resolved yet</span>}
+            </p>
+            <p className="mt-1 text-xs text-th-text-4">
+              Resolved from public base URL or server IP. Set in the Domain section above.
+            </p>
+          </Field>
+          <Field label="Linear Organization ID">
+            <p className="text-sm text-th-text-2">
+              {proxyQuery.data?.linear_org_id || <span className="text-th-text-4">Automatically set after Linear OAuth</span>}
+            </p>
+            <p className="mt-1 text-xs text-th-text-4">
+              Synced automatically when you connect Linear.
+            </p>
+          </Field>
+        </div>
+      </div>
     </Card>
   )
 }

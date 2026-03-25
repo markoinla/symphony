@@ -8,9 +8,8 @@ defmodule SymphonyElixir.Linear.ActivityMapper do
 
   @spec map_event(map()) :: map() | nil
 
-  def map_event(%{event: :session_started}) do
-    %{type: "thought", body: "Starting session...", ephemeral: true}
-  end
+  # :session_started is handled directly by WebhookDispatcher.emit_initial_thought/2
+  def map_event(%{event: :session_started}), do: nil
 
   def map_event(%{event: :notification} = msg) do
     method = get_method(msg)
@@ -40,7 +39,7 @@ defmodule SymphonyElixir.Linear.ActivityMapper do
       |> maybe_append(turns, &"Turns: #{&1}")
       |> Enum.join(" | ")
 
-    %{type: "response", body: body}
+    %{type: "thought", body: body}
   end
 
   def map_event(%{event: :turn_failed} = msg) do

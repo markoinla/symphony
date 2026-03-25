@@ -1,0 +1,30 @@
+name = "oauth-proxy"
+main = "src/index.ts"
+compatibility_date = "2025-03-24"
+
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "82fdd2ec66b8455bb8831d87be4d5941"
+
+# Secrets (set via `wrangler secret put`):
+#   LINEAR_CLIENT_ID
+#   LINEAR_CLIENT_SECRET
+#   GITHUB_CLIENT_ID
+#   GITHUB_CLIENT_SECRET
+#   LINEAR_WEBHOOK_SIGNING_SECRET
+#   REGISTRATION_SECRET
+
+[env.dev]
+name = "oauth-proxy-dev"
+
+[[env.dev.kv_namespaces]]
+binding = "OAUTH_KV"
+id = "9e39ac6451374549a29641fa8618294c"
+
+# Dev secrets (set via `wrangler secret put SECRET_NAME --env dev`):
+#   LINEAR_CLIENT_ID
+#   LINEAR_CLIENT_SECRET
+#   GITHUB_CLIENT_ID
+#   GITHUB_CLIENT_SECRET
+#   LINEAR_WEBHOOK_SIGNING_SECRET
+#   REGISTRATION_SECRET

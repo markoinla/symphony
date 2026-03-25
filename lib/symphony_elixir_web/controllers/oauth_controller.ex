@@ -8,11 +8,22 @@ defmodule SymphonyElixirWeb.OAuthController do
 
   use Phoenix.Controller, formats: [:json]
 
+  require Logger
+
   alias Plug.Conn
-  alias SymphonyElixir.Linear.OAuth
+  alias SymphonyElixir.Linear.{Client, OAuth}
+  alias SymphonyElixir.{ProxyClient, Store}
 
   @spec authorize(Conn.t(), map()) :: Conn.t()
   def authorize(conn, _params) do
+    if ProxyClient.proxy_enabled?() do
+      authorize_via_proxy(conn)
+    else
+      authorize_direct(conn)
+    end
+  end
+
+  defp authorize_direct(conn) do
     state = :crypto.strong_rand_bytes(32) |> Base.url_encode64(padding: false)
     redirect_uri = build_redirect_uri(conn)
 
@@ -20,10 +31,18 @@ defmodule SymphonyElixirWeb.OAuthController do
 
     case OAuth.authorize_url(state, redirect_uri) do
       {:ok, url} ->
-        json(conn, %{authorize_url: url})
+        json(conn, %{authorize_url: url, flow: "direct"})
 
       {:error, :missing_client_id} ->
         error_response(conn, 422, "missing_client_id", "Linear OAuth client ID is not configured. Save it in settings first.")
+    end
+  end
+
+  defp authorize_via_proxy(conn) do
+    case ProxyClient.start_oauth_flow(:linear) do
+      {:ok, %{url: url, state: state, code_verifier: code_verifier}} ->
+        :ok = ProxyClient.store_pending_flow(:linear, state, code_verifier)
+        json(conn, %{authorize_url: url, state: state, flow: "proxy"})
     end
   end
 
@@ -35,6 +54,8 @@ defmodule SymphonyElixirWeb.OAuthController do
          {:ok, state} <- fetch_param(params, "state"),
          :ok <- OAuth.validate_state(state),
          {:ok, _token_data} <- OAuth.exchange_code(code, redirect_uri) do
+      sync_linear_org_id()
+      maybe_register_instance()
       do_redirect(conn, "/settings?oauth=success")
     else
       {:error, :missing_param} ->
@@ -57,8 +78,77 @@ defmodule SymphonyElixirWeb.OAuthController do
     json(conn, %{
       status: Atom.to_string(status),
       expires_at: expires_at,
-      credentials_source: Atom.to_string(OAuth.credentials_source())
+      credentials_source: Atom.to_string(OAuth.credentials_source()),
+      proxy_available: ProxyClient.proxy_enabled?()
     })
+  end
+
+  @spec proxy_poll(Conn.t(), map()) :: Conn.t()
+  def proxy_poll(conn, _params) do
+    case ProxyClient.get_pending_flow(:linear) do
+      {:ok, state, code_verifier} ->
+        case ProxyClient.poll_token(state, code_verifier) do
+          {:ok, tokens} ->
+            ProxyClient.clear_pending_flow(:linear)
+            store_proxy_tokens(tokens)
+            sync_linear_org_id()
+            maybe_register_instance()
+            json(conn, %{status: "complete"})
+
+          {:pending} ->
+            json(conn, %{status: "pending"})
+
+          {:expired} ->
+            ProxyClient.clear_pending_flow(:linear)
+            error_response(conn, 410, "expired", "OAuth flow expired. Please try again.")
+
+          {:error, reason} ->
+            error_response(conn, 502, "poll_failed", "Token poll failed: #{inspect(reason)}")
+        end
+
+      {:error, :no_pending_flow} ->
+        error_response(conn, 404, "no_pending_flow", "No proxy OAuth flow in progress.")
+    end
+  end
+
+  defp store_proxy_tokens(%{access_token: access_token} = tokens) do
+    token_data =
+      %{"access_token" => access_token}
+      |> then(fn m -> if tokens.refresh_token, do: Map.put(m, "refresh_token", tokens.refresh_token), else: m end)
+      |> then(fn m ->
+        if tokens.expires_at do
+          now = DateTime.utc_now() |> DateTime.to_unix()
+          Map.put(m, "expires_in", max(tokens.expires_at - now, 0))
+        else
+          m
+        end
+      end)
+
+    OAuth.store_tokens(token_data)
+  end
+
+  defp sync_linear_org_id do
+    case Client.fetch_organization_id() do
+      {:ok, org_id} ->
+        Store.put_setting("proxy.linear_org_id", org_id)
+        Logger.info("Synced Linear organization ID: #{org_id}")
+
+      {:error, reason} ->
+        Logger.warning("Failed to fetch Linear organization ID: #{inspect(reason)}")
+    end
+  end
+
+  defp maybe_register_instance do
+    base_url = SymphonyElixir.resolve_public_base_url()
+    org_id = Store.get_setting("proxy.linear_org_id")
+
+    if is_binary(base_url) and is_binary(org_id) and org_id != "" do
+      Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
+        ProxyClient.register_instance(base_url, org_id)
+      end)
+    end
+
+    :ok
   end
 
   @spec revoke(Conn.t(), map()) :: Conn.t()

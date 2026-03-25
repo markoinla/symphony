@@ -1,0 +1,9 @@
+{
+  "name": "symphony-agent-skills",
+  "description": "Core agent skills for Symphony workflows: commit, push, pull, land, and Linear integration",
+  "version": "1.0.0",
+  "author": {
+    "name": "Symphony"
+  },
+  "keywords": ["symphony", "agent", "workflow", "git", "linear"]
+}

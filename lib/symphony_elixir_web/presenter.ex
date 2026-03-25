@@ -18,9 +18,6 @@ defmodule SymphonyElixirWeb.Presenter do
 
       {:error, :timeout} ->
         %{generated_at: generated_at, error: %{code: "snapshot_timeout", message: "Snapshot timed out"}}
-
-      {:error, :unavailable} ->
-        %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
     end
   end
 
@@ -115,7 +112,8 @@ defmodule SymphonyElixirWeb.Presenter do
         if Enum.any?(snapshots, &match?({:timeout, _workflow_name}, &1)) do
           {:error, :timeout}
         else
-          {:error, :unavailable}
+          # No orchestrators registered yet (e.g. during startup) — return empty
+          {:ok, [{nil, empty_snapshot()}]}
         end
 
       ok_snapshots ->
@@ -125,6 +123,15 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp orchestrator_sources(orchestrator) when is_list(orchestrator), do: orchestrator
   defp orchestrator_sources(orchestrator), do: [{nil, orchestrator}]
+
+  defp empty_snapshot do
+    %{
+      running: [],
+      retrying: [],
+      engine_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      rate_limits: %{}
+    }
+  end
 
   defp request_refresh_results(orchestrator) do
     orchestrator_sources(orchestrator)
@@ -511,6 +518,11 @@ defmodule SymphonyElixirWeb.Presenter do
     github_oauth.refresh_token
     github_oauth.client_secret
     github_oauth.state
+    proxy.registration_secret
+    proxy_oauth.linear.state
+    proxy_oauth.linear.code_verifier
+    proxy_oauth.github.state
+    proxy_oauth.github.code_verifier
   )
 
   @spec settings_payload() :: map()

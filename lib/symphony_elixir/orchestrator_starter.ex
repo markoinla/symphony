@@ -25,7 +25,7 @@ defmodule SymphonyElixir.OrchestratorStarter do
     Process.monitor(SymphonyElixir.OrchestratorSupervisor)
     ObservabilityPubSub.subscribe_projects()
     ObservabilityPubSub.subscribe_agents()
-    ensure_orchestrators()
+    send(self(), :ensure_orchestrators)
     schedule_reconcile()
     {:ok, %{}}
   end
@@ -70,6 +70,12 @@ defmodule SymphonyElixir.OrchestratorStarter do
   @impl true
   def handle_info(:agents_changed, state) do
     Logger.info("Agents changed, reconciling orchestrators")
+    ensure_orchestrators()
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_info(:ensure_orchestrators, state) do
     ensure_orchestrators()
     {:noreply, state}
   end

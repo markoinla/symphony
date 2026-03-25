@@ -64,4 +64,24 @@ defmodule SymphonyElixir.Linear.Issue do
   def label_names(%__MODULE__{labels: labels}) do
     labels
   end
+
+  @doc """
+  Returns true if the issue carries any of the given label names.
+
+  Both the issue's labels and the provided names are downcased for comparison.
+  """
+  @spec has_any_label?(t(), [String.t()]) :: boolean()
+  def has_any_label?(%__MODULE__{labels: labels}, skip_labels)
+      when is_list(labels) and is_list(skip_labels) do
+    case skip_labels do
+      [] ->
+        false
+
+      _ ->
+        normalized = MapSet.new(skip_labels, &String.downcase(String.trim(&1)))
+        Enum.any?(labels, &(String.downcase(String.trim(&1)) in normalized))
+    end
+  end
+
+  def has_any_label?(_, _), do: false
 end

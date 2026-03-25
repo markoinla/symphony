@@ -58,3 +58,12 @@ status.txt
 
 # Ignore package tarball (built via "mix hex.build").
 symphony_elixir-*.tar
+
+# Cloudflare Workers.
+workers/*/node_modules/
+workers/*/.wrangler/
+
+# Root-level Wrangler/miniflare state (from running wrangler dev at repo root).
+.wrangler/
+node_modules/.cache/
+node_modules/.mf/

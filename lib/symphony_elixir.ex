@@ -11,6 +11,56 @@ defmodule SymphonyElixir do
     workflow_name = Keyword.get(opts, :workflow_name, SymphonyElixir.Workflow.default_workflow_name())
     SymphonyElixir.Orchestrator.start_link(Keyword.put(opts, :workflow_name, workflow_name))
   end
+
+  @doc """
+  Resolves the public base URL for this Symphony instance.
+
+  Resolution order: `symphony_public_base_url` DB setting →
+  `SYMPHONY_PUBLIC_BASE_URL` env var → auto-detected local IP.
+  """
+  @spec resolve_public_base_url() :: String.t() | nil
+  def resolve_public_base_url do
+    with nil <- non_blank_setting("symphony_public_base_url"),
+         nil <- non_blank_env("SYMPHONY_PUBLIC_BASE_URL"),
+         nil <- detect_ip_url() do
+      nil
+    else
+      url -> String.trim_trailing(url, "/")
+    end
+  end
+
+  defp non_blank_setting(key) do
+    case SymphonyElixir.Store.get_setting(key) do
+      val when is_binary(val) and val != "" -> val
+      _ -> nil
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp non_blank_env(key) do
+    case System.get_env(key) do
+      val when is_binary(val) and val != "" -> val
+      _ -> nil
+    end
+  end
+
+  defp detect_ip_url do
+    port = SymphonyElixir.Config.server_port()
+
+    with {:ok, ifaddrs} <- :inet.getifaddrs(),
+         [{a, b, c, d} | _] <- extract_ipv4_addrs(ifaddrs) do
+      "http://#{a}.#{b}.#{c}.#{d}:#{port}"
+    else
+      _ -> nil
+    end
+  end
+
+  defp extract_ipv4_addrs(ifaddrs) do
+    Enum.flat_map(ifaddrs, fn {_iface, opts} ->
+      for {:addr, addr} <- opts, tuple_size(addr) == 4, addr != {127, 0, 0, 1}, do: addr
+    end)
+  end
 end
 
 defmodule SymphonyElixir.Application do
@@ -19,6 +69,8 @@ defmodule SymphonyElixir.Application do
   """
 
   use Application
+
+  require Logger
 
   @impl true
   def start(_type, _args) do
@@ -55,10 +107,28 @@ defmodule SymphonyElixir.Application do
       []
     else
       [
-        SymphonyElixir.OrchestratorStarter,
         SymphonyElixir.HttpServer,
-        SymphonyElixir.StatusDashboard
+        SymphonyElixir.OrchestratorStarter,
+        SymphonyElixir.StatusDashboard,
+        {Task, &register_with_proxy/0}
       ]
+    end
+  end
+
+  defp register_with_proxy do
+    alias SymphonyElixir.{ProxyClient, Store}
+
+    with true <- ProxyClient.proxy_enabled?(),
+         instance_url when is_binary(instance_url) and instance_url != "" <-
+           SymphonyElixir.resolve_public_base_url(),
+         org_id when is_binary(org_id) and org_id != "" <-
+           Store.get_setting("proxy.linear_org_id") do
+      case ProxyClient.register_instance(instance_url, org_id) do
+        :ok -> Logger.info("Registered with proxy on startup: #{instance_url}")
+        {:error, reason} -> Logger.warning("Proxy registration on startup failed: #{inspect(reason)}")
+      end
+    else
+      _ -> Logger.debug("Skipping proxy registration (disabled, no base URL, or no org ID)")
     end
   end
 

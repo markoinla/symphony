@@ -343,14 +343,21 @@ export type OAuthStatus = {
   status: 'connected' | 'expired' | 'disconnected'
   expires_at: string | null
   credentials_source: 'env' | 'store' | 'none'
+  proxy_available: boolean
 }
 
 export function getOAuthStatus() {
   return requestJson<OAuthStatus>('/api/v1/oauth/linear/status')
 }
 
+export type OAuthAuthorizeResponse = {
+  authorize_url: string
+  flow: 'direct' | 'proxy'
+  state?: string
+}
+
 export function getOAuthAuthorizeUrl() {
-  return requestJson<{ authorize_url: string }>('/api/v1/oauth/linear/authorize')
+  return requestJson<OAuthAuthorizeResponse>('/api/v1/oauth/linear/authorize')
 }
 
 export function revokeOAuth() {
@@ -364,7 +371,7 @@ export function getGitHubOAuthStatus() {
 }
 
 export function getGitHubOAuthAuthorizeUrl() {
-  return requestJson<{ authorize_url: string }>('/api/v1/oauth/github/authorize')
+  return requestJson<OAuthAuthorizeResponse>('/api/v1/oauth/github/authorize')
 }
 
 export function revokeGitHubOAuth() {
@@ -586,6 +593,57 @@ export function changePassword(currentPassword: string, newPassword: string) {
   return requestJson<{ ok: boolean }>('/api/v1/auth/change-password', {
     method: 'POST',
     body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  })
+}
+
+// --- Proxy ---
+
+export type ProxyStatus = {
+  enabled: boolean
+  instance_url: string | null
+  linear_org_id: string | null
+}
+
+export function getProxyStatus() {
+  return requestJson<ProxyStatus>('/api/v1/proxy/status')
+}
+
+export function proxyHealthCheck() {
+  return requestJson<{ ok: boolean; error?: string }>('/api/v1/proxy/health', {
+    method: 'POST',
+  })
+}
+
+export function proxyRegister() {
+  return requestJson<{ ok: boolean }>('/api/v1/proxy/register', {
+    method: 'POST',
+  })
+}
+
+export type ProxyPingResult = {
+  proxy: { ok: boolean; error?: string }
+  webhook: { ok: boolean; registered?: boolean; instance_url?: string; error?: string }
+}
+
+export function proxyPing() {
+  return requestJson<ProxyPingResult>('/api/v1/proxy/ping', {
+    method: 'POST',
+  })
+}
+
+export type ProxyPollResponse = {
+  status: 'complete' | 'pending'
+}
+
+export function pollLinearProxyOAuth() {
+  return requestJson<ProxyPollResponse>('/api/v1/oauth/linear/proxy-poll', {
+    method: 'POST',
+  })
+}
+
+export function pollGitHubProxyOAuth() {
+  return requestJson<ProxyPollResponse>('/api/v1/oauth/github/proxy-poll', {
+    method: 'POST',
   })
 }
 

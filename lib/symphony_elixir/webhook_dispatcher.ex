@@ -9,7 +9,7 @@ defmodule SymphonyElixir.WebhookDispatcher do
   require Logger
 
   alias SymphonyElixir.{AgentSession, Config, Orchestrator, Settings, Store, Workflow}
-  alias SymphonyElixir.Linear.{AgentAPI, Client, Issue}
+  alias SymphonyElixir.Linear.{Adapter, AgentAPI, Issue}
 
   @spec dispatch_created(map(), keyword()) :: :ok | {:error, term()}
   def dispatch_created(payload, opts \\ []) when is_map(payload) do
@@ -139,7 +139,13 @@ defmodule SymphonyElixir.WebhookDispatcher do
 
     case fetch_issue(issue_id) do
       {:ok, issue} ->
-        start_agent_session_and_runner(issue, agent_session_id, prompt_context)
+        if issue_has_skip_label?(issue) do
+          Logger.info("Skipping webhook dispatch for issue_id=#{issue_id}: issue has a skip label")
+          Store.release_issue_claim(issue_id)
+          {:error, :skip_label}
+        else
+          start_agent_session_and_runner(issue, agent_session_id, prompt_context)
+        end
 
       {:error, reason} ->
         Logger.error("Failed to fetch issue #{issue_id} for webhook dispatch: #{inspect(reason)}")
@@ -241,7 +247,7 @@ defmodule SymphonyElixir.WebhookDispatcher do
   end
 
   defp fetch_issue(issue_id) do
-    case Client.fetch_issue_states_by_ids([issue_id]) do
+    case Adapter.fetch_issue_states_by_ids([issue_id]) do
       {:ok, [issue | _]} -> {:ok, issue}
       {:ok, []} -> {:error, :issue_not_found}
       {:error, reason} -> {:error, reason}
@@ -336,8 +342,20 @@ defmodule SymphonyElixir.WebhookDispatcher do
   end
 
   defp extract_signal(payload) do
-    get_in(payload, ["agentSession", "signal"]) ||
-      get_in(payload, ["data", "signal"]) ||
+    get_in(payload, ["agentActivity", "signal"]) ||
+      get_in(payload, ["data", "agentActivity", "signal"]) ||
       get_in(payload, ["signal"])
+  end
+
+  defp issue_has_skip_label?(%Issue{} = issue) do
+    {_name, config} = resolve_mention_workflow()
+
+    case config.tracker.skip_labels do
+      labels when is_list(labels) and labels != [] ->
+        Issue.has_any_label?(issue, labels)
+
+      _ ->
+        false
+    end
   end
 end

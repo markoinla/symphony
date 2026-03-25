@@ -314,6 +314,29 @@ defmodule SymphonyElixir.Linear.Client do
   }
   """
 
+  @org_query """
+  query SymphonyLinearOrg {
+    organization {
+      id
+      name
+    }
+  }
+  """
+
+  @spec fetch_organization_id() :: {:ok, String.t()} | {:error, term()}
+  def fetch_organization_id do
+    case graphql(@org_query, %{}) do
+      {:ok, %{"data" => %{"organization" => %{"id" => id}}}} when is_binary(id) ->
+        {:ok, id}
+
+      {:ok, _body} ->
+        {:error, :no_organization}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   @spec fetch_candidate_issues() :: {:ok, [Issue.t()]} | {:error, term()}
   def fetch_candidate_issues do
     tracker = Config.settings!().tracker

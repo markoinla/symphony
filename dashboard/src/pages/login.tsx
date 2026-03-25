@@ -1,20 +1,47 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useState, useRef, type FormEvent } from 'react'
 
 import { ApiError, getAuthStatus, login } from '../lib/api'
 import { Button, Card, Input } from '../components/ui'
+
+type ConnectionState = 'checking' | 'connected' | 'disconnected'
+
+function useBackendStatus() {
+  const [state, setState] = useState<ConnectionState>('checking')
+  const retryRef = useRef(0)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function check() {
+      try {
+        const status = await getAuthStatus()
+        if (cancelled) return
+        setState('connected')
+        retryRef.current = 0
+        if (!status.auth_required) {
+          window.location.href = '/setup'
+        }
+      } catch {
+        if (cancelled) return
+        setState('disconnected')
+        const delay = Math.min(1000 * 2 ** retryRef.current, 5_000)
+        retryRef.current++
+        setTimeout(check, delay)
+      }
+    }
+
+    check()
+    return () => { cancelled = true }
+  }, [])
+
+  return state
+}
 
 export function LoginView() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-
-  useEffect(() => {
-    getAuthStatus().then((status) => {
-      if (!status.auth_required) {
-        window.location.href = '/setup'
-      }
-    }).catch(() => {})
-  }, [])
+  const backendStatus = useBackendStatus()
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -46,10 +73,15 @@ export function LoginView() {
               </svg>
             </div>
             <h1 className="text-lg font-semibold text-th-text-1">Symphony</h1>
-            <p className="text-sm text-th-text-3">Sign in to your dashboard</p>
+            {backendStatus === 'disconnected' ? (
+              <p className="text-sm text-th-warning">Connecting to server...</p>
+            ) : (
+              <p className="text-sm text-th-text-3">Sign in to your dashboard</p>
+            )}
           </div>
           <Input
             autoFocus
+            disabled={backendStatus !== 'connected'}
             name="password"
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Password"
@@ -57,7 +89,7 @@ export function LoginView() {
             value={password}
           />
           {error && <p className="text-sm text-th-danger">{error}</p>}
-          <Button disabled={loading || !password} type="submit">
+          <Button disabled={loading || !password || backendStatus !== 'connected'} type="submit">
             {loading ? 'Signing in...' : 'Sign in'}
           </Button>
         </form>
