@@ -1756,13 +1756,33 @@ defmodule SymphonyElixir.Orchestrator do
         }
       end)
 
+    cooldowns =
+      state.cooldowns
+      |> Enum.map(fn {issue_id, %{expires_at: expires_at, state: cooldown_state} = cd} ->
+        %{
+          issue_id: issue_id,
+          identifier: Map.get(cd, :identifier),
+          state: cooldown_state,
+          expires_at: DateTime.to_iso8601(expires_at),
+          expired?: DateTime.compare(now, expires_at) != :lt
+        }
+      end)
+
+    max_concurrent = state.max_concurrent_agents || Config.settings!(state.workflow_name).agent.max_concurrent_agents
+
     {:reply,
      %{
        workflow_name: state.workflow_name,
        running: running,
        retrying: retrying,
+       cooldowns: cooldowns,
        engine_totals: state.engine_totals,
        rate_limits: Map.get(state, :engine_rate_limits),
+       capacity: %{
+         max_concurrent_agents: max_concurrent,
+         running_count: map_size(state.running),
+         available_slots: max(max_concurrent - map_size(state.running), 0)
+       },
        polling: %{
          checking?: state.poll_check_in_progress == true,
          next_poll_in_ms: next_poll_in_ms(state.next_poll_due_at_ms, now_ms),

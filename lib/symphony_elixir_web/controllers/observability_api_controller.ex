@@ -6,7 +6,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.Store
+  alias SymphonyElixir.{Config, Store}
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
   import SymphonyElixirWeb.ErrorHelpers, only: [error_response: 4]
@@ -113,6 +113,43 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   @spec healthz(Conn.t(), map()) :: Conn.t()
   def healthz(conn, _params) do
     json(conn, %{status: "ok"})
+  end
+
+  @spec diagnostics(Conn.t(), map()) :: Conn.t()
+  def diagnostics(conn, _params) do
+    payload = Presenter.state_payload(orchestrator(), snapshot_timeout_ms())
+
+    settings = Config.settings!()
+
+    diagnostics = %{
+      orchestrator: payload,
+      config: %{
+        active_states: settings.tracker.active_states,
+        terminal_states: settings.tracker.terminal_states,
+        max_concurrent_agents: settings.agent.max_concurrent_agents,
+        max_concurrent_agents_by_state: settings.agent.max_concurrent_agents_by_state,
+        max_failure_retries: settings.agent.max_failure_retries,
+        retry_cooldown_ms: settings.agent.retry_cooldown_ms,
+        poll_interval_ms: settings.polling.interval_ms
+      },
+      workers: worker_diagnostics(settings)
+    }
+
+    json(conn, diagnostics)
+  end
+
+  defp worker_diagnostics(settings) do
+    case settings.worker do
+      %{ssh_hosts: hosts} when is_list(hosts) and hosts != [] ->
+        %{
+          mode: "ssh",
+          hosts: hosts,
+          max_per_host: settings.worker.max_concurrent_agents_per_host
+        }
+
+      _ ->
+        %{mode: "local"}
+    end
   end
 
   defp maybe_put_issue_identifier(opts, issue_identifier)
