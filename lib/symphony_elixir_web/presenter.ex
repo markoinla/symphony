@@ -511,6 +511,11 @@ defmodule SymphonyElixirWeb.Presenter do
     github_oauth.refresh_token
     github_oauth.client_secret
     github_oauth.state
+    proxy.registration_secret
+    proxy_oauth.linear.state
+    proxy_oauth.linear.code_verifier
+    proxy_oauth.github.state
+    proxy_oauth.github.code_verifier
   )
 
   @spec settings_payload() :: map()

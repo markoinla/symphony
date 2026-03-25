@@ -9,6 +9,7 @@ import {
   Key,
   Link2,
   Lock,
+  Radio,
   Settings,
   Sliders,
   Trash2,
@@ -24,7 +25,12 @@ import {
   getGitHubOAuthStatus,
   getOAuthAuthorizeUrl,
   getOAuthStatus,
+  getProxyStatus,
   getSettings,
+  pollGitHubProxyOAuth,
+  pollLinearProxyOAuth,
+  proxyHealthCheck,
+  proxyRegister,
   revokeGitHubOAuth,
   revokeOAuth,
   upsertSetting,
@@ -103,6 +109,34 @@ function buildAgentSettingDrafts(
   )
 }
 
+function startPolling(
+  pollFn: () => Promise<{ status: string }>,
+  onComplete: () => void,
+  onError: (error: string) => void,
+  intervalMs = 2000,
+  maxAttempts = 150,
+) {
+  let attempts = 0
+  const timer = setInterval(async () => {
+    attempts++
+    if (attempts > maxAttempts) {
+      clearInterval(timer)
+      onError('OAuth flow timed out.')
+      return
+    }
+    try {
+      const result = await pollFn()
+      if (result.status === 'complete') {
+        clearInterval(timer)
+        onComplete()
+      }
+    } catch {
+      clearInterval(timer)
+      onError('OAuth flow expired or failed.')
+    }
+  }, intervalMs)
+}
+
 export function SettingsView() {
   return (
     <div className="space-y-6">
@@ -138,6 +172,7 @@ export function SettingsView() {
             <LinearApiKeySection />
             <LinearOAuthSection />
             <GitHubOAuthSection />
+            <ProxySection />
             <DomainSection />
           </div>
         </TabsContent>
@@ -317,9 +352,27 @@ function LinearOAuthSection() {
     onError: (error: unknown) => setFeedback(formatQueryError(error)),
   })
 
+  const [polling, setPolling] = useState(false)
+
   const connectMutation = useMutation({
     mutationFn: getOAuthAuthorizeUrl,
-    onSuccess: (data) => { window.location.href = data.authorize_url },
+    onSuccess: (data) => {
+      if (data.flow === 'proxy') {
+        window.open(data.authorize_url, '_blank')
+        setPolling(true)
+        startPolling(pollLinearProxyOAuth, () => {
+          setPolling(false)
+          setFeedback('Successfully connected to Linear via proxy.')
+          void queryClient.invalidateQueries({ queryKey: ['oauth-status'] })
+          void queryClient.invalidateQueries({ queryKey: ['settings'] })
+        }, (error) => {
+          setPolling(false)
+          setFeedback(typeof error === 'string' ? error : 'Proxy OAuth flow failed.')
+        })
+      } else {
+        window.location.href = data.authorize_url
+      }
+    },
     onError: (error: unknown) => setFeedback(formatQueryError(error)),
   })
 
@@ -356,6 +409,12 @@ function LinearOAuthSection() {
       </CardHeader>
 
       {feedback ? <FeedbackBanner message={feedback} /> : null}
+
+      {polling ? (
+        <div className="rounded-lg border border-th-border bg-th-inset p-4 text-sm text-th-text-2">
+          Waiting for authorization in browser tab... Complete the OAuth flow and this will update automatically.
+        </div>
+      ) : null}
 
       {oauthStatus === 'connected' || oauthStatus === 'expired' ? (
         <div className="rounded-lg border border-th-border bg-th-inset p-4">
@@ -513,9 +572,27 @@ function GitHubOAuthSection() {
     onError: (error: unknown) => setFeedback(formatQueryError(error)),
   })
 
+  const [polling, setPolling] = useState(false)
+
   const connectMutation = useMutation({
     mutationFn: getGitHubOAuthAuthorizeUrl,
-    onSuccess: (data) => { window.location.href = data.authorize_url },
+    onSuccess: (data) => {
+      if (data.flow === 'proxy') {
+        window.open(data.authorize_url, '_blank')
+        setPolling(true)
+        startPolling(pollGitHubProxyOAuth, () => {
+          setPolling(false)
+          setFeedback('Successfully connected to GitHub via proxy.')
+          void queryClient.invalidateQueries({ queryKey: ['github-oauth-status'] })
+          void queryClient.invalidateQueries({ queryKey: ['settings'] })
+        }, (error) => {
+          setPolling(false)
+          setFeedback(typeof error === 'string' ? error : 'Proxy OAuth flow failed.')
+        })
+      } else {
+        window.location.href = data.authorize_url
+      }
+    },
     onError: (error: unknown) => setFeedback(formatQueryError(error)),
   })
 
@@ -552,6 +629,12 @@ function GitHubOAuthSection() {
       </CardHeader>
 
       {feedback ? <FeedbackBanner message={feedback} /> : null}
+
+      {polling ? (
+        <div className="rounded-lg border border-th-border bg-th-inset p-4 text-sm text-th-text-2">
+          Waiting for authorization in browser tab... Complete the OAuth flow and this will update automatically.
+        </div>
+      ) : null}
 
       {oauthStatus === 'connected' || oauthStatus === 'expired' ? (
         <div className="rounded-lg border border-th-border bg-th-inset p-4">
@@ -1032,6 +1115,184 @@ function ChangePasswordSection() {
         >
           {mutation.isPending ? 'Changing...' : 'Change password'}
         </Button>
+      </form>
+    </Card>
+  )
+}
+
+function ProxySection() {
+  const queryClient = useQueryClient()
+  const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
+  const proxyQuery = useQuery({ queryKey: ['proxy-status'], queryFn: getProxyStatus })
+
+  const settings = settingsQuery.data?.settings
+  const proxyEnabled = proxyQuery.data?.enabled ?? false
+
+  const [proxyUrl, setProxyUrl] = useState('')
+  const [instanceUrl, setInstanceUrl] = useState('')
+  const [orgId, setOrgId] = useState('')
+  const [feedback, setFeedback] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (proxyQuery.data) {
+      setProxyUrl(proxyQuery.data.url || '')
+      setInstanceUrl(proxyQuery.data.instance_url || '')
+      setOrgId(proxyQuery.data.linear_org_id || '')
+    }
+  }, [proxyQuery.data])
+
+  const toggleMutation = useMutation({
+    mutationFn: async (enabled: boolean) => {
+      await upsertSetting('proxy.enabled', enabled ? 'true' : 'false')
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      await queryClient.invalidateQueries({ queryKey: ['proxy-status'] })
+      setFeedback(proxyEnabled ? 'Proxy disabled.' : 'Proxy enabled.')
+    },
+    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+  })
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const trimmedUrl = proxyUrl.trim()
+      const trimmedInstance = instanceUrl.trim()
+      const trimmedOrg = orgId.trim()
+      if (trimmedUrl) await upsertSetting('proxy.url', trimmedUrl)
+      if (trimmedInstance) await upsertSetting('proxy.instance_url', trimmedInstance)
+      if (trimmedOrg) await upsertSetting('proxy.linear_org_id', trimmedOrg)
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      await queryClient.invalidateQueries({ queryKey: ['proxy-status'] })
+      setFeedback('Proxy settings saved.')
+    },
+    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+  })
+
+  const healthMutation = useMutation({
+    mutationFn: proxyHealthCheck,
+    onSuccess: (data) => {
+      setFeedback(data.ok ? 'Proxy is reachable.' : `Proxy unreachable: ${data.error ?? 'unknown error'}`)
+    },
+    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+  })
+
+  const registerMutation = useMutation({
+    mutationFn: proxyRegister,
+    onSuccess: () => setFeedback('Instance registered with proxy.'),
+    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+  })
+
+  const existingProxyUrl = settingValue(settings, 'proxy.url')
+  const existingInstanceUrl = settingValue(settings, 'proxy.instance_url')
+
+  return (
+    <Card className="space-y-4">
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Radio className="h-4 w-4 text-th-text-3" />
+          <CardTitle>OAuth &amp; Webhook Proxy</CardTitle>
+          {proxyEnabled ? <Badge tone="running">Enabled</Badge> : <Badge tone="neutral">Disabled</Badge>}
+        </div>
+        <CardDescription>
+          Route OAuth flows and Linear webhooks through a Cloudflare Worker proxy. Required when Symphony is behind NAT or lacks a public URL.
+        </CardDescription>
+      </CardHeader>
+
+      {feedback ? <FeedbackBanner message={feedback} /> : null}
+
+      <div className="flex items-center gap-3">
+        <Button
+          disabled={toggleMutation.isPending}
+          onClick={() => {
+            setFeedback(null)
+            void toggleMutation.mutateAsync(!proxyEnabled)
+          }}
+          size="sm"
+          type="button"
+          variant={proxyEnabled ? 'danger' : 'secondary'}
+        >
+          {proxyEnabled ? 'Disable proxy' : 'Enable proxy'}
+        </Button>
+        <Button
+          disabled={healthMutation.isPending}
+          onClick={() => {
+            setFeedback(null)
+            void healthMutation.mutateAsync()
+          }}
+          size="sm"
+          type="button"
+          variant="ghost"
+        >
+          Test connectivity
+        </Button>
+      </div>
+
+      <form
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          setFeedback(null)
+          void saveMutation.mutateAsync()
+        }}
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Proxy URL">
+            <Input
+              onChange={(e) => setProxyUrl(e.target.value)}
+              placeholder="https://proxy.symphony.dev"
+              value={proxyUrl}
+            />
+            <p className="mt-1 text-xs text-th-text-4">
+              {existingProxyUrl ? `Current: ${existingProxyUrl}` : 'Default: https://proxy.symphony.dev'}
+            </p>
+          </Field>
+          <Field label="Instance URL">
+            <Input
+              onChange={(e) => setInstanceUrl(e.target.value)}
+              placeholder="http://100.64.x.x:4000"
+              value={instanceUrl}
+            />
+            <p className="mt-1 text-xs text-th-text-4">
+              {existingInstanceUrl ? `Current: ${existingInstanceUrl}` : 'Your Symphony instance\u2019s reachable address for webhook forwarding.'}
+            </p>
+          </Field>
+        </div>
+        <Field label="Linear Organization ID">
+          <Input
+            className="max-w-md"
+            onChange={(e) => setOrgId(e.target.value)}
+            placeholder="your-linear-org-id"
+            value={orgId}
+          />
+          <p className="mt-1 text-xs text-th-text-4">
+            Used to route webhooks. Find this in Linear Settings &rarr; API.
+          </p>
+        </Field>
+        <div className="flex items-center gap-3">
+          <Button
+            disabled={saveMutation.isPending}
+            type="submit"
+            variant="secondary"
+          >
+            Save
+          </Button>
+          {proxyEnabled && existingInstanceUrl ? (
+            <Button
+              disabled={registerMutation.isPending}
+              onClick={() => {
+                setFeedback(null)
+                void registerMutation.mutateAsync()
+              }}
+              size="sm"
+              type="button"
+              variant="ghost"
+            >
+              Register instance
+            </Button>
+          ) : null}
+        </div>
       </form>
     </Card>
   )

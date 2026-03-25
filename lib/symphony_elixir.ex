@@ -20,6 +20,8 @@ defmodule SymphonyElixir.Application do
 
   use Application
 
+  require Logger
+
   @impl true
   def start(_type, _args) do
     :ok = SymphonyElixir.LogFile.configure()
@@ -57,8 +59,24 @@ defmodule SymphonyElixir.Application do
       [
         SymphonyElixir.OrchestratorStarter,
         SymphonyElixir.HttpServer,
-        SymphonyElixir.StatusDashboard
+        SymphonyElixir.StatusDashboard,
+        {Task, &register_with_proxy/0}
       ]
+    end
+  end
+
+  defp register_with_proxy do
+    alias SymphonyElixir.{ProxyClient, Store}
+
+    with true <- ProxyClient.proxy_enabled?(),
+         instance_url when is_binary(instance_url) and instance_url != "" <-
+           Store.get_setting("proxy.instance_url"),
+         org_id when is_binary(org_id) and org_id != "" <-
+           Store.get_setting("proxy.linear_org_id") do
+      case ProxyClient.register_instance(instance_url, org_id) do
+        :ok -> Logger.info("Registered with proxy on startup")
+        {:error, reason} -> Logger.warning("Proxy registration on startup failed: #{inspect(reason)}")
+      end
     end
   end
 

@@ -24,6 +24,22 @@ defmodule SymphonyElixir.ProxyClient do
 
   @type provider :: :linear | :github
 
+  @spec proxy_enabled?() :: boolean()
+  def proxy_enabled? do
+    Store.get_setting("proxy.enabled") == "true"
+  end
+
+  @spec health_check() :: :ok | {:error, term()}
+  def health_check do
+    url = "#{proxy_base_url()}/health"
+
+    case req_get(url, receive_timeout: 10_000) do
+      {:ok, %{status: 200}} -> :ok
+      {:ok, %{status: status, body: body}} -> {:error, {:unexpected_status, status, body}}
+      {:error, reason} -> {:error, {:request_failed, reason}}
+    end
+  end
+
   @spec register_instance(String.t(), String.t()) :: :ok | {:error, term()}
   def register_instance(instance_url, linear_org_id)
       when is_binary(instance_url) and is_binary(linear_org_id) do
@@ -138,6 +154,11 @@ defmodule SymphonyElixir.ProxyClient do
     }
   end
 
+  defp req_get(url, opts) do
+    extra = Application.get_env(:symphony_elixir, :proxy_req_options, [])
+    Req.get(url, Keyword.merge(extra, opts))
+  end
+
   defp req_post(url, opts) do
     extra = Application.get_env(:symphony_elixir, :proxy_req_options, [])
     Req.post(url, Keyword.merge(extra, opts))
@@ -149,6 +170,35 @@ defmodule SymphonyElixir.ProxyClient do
        System.get_env("SYMPHONY_PROXY_URL") ||
        @default_proxy_url)
     |> String.trim_trailing("/")
+  end
+
+  @spec store_pending_flow(provider(), String.t(), String.t()) :: :ok
+  def store_pending_flow(provider, state, code_verifier) do
+    prefix = "proxy_oauth.#{provider}"
+    {:ok, _} = Store.put_setting("#{prefix}.state", state)
+    {:ok, _} = Store.put_setting("#{prefix}.code_verifier", code_verifier)
+    :ok
+  end
+
+  @spec get_pending_flow(provider()) :: {:ok, String.t(), String.t()} | {:error, :no_pending_flow}
+  def get_pending_flow(provider) do
+    prefix = "proxy_oauth.#{provider}"
+
+    case {Store.get_setting("#{prefix}.state"), Store.get_setting("#{prefix}.code_verifier")} do
+      {state, verifier} when is_binary(state) and is_binary(verifier) ->
+        {:ok, state, verifier}
+
+      _ ->
+        {:error, :no_pending_flow}
+    end
+  end
+
+  @spec clear_pending_flow(provider()) :: :ok
+  def clear_pending_flow(provider) do
+    prefix = "proxy_oauth.#{provider}"
+    Store.delete_setting("#{prefix}.state")
+    Store.delete_setting("#{prefix}.code_verifier")
+    :ok
   end
 
   defp registration_secret do
