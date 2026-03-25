@@ -5,7 +5,10 @@ defmodule SymphonyElixirWeb.SettingsApiController do
 
   use Phoenix.Controller, formats: [:json]
 
+  require Logger
+
   alias Plug.Conn
+  alias SymphonyElixir.Caddy
   alias SymphonyElixir.Store
   alias SymphonyElixirWeb.{ObservabilityPubSub, Presenter}
 
@@ -21,6 +24,7 @@ defmodule SymphonyElixirWeb.SettingsApiController do
     if is_binary(value) do
       case Store.put_setting(key, value) do
         {:ok, setting} ->
+          maybe_configure_caddy_domain(key, value)
           ObservabilityPubSub.broadcast_settings_changed()
           json(conn, %{setting: %{key: setting.key, value: setting.value}})
 
@@ -36,6 +40,7 @@ defmodule SymphonyElixirWeb.SettingsApiController do
   def delete(conn, %{"key" => key}) do
     case Store.delete_setting(key) do
       {:ok, _setting} ->
+        maybe_remove_caddy_domain(key)
         ObservabilityPubSub.broadcast_settings_changed()
         send_resp(conn, 204, "")
 
@@ -55,6 +60,28 @@ defmodule SymphonyElixirWeb.SettingsApiController do
       }
     })
   end
+
+  defp maybe_configure_caddy_domain("domain", value) when is_binary(value) and value != "" do
+    case Caddy.configure_domain(value) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Caddy domain configuration failed: #{inspect(reason)}")
+    end
+
+    Store.put_setting("symphony_public_base_url", "https://#{value}")
+  end
+
+  defp maybe_configure_caddy_domain(_key, _value), do: :ok
+
+  defp maybe_remove_caddy_domain("domain") do
+    case Caddy.remove_domain() do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Caddy domain removal failed: #{inspect(reason)}")
+    end
+
+    Store.delete_setting("symphony_public_base_url")
+  end
+
+  defp maybe_remove_caddy_domain(_key), do: :ok
 
   defp error_response(conn, status, code, message) do
     conn

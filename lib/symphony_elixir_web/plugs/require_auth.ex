@@ -56,10 +56,18 @@ defmodule SymphonyElixirWeb.Plugs.RequireAuth do
 
   @spec auth_configured?() :: boolean()
   def auth_configured? do
+    env_password_set?() or db_password_set?()
+  end
+
+  defp env_password_set? do
     case System.get_env("SYMPHONY_AUTH_PASSWORD") do
       nil -> false
       "" -> false
       _ -> true
     end
+  end
+
+  defp db_password_set? do
+    SymphonyElixir.Store.get_setting("auth_password_hash") != nil
   end
 end

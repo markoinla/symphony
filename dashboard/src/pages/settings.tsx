@@ -5,8 +5,10 @@ import {
   EyeOff,
   ExternalLink,
   Github,
+  Globe,
   Key,
   Link2,
+  Lock,
   Settings,
   Sliders,
   Trash2,
@@ -16,6 +18,7 @@ import {
 import {
   type AgentSettingsDefaults,
   type Setting,
+  changePassword,
   deleteSetting,
   getGitHubOAuthAuthorizeUrl,
   getGitHubOAuthStatus,
@@ -120,6 +123,10 @@ export function SettingsView() {
             <Sliders className="mr-1.5 h-3.5 w-3.5" />
             Agent
           </TabsTrigger>
+          <TabsTrigger value="security">
+            <Lock className="mr-1.5 h-3.5 w-3.5" />
+            Security
+          </TabsTrigger>
           <TabsTrigger value="advanced">
             <Settings className="mr-1.5 h-3.5 w-3.5" />
             Advanced
@@ -131,12 +138,16 @@ export function SettingsView() {
             <LinearApiKeySection />
             <LinearOAuthSection />
             <GitHubOAuthSection />
-
+            <DomainSection />
           </div>
         </TabsContent>
 
         <TabsContent value="agent">
           <AgentSettingsSection />
+        </TabsContent>
+
+        <TabsContent value="security">
+          <ChangePasswordSection />
         </TabsContent>
 
         <TabsContent value="advanced">
@@ -935,5 +946,185 @@ function AdvancedSettingsSection() {
         />
       ) : null}
     </div>
+  )
+}
+
+function ChangePasswordSection() {
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [feedback, setFeedback] = useState<string | null>(null)
+
+  const mutation = useMutation({
+    mutationFn: () => changePassword(currentPassword, newPassword),
+    onSuccess: () => {
+      setFeedback('Password changed successfully.')
+      setCurrentPassword('')
+      setNewPassword('')
+      setConfirmPassword('')
+    },
+    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+  })
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault()
+    setFeedback(null)
+
+    if (newPassword.length < 8) {
+      setFeedback('New password must be at least 8 characters.')
+      return
+    }
+
+    if (newPassword !== confirmPassword) {
+      setFeedback('New passwords do not match.')
+      return
+    }
+
+    void mutation.mutateAsync()
+  }
+
+  return (
+    <Card className="space-y-4">
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Lock className="h-4 w-4 text-th-text-3" />
+          <CardTitle>Change Password</CardTitle>
+        </div>
+        <CardDescription>
+          Update the password used to sign in to the dashboard.
+        </CardDescription>
+      </CardHeader>
+
+      {feedback ? <FeedbackBanner message={feedback} /> : null}
+
+      <form className="space-y-4" onSubmit={handleSubmit}>
+        <Field label="Current Password">
+          <Input
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            placeholder="Enter current password"
+            required
+            type="password"
+            value={currentPassword}
+          />
+        </Field>
+        <Field label="New Password">
+          <Input
+            onChange={(e) => setNewPassword(e.target.value)}
+            placeholder="Enter new password"
+            required
+            type="password"
+            value={newPassword}
+          />
+        </Field>
+        <Field label="Confirm New Password">
+          <Input
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            placeholder="Confirm new password"
+            required
+            type="password"
+            value={confirmPassword}
+          />
+        </Field>
+        <Button
+          disabled={mutation.isPending || !currentPassword || !newPassword || !confirmPassword}
+          type="submit"
+          variant="secondary"
+        >
+          {mutation.isPending ? 'Changing...' : 'Change password'}
+        </Button>
+      </form>
+    </Card>
+  )
+}
+
+function DomainSection() {
+  const queryClient = useQueryClient()
+  const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
+  const existing = settingsQuery.data?.settings.find((s) => s.key === 'domain')
+
+  const [domain, setDomain] = useState('')
+  const [feedback, setFeedback] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (existing) setDomain(existing.value)
+  }, [existing])
+
+  const saveMutation = useMutation({
+    mutationFn: (value: string) => upsertSetting('domain', value),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setFeedback('Domain saved.')
+    },
+    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+  })
+
+  const removeMutation = useMutation({
+    mutationFn: () => deleteSetting('domain'),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['settings'] })
+      setFeedback('Domain removed.')
+      setDomain('')
+    },
+    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+  })
+
+  return (
+    <Card className="space-y-4">
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Globe className="h-4 w-4 text-th-text-3" />
+          <CardTitle>Domain</CardTitle>
+          {existing ? <Badge tone="running">Configured</Badge> : <Badge tone="neutral">Not set</Badge>}
+        </div>
+        <CardDescription>
+          Configure a custom domain for HTTPS access.
+        </CardDescription>
+      </CardHeader>
+
+      {feedback ? <FeedbackBanner message={feedback} /> : null}
+
+      <form
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          setFeedback(null)
+          void saveMutation.mutateAsync(domain.trim())
+        }}
+      >
+        <Field label="Domain name">
+          <Input
+            onChange={(e) => setDomain(e.target.value)}
+            placeholder="symphony.example.com"
+            required
+            value={domain}
+          />
+          <p className="mt-1.5 text-xs text-th-text-4">
+            Point your domain's DNS A record to this server's IP before saving.
+          </p>
+        </Field>
+        <div className="flex items-center gap-3">
+          <Button
+            disabled={saveMutation.isPending || !domain.trim()}
+            type="submit"
+            variant="secondary"
+          >
+            {existing ? 'Update' : 'Save'}
+          </Button>
+          {existing ? (
+            <Button
+              disabled={removeMutation.isPending}
+              onClick={() => {
+                setFeedback(null)
+                void removeMutation.mutateAsync()
+              }}
+              type="button"
+              variant="danger"
+            >
+              Remove
+            </Button>
+          ) : null}
+        </div>
+      </form>
+    </Card>
   )
 }
