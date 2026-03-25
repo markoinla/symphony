@@ -447,6 +447,7 @@ generate_env() {
   SECRET_KEY_BASE="$(openssl rand -hex 64)"
 
   WORKFLOWS_DIR="${HOST_HOME}/.symphony/workflows"
+  PUBLIC_IP="$(curl -4 -sf --max-time 5 ifconfig.me || hostname -I | awk '{print $1}')"
 
   cat > "${INSTALL_DIR}/.env" <<EOF
 HOST_HOME=${HOST_HOME}
@@ -455,6 +456,7 @@ POSTGRES_PASSWORD="${POSTGRES_PASSWORD}"
 SYMPHONY_SECRET_KEY_BASE="${SECRET_KEY_BASE}"
 DATABASE_URL="ecto://symphony:${POSTGRES_PASSWORD}@postgres:5432/symphony"
 SYMPHONY_PROXY_REGISTRATION_SECRET="zy9eWdmJ6nWHrFF1WL0u2tLEqbh7FpqpZHzlJy5HC64="
+SYMPHONY_PUBLIC_BASE_URL="http://${PUBLIC_IP}:4000"
 EOF
 
   info "Generated .env at ${INSTALL_DIR}/.env"

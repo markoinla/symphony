@@ -24,6 +24,7 @@ defmodule SymphonyElixirWeb.SettingsApiController do
       case Store.put_setting(key, value) do
         {:ok, setting} ->
           maybe_configure_caddy_domain(key, value)
+          maybe_reregister_proxy(key, value)
           ObservabilityPubSub.broadcast_settings_changed()
           json(conn, %{setting: %{key: setting.key, value: setting.value}})
 
@@ -85,6 +86,13 @@ defmodule SymphonyElixirWeb.SettingsApiController do
   end
 
   defp maybe_remove_caddy_domain(_key), do: :ok
+
+  defp maybe_reregister_proxy("symphony_public_base_url", value)
+       when is_binary(value) and value != "" do
+    maybe_register_proxy(value)
+  end
+
+  defp maybe_reregister_proxy(_key, _value), do: :ok
 
   defp maybe_register_proxy(base_url) do
     with org_id when is_binary(org_id) and org_id != "" <- Store.get_setting("proxy.linear_org_id"),
