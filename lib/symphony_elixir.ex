@@ -48,19 +48,48 @@ defmodule SymphonyElixir do
   defp detect_ip_url do
     port = SymphonyElixir.Config.server_port()
 
-    with {:ok, ifaddrs} <- :inet.getifaddrs(),
-         [{a, b, c, d} | _] <- extract_ipv4_addrs(ifaddrs) do
-      "http://#{a}.#{b}.#{c}.#{d}:#{port}"
-    else
-      _ -> nil
+    case detect_public_ip() do
+      {:ok, ip} ->
+        "http://#{ip}:#{port}"
+
+      :error ->
+        with {:ok, ifaddrs} <- :inet.getifaddrs(),
+             [{a, b, c, d} | _] <- extract_non_private_addrs(ifaddrs) do
+          "http://#{a}.#{b}.#{c}.#{d}:#{port}"
+        else
+          _ -> nil
+        end
     end
   end
 
-  defp extract_ipv4_addrs(ifaddrs) do
+  defp detect_public_ip do
+    case Req.get("https://ifconfig.me", headers: [{"accept", "text/plain"}], receive_timeout: 5_000) do
+      {:ok, %{status: 200, body: body}} when is_binary(body) ->
+        ip = String.trim(body)
+        if ip != "", do: {:ok, ip}, else: :error
+
+      _ ->
+        :error
+    end
+  rescue
+    _ -> :error
+  end
+
+  defp extract_non_private_addrs(ifaddrs) do
     Enum.flat_map(ifaddrs, fn {_iface, opts} ->
-      for {:addr, addr} <- opts, tuple_size(addr) == 4, addr != {127, 0, 0, 1}, do: addr
+      for {:addr, addr} <- opts,
+          tuple_size(addr) == 4,
+          not private_ip?(addr),
+          do: addr
     end)
   end
+
+  defp private_ip?({127, _, _, _}), do: true
+  defp private_ip?({10, _, _, _}), do: true
+  defp private_ip?({172, b, _, _}) when b >= 16 and b <= 31, do: true
+  defp private_ip?({192, 168, _, _}), do: true
+  defp private_ip?({169, 254, _, _}), do: true
+  defp private_ip?(_), do: false
 end
 
 defmodule SymphonyElixir.Application do
