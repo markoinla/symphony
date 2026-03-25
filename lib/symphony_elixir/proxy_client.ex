@@ -11,7 +11,8 @@ defmodule SymphonyElixir.ProxyClient do
   alias SymphonyElixir.PKCE
   alias SymphonyElixir.Store
 
-  @default_proxy_url "https://oauth-proxy.m-6bb.workers.dev"
+  @prod_proxy_url "https://oauth-proxy.m-6bb.workers.dev"
+  @dev_proxy_url "https://oauth-proxy-dev.m-6bb.workers.dev"
   @poll_interval_ms 1_000
   @poll_timeout_ms 300_000
 
@@ -215,7 +216,12 @@ defmodule SymphonyElixir.ProxyClient do
   end
 
   @spec proxy_base_url() :: String.t()
-  defp proxy_base_url, do: @default_proxy_url
+  defp proxy_base_url do
+    case System.get_env("SYMPHONY_ENV") do
+      "dev" -> @dev_proxy_url
+      _ -> @prod_proxy_url
+    end
+  end
 
   @spec store_pending_flow(provider(), String.t(), String.t()) :: :ok
   def store_pending_flow(provider, state, code_verifier) do
