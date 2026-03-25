@@ -806,6 +806,11 @@ defmodule SymphonyElixir.SessionLog do
   defp maybe_put_error_category(%{error_category: _} = attrs, _status), do: attrs
 
   defp maybe_put_error_category(attrs, :failed) do
+    Logger.warning(
+      "Session finalized as failed without error_category, defaulting to infra — " <>
+        "this indicates a code path that doesn't classify errors"
+    )
+
     Map.put(attrs, :error_category, "infra")
   end
 

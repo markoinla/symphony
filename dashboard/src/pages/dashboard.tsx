@@ -242,18 +242,19 @@ function ProjectSessionSection({
 
 function LinearIssueBadge({ identifier }: { identifier: string }) {
   return (
-    <a
+    <button
       className="inline-flex shrink-0 items-center gap-1 rounded bg-th-accent-muted px-1.5 py-0.5 text-[11px] font-medium text-th-accent transition-colors hover:opacity-80"
-      href={`https://linear.app/issue/${identifier}`}
-      onClick={(e) => e.stopPropagation()}
-      rel="noopener noreferrer"
-      target="_blank"
+      onClick={(e) => {
+        e.stopPropagation()
+        window.open(`https://linear.app/issue/${identifier}`, '_blank', 'noopener,noreferrer')
+      }}
+      type="button"
     >
       <svg className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
         <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
       Linear
-    </a>
+    </button>
   )
 }
 
@@ -355,6 +356,7 @@ const ERROR_CATEGORY_CONFIG: Record<string, { tone: 'danger' | 'retrying' | 'liv
   agent: { tone: 'retrying', label: 'Agent' },
   config: { tone: 'neutral', label: 'Config', className: 'bg-amber-500/15 text-amber-600 dark:text-amber-400' },
   timeout: { tone: 'live', label: 'Timeout' },
+  shutdown: { tone: 'neutral', label: 'Shutdown' },
 }
 
 export function ErrorCategoryBadge({ category }: { category: string | null }) {

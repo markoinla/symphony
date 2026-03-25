@@ -13,6 +13,7 @@ tracker:
     - Canceled
     - Duplicate
     - Done
+    - Human Review
 polling:
   interval_ms: 5000
 hooks:
@@ -27,6 +28,15 @@ agent:
   max_turns: 20
 claude:
   permission_mode: bypassPermissions
+  sandbox:
+    enabled: true
+    allowed_domains:
+      - api.anthropic.com
+      - api.linear.app
+      - github.com
+      - api.github.com
+      - localhost
+      - "127.0.0.1"
 codex:
   command: codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --config model_reasoning_summary=detailed app-server
   approval_policy: never

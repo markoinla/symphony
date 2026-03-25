@@ -151,6 +151,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:max_failure_retries, :integer, default: 5)
       field(:max_concurrent_agents_by_state, :map, default: %{})
       field(:max_continuations, :integer, default: 10)
+      field(:max_turn_retries, :integer, default: 2)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -164,7 +165,8 @@ defmodule SymphonyElixir.Config.Schema do
           :max_retry_backoff_ms,
           :max_failure_retries,
           :max_concurrent_agents_by_state,
-          :max_continuations
+          :max_continuations,
+          :max_turn_retries
         ],
         empty_values: []
       )
@@ -173,6 +175,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:max_retry_backoff_ms, greater_than: 0)
       |> validate_number(:max_failure_retries, greater_than: 0)
       |> validate_number(:max_continuations, greater_than_or_equal_to: 0)
+      |> validate_number(:max_turn_retries, greater_than_or_equal_to: 0)
       |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)
       |> Schema.validate_state_limits(:max_concurrent_agents_by_state)
     end
@@ -232,6 +235,30 @@ defmodule SymphonyElixir.Config.Schema do
     use Ecto.Schema
     import Ecto.Changeset
 
+    defmodule Sandbox do
+      @moduledoc false
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @primary_key false
+      embedded_schema do
+        field(:enabled, :boolean, default: false)
+        field(:allowed_domains, {:array, :string}, default: [])
+        field(:additional_read_paths, {:array, :string}, default: [])
+        field(:additional_write_paths, {:array, :string}, default: [])
+      end
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        cast(
+          schema,
+          attrs,
+          [:enabled, :allowed_domains, :additional_read_paths, :additional_write_paths],
+          empty_values: []
+        )
+      end
+    end
+
     @primary_key false
     embedded_schema do
       field(:command, :string, default: "claude")
@@ -241,6 +268,7 @@ defmodule SymphonyElixir.Config.Schema do
       field(:disallowed_tools, {:array, :string}, default: [])
       field(:turn_timeout_ms, :integer, default: 3_600_000)
       field(:append_system_prompt, :string)
+      embeds_one(:sandbox, Sandbox, on_replace: :update, defaults_to_struct: true)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
@@ -261,6 +289,7 @@ defmodule SymphonyElixir.Config.Schema do
       )
       |> validate_number(:turn_timeout_ms, greater_than: 0)
       |> validate_inclusion(:permission_mode, ["bypassPermissions", "default"])
+      |> cast_embed(:sandbox, with: &Sandbox.changeset/2)
     end
   end
 

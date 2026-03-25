@@ -2245,7 +2245,7 @@ defmodule SymphonyElixir.CoreTest do
     updated = SymphonyElixir.Store.get_session(session.id)
     assert updated.status == "cancelled"
     assert updated.ended_at != nil
-    assert updated.error == "orchestrator restarted"
+    assert is_nil(updated.error)
 
     unchanged = SymphonyElixir.Store.get_session(completed_session.id)
     assert unchanged.status == "completed"

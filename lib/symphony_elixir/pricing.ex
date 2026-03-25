@@ -8,9 +8,9 @@ defmodule SymphonyElixir.Pricing do
   require Logger
 
   @rates %{
-    "claude-opus" => {5_00, 25_00},
-    "claude-sonnet" => {3_00, 15_00},
-    "claude-haiku" => {0_80, 4_00}
+    "opus" => {5_00, 25_00},
+    "sonnet" => {3_00, 15_00},
+    "haiku" => {0_80, 4_00}
   }
 
   @spec cost_cents(String.t(), non_neg_integer(), non_neg_integer()) :: non_neg_integer()
@@ -25,7 +25,9 @@ defmodule SymphonyElixir.Pricing do
     end
   end
 
-  @spec find_rate(String.t()) :: {non_neg_integer(), non_neg_integer()} | nil
+  @spec find_rate(String.t() | nil) :: {non_neg_integer(), non_neg_integer()} | nil
+  defp find_rate(nil), do: nil
+
   defp find_rate(model) do
     Enum.find_value(@rates, fn {prefix, rate} ->
       if String.contains?(model, prefix), do: rate

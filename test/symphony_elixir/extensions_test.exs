@@ -1022,7 +1022,10 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "worker_host" => "worker-1",
                  "error" => nil,
                  "error_category" => nil,
-                 "workflow_name" => nil
+                 "workflow_name" => nil,
+                 "github_repo" => "openai/symphony",
+                 "github_branch" => nil,
+                 "project_name" => "Symphony"
                }
              ]
            }
@@ -1044,7 +1047,10 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "worker_host" => "worker-1",
                  "error" => nil,
                  "error_category" => nil,
-                 "workflow_name" => nil
+                 "workflow_name" => nil,
+                 "github_repo" => "openai/symphony",
+                 "github_branch" => nil,
+                 "project_name" => "Symphony"
                },
                %{
                  "id" => legacy_session.id,
@@ -1061,7 +1067,10 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "worker_host" => "worker-legacy",
                  "error" => nil,
                  "error_category" => nil,
-                 "workflow_name" => nil
+                 "workflow_name" => nil,
+                 "github_repo" => nil,
+                 "github_branch" => nil,
+                 "project_name" => nil
                }
              ]
            }

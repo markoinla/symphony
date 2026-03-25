@@ -2,11 +2,13 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
 import {
-  BarChart,
+  ComposedChart,
   Bar,
+  Line,
   XAxis,
   YAxis,
   Tooltip,
+  Legend,
   ResponsiveContainer,
   CartesianGrid,
 } from 'recharts'
@@ -15,6 +17,8 @@ import {
   type SessionStatsRange,
   type DeadLetterSession,
   type WorkerHostStats,
+  type FailureCountBucket,
+  type RunCountBucket,
   getSessionStats,
 } from '../lib/api'
 import {
@@ -45,12 +49,42 @@ function formatBucket(bucket: string, range: SessionStatsRange) {
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
 
+type ChartBucket = FailureCountBucket & { total: number; successful: number }
+
+function mergeChartData(
+  failureCounts: FailureCountBucket[],
+  runCounts: RunCountBucket[],
+): ChartBucket[] {
+  const runMap = new Map(runCounts.map((r) => [r.bucket, r]))
+  const allBuckets = new Set([
+    ...failureCounts.map((f) => f.bucket),
+    ...runCounts.map((r) => r.bucket),
+  ])
+
+  return [...allBuckets]
+    .sort()
+    .map((bucket) => {
+      const fail = failureCounts.find((f) => f.bucket === bucket)
+      const run = runMap.get(bucket)
+      return {
+        bucket,
+        infra: fail?.infra ?? 0,
+        agent: fail?.agent ?? 0,
+        config: fail?.config ?? 0,
+        timeout: fail?.timeout ?? 0,
+        total: run?.total ?? 0,
+        successful: run?.successful ?? 0,
+      }
+    })
+}
+
 function categoryTone(category: string | null) {
   switch (category) {
     case 'infra': return 'danger' as const
     case 'agent': return 'retrying' as const
     case 'config': return 'neutral' as const
     case 'timeout': return 'live' as const
+    case 'shutdown': return 'neutral' as const
     default: return 'neutral' as const
   }
 }
@@ -71,7 +105,8 @@ export function ReliabilityView() {
     return <ErrorPanel title="Reliability data unavailable" detail={formatQueryError(statsQuery.error)} />
   }
 
-  const { failure_counts, dead_letters, worker_health } = statsQuery.data
+  const { failure_counts, run_counts, dead_letters, worker_health } = statsQuery.data
+  const chartData = mergeChartData(failure_counts, run_counts)
   const sortedWorkers = [...worker_health].sort((a, b) => b.failure_rate - a.failure_rate)
 
   return (
@@ -101,25 +136,25 @@ export function ReliabilityView() {
         </div>
       </div>
 
-      {/* Section 1: Failure Rate Chart */}
+      {/* Section 1: Session Runs Chart */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Failures by category</CardTitle>
+          <CardTitle className="text-sm">Session runs</CardTitle>
         </CardHeader>
-        {failure_counts.every((b) => b.infra + b.agent + b.config + b.timeout === 0) ? (
+        {chartData.length === 0 ? (
           <EmptyState
             icon={
               <svg className="h-5 w-5 text-th-text-4" fill="none" stroke="currentColor" strokeWidth={1.5} viewBox="0 0 24 24">
-                <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             }
-            title="No failures in this period"
-            description="All sessions completed successfully."
+            title="No session data"
+            description="Session data will appear once runs have been recorded."
           />
         ) : (
-          <div className="mt-4" style={{ height: 300 }}>
+          <div className="mt-4" style={{ height: 320 }}>
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={failure_counts}>
+              <ComposedChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--color-th-border, #e5e7eb)" />
                 <XAxis
                   dataKey="bucket"
@@ -143,11 +178,33 @@ export function ReliabilityView() {
                     fontSize: '13px',
                   }}
                 />
+                <Legend
+                  iconSize={10}
+                  wrapperStyle={{ fontSize: '12px', paddingTop: '8px' }}
+                />
+                {/* Lines for volume */}
+                <Line
+                  type="monotone"
+                  dataKey="total"
+                  stroke="#6b7280"
+                  strokeWidth={2}
+                  dot={false}
+                  name="Total runs"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="successful"
+                  stroke="#22c55e"
+                  strokeWidth={2}
+                  dot={false}
+                  name="Successful"
+                />
+                {/* Stacked bars for errors */}
                 <Bar dataKey="infra" stackId="failures" fill={CATEGORY_COLORS.infra} name="Infra" />
                 <Bar dataKey="agent" stackId="failures" fill={CATEGORY_COLORS.agent} name="Agent" />
                 <Bar dataKey="config" stackId="failures" fill={CATEGORY_COLORS.config} name="Config" />
                 <Bar dataKey="timeout" stackId="failures" fill={CATEGORY_COLORS.timeout} name="Timeout" radius={[4, 4, 0, 0]} />
-              </BarChart>
+              </ComposedChart>
             </ResponsiveContainer>
           </div>
         )}
