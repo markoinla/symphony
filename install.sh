@@ -59,9 +59,6 @@ handle_update() {
   curl -fsSL "${RAW_BASE}/docker-compose.prod.yml" -o "${INSTALL_DIR}/docker-compose.prod.yml"
   info "Updated docker-compose.prod.yml"
 
-  curl -fsSL "${RAW_BASE}/deploy/Caddyfile" -o "${INSTALL_DIR}/Caddyfile"
-  info "Updated Caddyfile"
-
   install_skills
   info "Updated agent skills"
 
@@ -246,10 +243,6 @@ download_files() {
   curl -fsSL "${RAW_BASE}/docker-compose.prod.yml" \
     -o "${INSTALL_DIR}/docker-compose.prod.yml"
   info "Downloaded docker-compose.prod.yml"
-
-  curl -fsSL "${RAW_BASE}/deploy/Caddyfile" \
-    -o "${INSTALL_DIR}/Caddyfile"
-  info "Downloaded Caddyfile"
 }
 
 # ── Agent skills (Claude Code plugins) ───────────────────────────────────────
@@ -488,7 +481,7 @@ print_success() {
   echo -e "${GREEN}${BOLD}  Symphony is running!${NC}"
   echo -e "${GREEN}${BOLD}════════════════════════════════════════════════${NC}"
   echo ""
-  echo -e "  Dashboard: ${BOLD}http://${IP}${NC}"
+  echo -e "  Dashboard: ${BOLD}http://${IP}:4000${NC}"
   echo ""
   echo -e "  Useful commands:"
   echo -e "    Update:          ${BOLD}sudo bash ${INSTALL_DIR}/install.sh --update${NC}"

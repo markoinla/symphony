@@ -61,15 +61,14 @@ curl -fsSL https://raw.githubusercontent.com/markoinla/symphony/main/install.sh 
 ```
 
 This installs Docker, Node.js, Claude Code CLI, and GitHub CLI, then starts Symphony with
-Postgres and Caddy (for automatic HTTPS). Workflow files are installed to
-`~/.symphony/workflows/` where you can edit them — changes are picked up automatically.
+Postgres. Workflow files are installed to `~/.symphony/workflows/` where you can edit
+them — changes are picked up automatically.
 
 After install:
 
-1. Open `http://<your-server-ip>` and set your password
+1. Open `http://<your-server-ip>:4000` and set your password
 2. **Settings** → Connect Linear OAuth
 3. **Projects** → Create a project (name, GitHub repo, Linear org/project slug)
-4. Optionally configure a domain in Settings for automatic HTTPS
 
 #### Workflows
 
