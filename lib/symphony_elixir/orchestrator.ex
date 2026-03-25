@@ -63,7 +63,8 @@ defmodule SymphonyElixir.Orchestrator do
             cooldowns: %{optional(String.t()) => %{expires_at: DateTime.t(), state: String.t()}},
             retry_attempts: map(),
             engine_totals: map() | nil,
-            engine_rate_limits: map() | nil
+            engine_rate_limits: map() | nil,
+            last_config_error: atom() | nil
           }
 
     defstruct [
@@ -82,7 +83,8 @@ defmodule SymphonyElixir.Orchestrator do
       cooldowns: %{},
       retry_attempts: %{},
       engine_totals: nil,
-      engine_rate_limits: nil
+      engine_rate_limits: nil,
+      last_config_error: nil
     ]
   end
 
@@ -495,57 +497,54 @@ defmodule SymphonyElixir.Orchestrator do
     with :ok <- Config.validate!(state.workflow_name),
          {:ok, issues} <- Tracker.fetch_candidate_issues(state.workflow_name),
          true <- available_slots(state) > 0 do
+      state = %{state | last_config_error: nil}
       choose_issues(issues, state, db_claims)
     else
       {:error, :missing_linear_api_token} ->
-        Logger.error("Linear API token missing in WORKFLOW.md")
-        state
+        log_config_error(state, :missing_linear_api_token, "Linear not connected — open the dashboard and connect via OAuth, or set tracker.api_key in the workflow file")
 
       {:error, :missing_linear_project_slug} ->
-        Logger.error("Linear project slug missing in WORKFLOW.md")
-        state
+        log_config_error(state, :missing_linear_project_slug, "Linear project slug missing in workflow file")
 
       {:error, :missing_linear_label_name} ->
-        Logger.error("Linear label name missing in WORKFLOW.md")
-        state
+        log_config_error(state, :missing_linear_label_name, "Linear label name missing in workflow file")
 
       {:error, :missing_tracker_kind} ->
-        Logger.error("Tracker kind missing in WORKFLOW.md")
-
-        state
+        log_config_error(state, :missing_tracker_kind, "Tracker kind missing in workflow file")
 
       {:error, {:unsupported_tracker_kind, kind}} ->
-        Logger.error("Unsupported tracker kind in WORKFLOW.md: #{inspect(kind)}")
-        state
+        log_config_error(state, :unsupported_tracker_kind, "Unsupported tracker kind in workflow file: #{inspect(kind)}")
 
       {:error, {:unsupported_linear_filter_by, filter_by}} ->
-        Logger.error("Unsupported Linear filter_by in WORKFLOW.md: #{inspect(filter_by)}")
-
-        state
+        log_config_error(state, :unsupported_linear_filter_by, "Unsupported Linear filter_by in workflow file: #{inspect(filter_by)}")
 
       {:error, {:invalid_workflow_config, message}} ->
-        Logger.error("Invalid WORKFLOW.md config: #{message}")
-        state
+        log_config_error(state, :invalid_workflow_config, "Invalid workflow config: #{message}")
 
       {:error, {:missing_workflow_file, path, reason}} ->
-        Logger.error("Missing WORKFLOW.md at #{path}: #{inspect(reason)}")
-        state
+        log_config_error(state, :missing_workflow_file, "Missing workflow file at #{path}: #{inspect(reason)}")
 
       {:error, :workflow_front_matter_not_a_map} ->
-        Logger.error("Failed to parse WORKFLOW.md: workflow front matter must decode to a map")
-        state
+        log_config_error(state, :workflow_front_matter_not_a_map, "Failed to parse workflow file: front matter must decode to a map")
 
       {:error, {:workflow_parse_error, reason}} ->
-        Logger.error("Failed to parse WORKFLOW.md: #{inspect(reason)}")
-        state
+        log_config_error(state, :workflow_parse_error, "Failed to parse workflow file: #{inspect(reason)}")
 
       {:error, reason} ->
-        Logger.error("Failed to fetch from Linear: #{inspect(reason)}")
-        state
+        log_config_error(state, :fetch_error, "Failed to fetch from Linear: #{inspect(reason)}")
 
       false ->
         state
     end
+  end
+
+  # Log config/fetch errors only once per distinct error kind to avoid spam.
+  # Clears when the error changes or resolves (set to nil on success above).
+  defp log_config_error(%State{last_config_error: same} = state, same, _message), do: state
+
+  defp log_config_error(%State{} = state, error_kind, message) do
+    Logger.warning(message)
+    %{state | last_config_error: error_kind}
   end
 
   defp reconcile_running_issues(%State{workflow_name: workflow_name} = state) do
@@ -1396,7 +1395,7 @@ defmodule SymphonyElixir.Orchestrator do
         end)
 
       {:error, reason} ->
-        Logger.warning("Skipping startup terminal workspace cleanup; failed to fetch terminal issues: #{inspect(reason)}")
+        Logger.debug("Skipping startup terminal workspace cleanup (Linear not yet connected): #{inspect(reason)}")
     end
   end
 

@@ -206,17 +206,27 @@ install_claude() {
   fi
 
   # Check authentication as the real user (not root)
-  local -a as_user=()
-  [[ -n "${SUDO_USER:-}" ]] && as_user=(sudo -u "$SUDO_USER" env "PATH=$PATH")
+  local claude_authed=false
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    sudo -u "$SUDO_USER" env "PATH=$PATH" claude auth status &>/dev/null 2>&1 && claude_authed=true
+  else
+    claude auth status &>/dev/null 2>&1 && claude_authed=true
+  fi
 
-  if "${as_user[@]}" claude auth status &>/dev/null 2>&1; then
+  if [[ "$claude_authed" == "true" ]]; then
     info "Claude Code is authenticated."
   else
     warn "Claude Code is not authenticated."
     read -rp "  Run 'claude auth login' now? [Y/n] " ans
     if [[ ! "${ans}" =~ ^[Nn]$ ]]; then
-      "${as_user[@]}" claude auth login
-      if "${as_user[@]}" claude auth status &>/dev/null 2>&1; then
+      if [[ -n "${SUDO_USER:-}" ]]; then
+        sudo -u "$SUDO_USER" env "PATH=$PATH" claude auth login || true
+        sudo -u "$SUDO_USER" env "PATH=$PATH" claude auth status &>/dev/null 2>&1 && claude_authed=true
+      else
+        claude auth login || true
+        claude auth status &>/dev/null 2>&1 && claude_authed=true
+      fi
+      if [[ "$claude_authed" == "true" ]]; then
         info "Claude Code authenticated successfully."
       else
         warn "Authentication not completed. Run ${BOLD}claude auth login${NC} later."
@@ -249,17 +259,27 @@ install_gh() {
   fi
 
   # Check authentication as the real user (not root)
-  local -a as_user=()
-  [[ -n "${SUDO_USER:-}" ]] && as_user=(sudo -u "$SUDO_USER" env "PATH=$PATH")
+  local gh_authed=false
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    sudo -u "$SUDO_USER" env "PATH=$PATH" gh auth status &>/dev/null 2>&1 && gh_authed=true
+  else
+    gh auth status &>/dev/null 2>&1 && gh_authed=true
+  fi
 
-  if "${as_user[@]}" gh auth status &>/dev/null 2>&1; then
+  if [[ "$gh_authed" == "true" ]]; then
     info "GitHub CLI is authenticated."
   else
     warn "GitHub CLI is not authenticated."
     read -rp "  Run 'gh auth login' now? [Y/n] " ans
     if [[ ! "${ans}" =~ ^[Nn]$ ]]; then
-      "${as_user[@]}" gh auth login
-      if "${as_user[@]}" gh auth status &>/dev/null 2>&1; then
+      if [[ -n "${SUDO_USER:-}" ]]; then
+        sudo -u "$SUDO_USER" env "PATH=$PATH" gh auth login || true
+        sudo -u "$SUDO_USER" env "PATH=$PATH" gh auth status &>/dev/null 2>&1 && gh_authed=true
+      else
+        gh auth login || true
+        gh auth status &>/dev/null 2>&1 && gh_authed=true
+      fi
+      if [[ "$gh_authed" == "true" ]]; then
         info "GitHub CLI authenticated successfully."
       else
         warn "Authentication not completed. Run ${BOLD}gh auth login${NC} later."
