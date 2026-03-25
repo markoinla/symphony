@@ -62,9 +62,10 @@ defmodule SymphonyElixir.Store do
 
   # ── Project CRUD ──────────────────────────────────────────────────
 
-  @spec list_projects() :: [Ecto.Schema.t()]
-  def list_projects do
+  @spec list_projects(keyword()) :: [Ecto.Schema.t()]
+  def list_projects(opts \\ []) do
     Project
+    |> maybe_filter_org_id(Keyword.get(opts, :org_id))
     |> order_by([p], asc: p.name)
     |> Repo.all()
   end
@@ -79,9 +80,9 @@ defmodule SymphonyElixir.Store do
     Repo.get_by(Project, name: name)
   end
 
-  @spec find_project_by_slug_id(String.t()) :: Project.t() | nil
-  def find_project_by_slug_id(slug_id) when is_binary(slug_id) do
-    list_projects()
+  @spec find_project_by_slug_id(String.t(), keyword()) :: Project.t() | nil
+  def find_project_by_slug_id(slug_id, opts \\ []) when is_binary(slug_id) do
+    list_projects(opts)
     |> Enum.find(fn project ->
       project.linear_project_slug &&
         String.ends_with?(project.linear_project_slug, slug_id)
@@ -191,10 +192,12 @@ defmodule SymphonyElixir.Store do
 
   # ── Issue Claims ────────────────────────────────────────────────
 
-  @spec claim_issue(String.t(), String.t()) ::
+  @spec claim_issue(String.t(), String.t(), keyword()) ::
           {:ok, :claimed} | {:ok, :already_owned} | {:error, :already_claimed}
-  def claim_issue(issue_id, orchestrator_key)
+  def claim_issue(issue_id, orchestrator_key, opts \\ [])
       when is_binary(issue_id) and is_binary(orchestrator_key) do
+    org_id = Keyword.get(opts, :org_id)
+
     case Repo.get(IssueClaim, issue_id) do
       %IssueClaim{orchestrator_key: ^orchestrator_key} ->
         {:ok, :already_owned}
@@ -203,12 +206,16 @@ defmodule SymphonyElixir.Store do
         {:error, :already_claimed}
 
       nil ->
-        %IssueClaim{}
-        |> IssueClaim.changeset(%{
+        attrs = %{
           issue_id: issue_id,
           orchestrator_key: orchestrator_key,
           claimed_at: DateTime.utc_now()
-        })
+        }
+
+        attrs = if org_id, do: Map.put(attrs, :organization_id, org_id), else: attrs
+
+        %IssueClaim{}
+        |> IssueClaim.changeset(attrs)
         |> Repo.insert()
         |> case do
           {:ok, _claim} -> {:ok, :claimed}
@@ -226,9 +233,10 @@ defmodule SymphonyElixir.Store do
     :ok
   end
 
-  @spec list_claimed_issue_ids() :: MapSet.t(String.t())
-  def list_claimed_issue_ids do
+  @spec list_claimed_issue_ids(keyword()) :: MapSet.t(String.t())
+  def list_claimed_issue_ids(opts \\ []) do
     IssueClaim
+    |> maybe_filter_org_id(Keyword.get(opts, :org_id))
     |> select([c], c.issue_id)
     |> Repo.all()
     |> MapSet.new()
@@ -413,6 +421,7 @@ defmodule SymphonyElixir.Store do
 
     Session
     |> order_by([s], desc: s.started_at)
+    |> maybe_filter_org_id(Keyword.get(opts, :org_id))
     |> maybe_filter_issue_identifier(issue_identifier)
     |> maybe_filter_status(status)
     |> maybe_filter_project_id(project_id)
@@ -493,6 +502,12 @@ defmodule SymphonyElixir.Store do
     where(query, [s], s.workflow_name == ^workflow_name)
   end
 
+  defp maybe_filter_org_id(query, nil), do: query
+
+  defp maybe_filter_org_id(query, org_id) do
+    where(query, [r], r.organization_id == ^org_id)
+  end
+
   @spec finalize_stale_sessions(keyword()) :: {integer(), nil}
   def finalize_stale_sessions(opts \\ []) do
     project_id = Keyword.get(opts, :project_id)
@@ -503,6 +518,7 @@ defmodule SymphonyElixir.Store do
     query =
       Session
       |> where([s], s.status == "running")
+      |> maybe_filter_org_id(Keyword.get(opts, :org_id))
       |> scope_to_owner(project_id, workflow_name)
 
     query =
@@ -573,6 +589,7 @@ defmodule SymphonyElixir.Store do
     base =
       Session
       |> where([s], s.status in ["failed", "cancelled"] and s.ended_at >= ^since)
+      |> maybe_filter_org_id(Keyword.get(opts, :org_id))
       |> maybe_filter_project_id(Keyword.get(opts, :project_id))
       |> maybe_filter_workflow_name(Keyword.get(opts, :workflow_name))
 
@@ -588,6 +605,7 @@ defmodule SymphonyElixir.Store do
 
     Session
     |> where([s], s.ended_at >= ^since)
+    |> maybe_filter_org_id(Keyword.get(opts, :org_id))
     |> maybe_filter_project_id(Keyword.get(opts, :project_id))
     |> maybe_filter_workflow_name(Keyword.get(opts, :workflow_name))
     |> run_count_bucket_query(range)
@@ -658,6 +676,7 @@ defmodule SymphonyElixir.Store do
     |> from(as: :parent)
     |> where([s], s.status in ["failed", "cancelled"])
     |> where([s], not exists(sub))
+    |> maybe_filter_org_id(Keyword.get(opts, :org_id))
     |> maybe_filter_project_id(Keyword.get(opts, :project_id))
     |> maybe_filter_workflow_name(Keyword.get(opts, :workflow_name))
     |> order_by([s], desc: s.ended_at)
@@ -682,6 +701,7 @@ defmodule SymphonyElixir.Store do
 
     Session
     |> where([s], not is_nil(s.worker_host) and s.started_at >= ^since)
+    |> maybe_filter_org_id(Keyword.get(opts, :org_id))
     |> maybe_filter_project_id(Keyword.get(opts, :project_id))
     |> maybe_filter_workflow_name(Keyword.get(opts, :workflow_name))
     |> group_by([s], s.worker_host)
@@ -753,14 +773,15 @@ defmodule SymphonyElixir.Store do
 
   # ── Analytics ─────────────────────────────────────────────────────
 
-  @spec analytics_cost(String.t()) :: map()
-  def analytics_cost(range) when range in ["7d", "30d", "90d"] do
+  @spec analytics_cost(String.t(), keyword()) :: map()
+  def analytics_cost(range, opts \\ []) when range in ["7d", "30d", "90d"] do
     days = range_to_days(range)
     since = DateTime.utc_now() |> DateTime.add(-days, :day) |> DateTime.truncate(:second)
+    org_id = Keyword.get(opts, :org_id)
 
-    summary = summary_query(since)
-    daily = daily_query(since)
-    by_workflow = by_workflow_query(since)
+    summary = summary_query(since, org_id)
+    daily = daily_query(since, org_id)
+    by_workflow = by_workflow_query(since, org_id)
 
     %{
       range: range,
@@ -774,10 +795,11 @@ defmodule SymphonyElixir.Store do
   defp range_to_days("30d"), do: 30
   defp range_to_days("90d"), do: 90
 
-  defp summary_query(since) do
+  defp summary_query(since, org_id) do
     result =
       Session
       |> where([s], s.started_at >= ^since and s.status != "running")
+      |> maybe_filter_org_id(org_id)
       |> select([s], %{
         total_cost_cents: coalesce(sum(s.estimated_cost_cents), 0),
         total_sessions: count(s.id),
@@ -794,9 +816,10 @@ defmodule SymphonyElixir.Store do
     }
   end
 
-  defp daily_query(since) do
+  defp daily_query(since, org_id) do
     Session
     |> where([s], s.started_at >= ^since and s.status != "running" and not is_nil(s.workflow))
+    |> maybe_filter_org_id(org_id)
     |> group_by([s], [fragment("date_trunc('day', ?)", s.started_at), s.workflow])
     |> order_by([s], asc: fragment("date_trunc('day', ?)", s.started_at))
     |> select([s], %{
@@ -820,9 +843,10 @@ defmodule SymphonyElixir.Store do
     end)
   end
 
-  defp by_workflow_query(since) do
+  defp by_workflow_query(since, org_id) do
     Session
     |> where([s], s.started_at >= ^since and s.status != "running" and not is_nil(s.workflow))
+    |> maybe_filter_org_id(org_id)
     |> group_by([s], s.workflow)
     |> select([s], %{
       workflow: s.workflow,
