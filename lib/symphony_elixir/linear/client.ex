@@ -8,6 +8,8 @@ defmodule SymphonyElixir.Linear.Client do
 
   @issue_page_size 50
   @max_error_body_log_bytes 1_000
+  @rate_limit_max_retries 3
+  @rate_limit_base_delay_ms 2_000
 
   @comment_page_size 50
 
@@ -399,11 +401,34 @@ defmodule SymphonyElixir.Linear.Client do
       when is_binary(query) and is_map(variables) and is_list(opts) do
     payload = build_graphql_payload(query, variables, Keyword.get(opts, :operation_name))
     request_fun = Keyword.get(opts, :request_fun, &post_graphql_request/2)
+    graphql_with_retry(payload, request_fun, 0)
+  end
 
+  defp graphql_with_retry(payload, request_fun, attempt) do
     with {:ok, headers} <- graphql_headers(),
          {:ok, %{status: 200, body: body}} <- request_fun.(payload, headers) do
       {:ok, body}
     else
+      {:ok, %{status: 400, body: body} = response} when is_map(body) ->
+        if rate_limited_response?(body) and attempt < @rate_limit_max_retries do
+          delay = rate_limit_retry_delay(response, attempt)
+
+          Logger.warning(
+            "Linear API rate limited, retrying in #{delay}ms (attempt #{attempt + 1}/#{@rate_limit_max_retries})" <>
+              linear_error_context(payload, response)
+          )
+
+          Process.sleep(delay)
+          graphql_with_retry(payload, request_fun, attempt + 1)
+        else
+          Logger.error(
+            "Linear GraphQL request failed status=400" <>
+              linear_error_context(payload, response)
+          )
+
+          {:error, {:linear_api_status, 400}}
+        end
+
       {:ok, response} ->
         Logger.error(
           "Linear GraphQL request failed status=#{response.status}" <>
@@ -417,6 +442,55 @@ defmodule SymphonyElixir.Linear.Client do
         {:error, {:linear_api_request, reason}}
     end
   end
+
+  defp rate_limited_response?(%{"errors" => errors}) when is_list(errors) do
+    Enum.any?(errors, fn
+      %{"extensions" => %{"code" => "RATELIMITED"}} -> true
+      _ -> false
+    end)
+  end
+
+  defp rate_limited_response?(_body), do: false
+
+  defp rate_limit_retry_delay(response, attempt) do
+    reset_ms = get_in_headers(response, "x-ratelimit-requests-reset")
+    backoff = @rate_limit_base_delay_ms * Integer.pow(2, attempt)
+
+    case reset_ms do
+      ms when is_integer(ms) ->
+        wait = max(ms - System.system_time(:millisecond), 1_000)
+        min(wait, 60_000)
+
+      _ ->
+        backoff
+    end
+  end
+
+  defp get_in_headers(%{headers: headers}, name) when is_map(headers) do
+    case Map.get(headers, name) do
+      [value | _] -> parse_integer(value)
+      value when is_binary(value) -> parse_integer(value)
+      _ -> nil
+    end
+  end
+
+  defp get_in_headers(%{headers: headers}, name) when is_list(headers) do
+    Enum.find_value(headers, fn
+      {^name, value} -> parse_integer(value)
+      _ -> nil
+    end)
+  end
+
+  defp get_in_headers(_response, _name), do: nil
+
+  defp parse_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {int, ""} -> int
+      _ -> nil
+    end
+  end
+
+  defp parse_integer(_value), do: nil
 
   @doc false
   @spec normalize_issue_for_test(map()) :: Issue.t() | nil
