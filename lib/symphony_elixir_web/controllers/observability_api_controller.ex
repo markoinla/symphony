@@ -6,7 +6,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.{Config, Store}
+  alias SymphonyElixir.{Config, Store, WorkflowStore}
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
   import SymphonyElixirWeb.ErrorHelpers, only: [error_response: 4]
@@ -119,20 +119,43 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   def diagnostics(conn, _params) do
     payload = Presenter.state_payload(orchestrator(), snapshot_timeout_ms())
 
-    settings = Config.settings!()
+    workflow_configs =
+      WorkflowStore.workflow_names()
+      |> Enum.map(fn name ->
+        settings = Config.settings!(name)
+
+        %{
+          workflow_name: name,
+          active_states: settings.tracker.active_states,
+          terminal_states: settings.tracker.terminal_states,
+          max_concurrent_agents: settings.agent.max_concurrent_agents,
+          max_concurrent_agents_by_state: settings.agent.max_concurrent_agents_by_state,
+          max_failure_retries: settings.agent.max_failure_retries,
+          retry_cooldown_ms: settings.agent.retry_cooldown_ms,
+          poll_interval_ms: settings.polling.interval_ms,
+          workers: worker_diagnostics(settings)
+        }
+      end)
+
+    recent_errors =
+      Store.list_sessions(limit: 10, status: "error")
+      |> Enum.map(fn s ->
+        %{
+          id: s.id,
+          issue_identifier: s.issue_identifier,
+          issue_title: s.issue_title,
+          workflow_name: s.workflow_name,
+          error: s.error,
+          error_category: Map.get(s, :error_category),
+          ended_at: format_datetime(Map.get(s, :ended_at)),
+          started_at: format_datetime(Map.get(s, :started_at))
+        }
+      end)
 
     diagnostics = %{
       orchestrator: payload,
-      config: %{
-        active_states: settings.tracker.active_states,
-        terminal_states: settings.tracker.terminal_states,
-        max_concurrent_agents: settings.agent.max_concurrent_agents,
-        max_concurrent_agents_by_state: settings.agent.max_concurrent_agents_by_state,
-        max_failure_retries: settings.agent.max_failure_retries,
-        retry_cooldown_ms: settings.agent.retry_cooldown_ms,
-        poll_interval_ms: settings.polling.interval_ms
-      },
-      workers: worker_diagnostics(settings)
+      configs: workflow_configs,
+      recent_errors: recent_errors
     }
 
     json(conn, diagnostics)
