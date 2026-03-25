@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from 'react'
 
-import { ApiError, setupPassword } from '../lib/api'
+import { ApiError, setupAccount } from '../lib/api'
 import { Button, Card, Input } from '../components/ui'
 
 export function SetupView() {
+  const [email, setEmail] = useState('')
+  const [name, setName] = useState('')
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
@@ -26,12 +28,15 @@ export function SetupView() {
     setLoading(true)
 
     try {
-      await setupPassword(password)
+      await setupAccount(email, password, name || undefined)
       window.location.href = '/'
     } catch (err) {
       if (err instanceof ApiError && err.status === 409) {
-        setError('Password already configured')
+        setError('Setup is already complete')
         setTimeout(() => { window.location.href = '/login' }, 2000)
+      } else if (err instanceof ApiError && err.status === 422) {
+        const payload = err.payload as { error?: { message?: string } } | undefined
+        setError(payload?.error?.message || 'Validation error')
       } else {
         setError('Something went wrong')
       }
@@ -51,10 +56,24 @@ export function SetupView() {
               </svg>
             </div>
             <h1 className="text-lg font-semibold text-th-text-1">Symphony</h1>
-            <p className="text-sm text-th-text-3">Set your password</p>
+            <p className="text-sm text-th-text-3">Create your account</p>
           </div>
           <Input
             autoFocus
+            name="email"
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Email"
+            type="email"
+            value={email}
+          />
+          <Input
+            name="name"
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Name (optional)"
+            type="text"
+            value={name}
+          />
+          <Input
             name="password"
             onChange={(e) => setPassword(e.target.value)}
             placeholder="Password"
@@ -69,8 +88,8 @@ export function SetupView() {
             value={confirm}
           />
           {error && <p className="text-sm text-th-danger">{error}</p>}
-          <Button disabled={loading || !password || !confirm} type="submit">
-            {loading ? 'Setting up...' : 'Set password'}
+          <Button disabled={loading || !email || !password || !confirm} type="submit">
+            {loading ? 'Setting up...' : 'Create account'}
           </Button>
         </form>
       </Card>
