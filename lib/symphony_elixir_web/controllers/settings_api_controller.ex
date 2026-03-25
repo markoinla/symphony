@@ -87,28 +87,34 @@ defmodule SymphonyElixirWeb.SettingsApiController do
   defp maybe_remove_caddy_domain(_key), do: :ok
 
   defp maybe_register_proxy(base_url) do
-    org_id = Store.get_setting("proxy.linear_org_id")
-
-    if ProxyClient.proxy_enabled?() and is_binary(org_id) and org_id != "" do
+    with org_id when is_binary(org_id) and org_id != "" <- Store.get_setting("proxy.linear_org_id"),
+         true <- ProxyClient.proxy_enabled?() do
       Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-        case ProxyClient.register_instance(base_url, org_id) do
-          :ok -> Logger.info("Re-registered with proxy after domain change: #{base_url}")
-          {:error, reason} -> Logger.warning("Proxy re-registration failed: #{inspect(reason)}")
-        end
+        do_register_proxy(base_url, org_id)
       end)
     end
   end
 
-  defp maybe_deregister_proxy do
-    org_id = Store.get_setting("proxy.linear_org_id")
+  defp do_register_proxy(base_url, org_id) do
+    case ProxyClient.register_instance(base_url, org_id) do
+      :ok -> Logger.info("Re-registered with proxy after domain change: #{base_url}")
+      {:error, reason} -> Logger.warning("Proxy re-registration failed: #{inspect(reason)}")
+    end
+  end
 
-    if ProxyClient.proxy_enabled?() and is_binary(org_id) and org_id != "" do
+  defp maybe_deregister_proxy do
+    with org_id when is_binary(org_id) and org_id != "" <- Store.get_setting("proxy.linear_org_id"),
+         true <- ProxyClient.proxy_enabled?() do
       Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-        case ProxyClient.deregister_instance(org_id) do
-          :ok -> Logger.info("Deregistered from proxy after domain removal")
-          {:error, reason} -> Logger.warning("Proxy deregistration failed: #{inspect(reason)}")
-        end
+        do_deregister_proxy(org_id)
       end)
+    end
+  end
+
+  defp do_deregister_proxy(org_id) do
+    case ProxyClient.deregister_instance(org_id) do
+      :ok -> Logger.info("Deregistered from proxy after domain removal")
+      {:error, reason} -> Logger.warning("Proxy deregistration failed: #{inspect(reason)}")
     end
   end
 

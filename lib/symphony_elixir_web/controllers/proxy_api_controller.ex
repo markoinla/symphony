@@ -72,24 +72,28 @@ defmodule SymphonyElixirWeb.ProxyApiController do
         webhook: %{ok: false, error: "Cannot test without organization ID."}
       })
     else
-      proxy_result =
-        case ProxyClient.health_check() do
-          :ok -> %{ok: true}
-          {:error, reason} -> %{ok: false, error: inspect(reason)}
-        end
-
-      webhook_result =
-        if proxy_result.ok do
-          case ProxyClient.ping_instance(org_id) do
-            {:ok, body} -> body
-            {:error, reason} -> %{ok: false, error: inspect(reason)}
-          end
-        else
-          %{ok: false, error: "Skipped — proxy is unreachable."}
-        end
-
+      proxy_result = ping_proxy()
+      webhook_result = ping_webhook(proxy_result, org_id)
       json(conn, %{proxy: proxy_result, webhook: webhook_result})
     end
+  end
+
+  defp ping_proxy do
+    case ProxyClient.health_check() do
+      :ok -> %{ok: true}
+      {:error, reason} -> %{ok: false, error: inspect(reason)}
+    end
+  end
+
+  defp ping_webhook(%{ok: true}, org_id) do
+    case ProxyClient.ping_instance(org_id) do
+      {:ok, body} -> body
+      {:error, reason} -> %{ok: false, error: inspect(reason)}
+    end
+  end
+
+  defp ping_webhook(_proxy_down, _org_id) do
+    %{ok: false, error: "Skipped — proxy is unreachable."}
   end
 
   defp error_response(conn, status, code, message) do
