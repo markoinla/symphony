@@ -40,12 +40,28 @@ handle_reset_password() {
   exit 0
 }
 
+handle_uninstall() {
+  header "Uninstalling Symphony"
+
+  read -rp "This will stop all services and delete data. Continue? [y/N] " confirm
+  [[ "$confirm" =~ ^[Yy]$ ]] || { info "Aborted."; exit 0; }
+
+  cd "${INSTALL_DIR}" 2>/dev/null && \
+    docker compose -f docker-compose.prod.yml down -v 2>/dev/null || true
+
+  rm -rf "${INSTALL_DIR}"
+  info "Removed ${INSTALL_DIR} and all Docker volumes."
+  info "Symphony has been uninstalled."
+  exit 0
+}
+
 # ── Parse flags ─────────────────────────────────────────────────────────────────
 
 for arg in "$@"; do
   case "$arg" in
     --update)         handle_update ;;
     --reset-password) handle_reset_password ;;
+    --uninstall)      handle_uninstall ;;
     *)                err "Unknown flag: $arg"; exit 1 ;;
   esac
 done
@@ -198,6 +214,7 @@ print_success() {
   echo -e "  Useful commands:"
   echo -e "    Update:          ${BOLD}sudo bash ${INSTALL_DIR}/install.sh --update${NC}"
   echo -e "    Reset password:  ${BOLD}sudo bash ${INSTALL_DIR}/install.sh --reset-password${NC}"
+  echo -e "    Uninstall:       ${BOLD}sudo bash ${INSTALL_DIR}/install.sh --uninstall${NC}"
   echo -e "    View logs:       ${BOLD}cd ${INSTALL_DIR} && docker compose -f docker-compose.prod.yml logs -f${NC}"
   echo ""
 }

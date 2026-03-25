@@ -129,8 +129,11 @@ function RootLayout() {
   const isPublicPage = isLoginPage || isSetupPage
 
   useEffect(() => {
-    if (authQuery.data && authQuery.data.auth_required && !authQuery.data.authenticated && !isPublicPage) {
+    if (!authQuery.data || isPublicPage) return
+    if (authQuery.data.auth_required && !authQuery.data.authenticated) {
       window.location.href = '/login'
+    } else if (!authQuery.data.auth_required) {
+      window.location.href = '/setup'
     }
   }, [authQuery.data, isPublicPage])
 
