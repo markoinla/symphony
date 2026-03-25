@@ -7,7 +7,6 @@ REPO="markoinla/symphony"
 BRANCH="main"
 INSTALL_DIR="/opt/symphony"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
-SEED_DIR="${INSTALL_DIR}/plugin-seed"
 PLUGIN_VERSION="1.0.0"
 WORKFLOW_FILES=(WORKFLOW.md ENRICHMENT.md TRIAGE.md MENTION.md REVIEW.md EPIC_SPLITTER.md)
 
@@ -177,28 +176,31 @@ download_files() {
   info "Downloaded Caddyfile"
 }
 
-# ── Agent skills (plugin seed) ────────────────────────────────────────────────
+# ── Agent skills (Claude Code plugins) ───────────────────────────────────────
 
 install_skills() {
   header "Agent skills"
 
+  # Resolve the real user's home for ~/.claude/plugins
+  local user_home="${HOST_HOME:-$HOME}"
+  if [[ -z "${HOST_HOME:-}" ]] && [[ -n "${SUDO_USER:-}" ]]; then
+    user_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+  fi
+
+  local PLUGINS_DIR="${user_home}/.claude/plugins"
   local PLUGIN_BASE="plugins/symphony-agent-skills"
-  local CACHE_DIR="${SEED_DIR}/cache/symphony-skills/symphony-agent-skills/${PLUGIN_VERSION}"
-  local MARKETPLACE_DIR="${SEED_DIR}/marketplaces/symphony-skills"
+  local CACHE_DIR="${PLUGINS_DIR}/cache/symphony-skills/symphony-agent-skills/${PLUGIN_VERSION}"
+  local MARKETPLACE_DIR="${PLUGINS_DIR}/marketplaces/symphony-skills"
 
   mkdir -p "${CACHE_DIR}/skills/commit"
   mkdir -p "${CACHE_DIR}/skills/push"
   mkdir -p "${CACHE_DIR}/skills/pull"
   mkdir -p "${CACHE_DIR}/skills/land"
   mkdir -p "${CACHE_DIR}/skills/linear"
-  mkdir -p "${CACHE_DIR}/.claude-plugin"
   mkdir -p "${MARKETPLACE_DIR}/.claude-plugin"
+  mkdir -p "${MARKETPLACE_DIR}/plugins/symphony-agent-skills/skills"
 
-  # Download plugin manifest
-  curl -fsSL "${RAW_BASE}/${PLUGIN_BASE}/.claude-plugin/plugin.json" \
-    -o "${CACHE_DIR}/.claude-plugin/plugin.json"
-
-  # Download skill files
+  # Download plugin files to cache
   local SKILLS=(commit push pull linear)
   for skill in "${SKILLS[@]}"; do
     curl -fsSL "${RAW_BASE}/${PLUGIN_BASE}/skills/${skill}/SKILL.md" \
@@ -215,19 +217,92 @@ install_skills() {
   curl -fsSL "${RAW_BASE}/.claude-plugin/marketplace.json" \
     -o "${MARKETPLACE_DIR}/.claude-plugin/marketplace.json"
 
-  # Write known_marketplaces.json
-  cat > "${SEED_DIR}/known_marketplaces.json" <<'SEED_EOF'
+  # Mirror plugin structure into marketplace dir (so Claude Code can discover it)
+  for skill in "${SKILLS[@]}" land; do
+    mkdir -p "${MARKETPLACE_DIR}/plugins/symphony-agent-skills/skills/${skill}"
+    cp -r "${CACHE_DIR}/skills/${skill}/." \
+      "${MARKETPLACE_DIR}/plugins/symphony-agent-skills/skills/${skill}/"
+  done
+
+  # Add symphony-skills to known_marketplaces.json (merge with existing)
+  local KM_FILE="${PLUGINS_DIR}/known_marketplaces.json"
+  if [[ -f "${KM_FILE}" ]]; then
+    # Add our entry without clobbering existing marketplaces
+    local tmp
+    tmp=$(mktemp)
+    python3 -c "
+import json, sys
+with open('${KM_FILE}') as f:
+    data = json.load(f)
+data['symphony-skills'] = {
+    'source': {'source': 'github', 'repo': 'markoinla/symphony'},
+    'installLocation': '${MARKETPLACE_DIR}',
+    'lastUpdated': '$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'
+}
+json.dump(data, sys.stdout, indent=2)
+" > "${tmp}" && mv "${tmp}" "${KM_FILE}"
+  else
+    cat > "${KM_FILE}" <<KMEOF
 {
   "symphony-skills": {
     "source": {
       "source": "github",
       "repo": "markoinla/symphony"
-    }
+    },
+    "installLocation": "${MARKETPLACE_DIR}",
+    "lastUpdated": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
   }
 }
-SEED_EOF
+KMEOF
+  fi
 
-  info "Installed agent skills (v${PLUGIN_VERSION})"
+  # Add plugin to installed_plugins.json (merge with existing)
+  local IP_FILE="${PLUGINS_DIR}/installed_plugins.json"
+  local NOW
+  NOW="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+  if [[ -f "${IP_FILE}" ]]; then
+    local tmp
+    tmp=$(mktemp)
+    python3 -c "
+import json, sys
+with open('${IP_FILE}') as f:
+    data = json.load(f)
+data.setdefault('version', 2)
+data.setdefault('plugins', {})
+data['plugins']['symphony-agent-skills@symphony-skills'] = [{
+    'scope': 'user',
+    'installPath': '${CACHE_DIR}',
+    'version': '${PLUGIN_VERSION}',
+    'installedAt': '${NOW}',
+    'lastUpdated': '${NOW}'
+}]
+json.dump(data, sys.stdout, indent=2)
+" > "${tmp}" && mv "${tmp}" "${IP_FILE}"
+  else
+    cat > "${IP_FILE}" <<IPEOF
+{
+  "version": 2,
+  "plugins": {
+    "symphony-agent-skills@symphony-skills": [
+      {
+        "scope": "user",
+        "installPath": "${CACHE_DIR}",
+        "version": "${PLUGIN_VERSION}",
+        "installedAt": "${NOW}",
+        "lastUpdated": "${NOW}"
+      }
+    ]
+  }
+}
+IPEOF
+  fi
+
+  # Ensure the regular user owns their .claude directory
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    chown -R "${SUDO_USER}:${SUDO_USER}" "${user_home}/.claude"
+  fi
+
+  info "Installed agent skills (v${PLUGIN_VERSION}) to ${PLUGINS_DIR}"
 }
 
 # ── Workflow files ───────────────────────────────────────────────────────────────
@@ -313,7 +388,6 @@ POSTGRES_PASSWORD="${POSTGRES_PASSWORD}"
 SYMPHONY_SECRET_KEY_BASE="${SECRET_KEY_BASE}"
 DATABASE_URL="ecto://symphony:${POSTGRES_PASSWORD}@postgres:5432/symphony"
 SYMPHONY_PROXY_REGISTRATION_SECRET="zy9eWdmJ6nWHrFF1WL0u2tLEqbh7FpqpZHzlJy5HC64="
-CLAUDE_CODE_PLUGIN_SEED_DIR=${SEED_DIR}
 EOF
 
   info "Generated .env at ${INSTALL_DIR}/.env"
