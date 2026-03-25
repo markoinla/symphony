@@ -7,6 +7,13 @@ set -euo pipefail
 for p in /usr/local/bin /usr/local/sbin /snap/bin; do
   [[ ":$PATH:" != *":$p:"* ]] && export PATH="$p:$PATH"
 done
+# Pick up nvm-installed binaries from the invoking user's home
+if [[ -n "${SUDO_USER:-}" ]]; then
+  SUDO_HOME=$(eval echo "~${SUDO_USER}")
+  for nvm_bin in "${SUDO_HOME}"/.nvm/versions/node/*/bin; do
+    [[ -d "$nvm_bin" && ":$PATH:" != *":$nvm_bin:"* ]] && export PATH="$nvm_bin:$PATH"
+  done
+fi
 
 REPO="markoinla/symphony"
 BRANCH="main"
@@ -187,14 +194,14 @@ install_docker() {
 
 install_node() {
   header "Node.js"
-  if command -v node &>/dev/null; then
-    NODE_VER="$(node --version)"
-    info "Node.js is already installed: ${NODE_VER}"
+  if command -v node &>/dev/null && command -v npm &>/dev/null; then
+    info "Node.js is already installed: $(node --version)"
   else
-    warn "Node.js not found. Installing v22 via NodeSource..."
+    [[ -f /usr/bin/node ]] && warn "System Node.js found but npm is missing."
+    warn "Installing Node.js v22 via NodeSource (includes npm)..."
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y nodejs
-    info "Node.js installed: $(node --version)"
+    info "Node.js installed: $(node --version), npm $(npm --version)"
   fi
 }
 
