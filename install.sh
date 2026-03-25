@@ -446,8 +446,8 @@ generate_env() {
     HOST_HOME="$HOME"
   fi
 
-  POSTGRES_PASSWORD="$(openssl rand -base64 32)"
-  SECRET_KEY_BASE="$(openssl rand -base64 64)"
+  POSTGRES_PASSWORD="$(openssl rand -hex 32)"
+  SECRET_KEY_BASE="$(openssl rand -hex 64)"
 
   WORKFLOWS_DIR="${HOST_HOME}/.symphony/workflows"
 
