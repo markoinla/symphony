@@ -170,6 +170,8 @@ defmodule SymphonyElixirWeb.Presenter do
           },
           running: Enum.map(snapshot.running, &running_entry_payload(&1, workflow_name)),
           retrying: Enum.map(snapshot.retrying, &retry_entry_payload(&1, workflow_name)),
+          cooldowns: Map.get(snapshot, :cooldowns, []),
+          capacity: Map.get(snapshot, :capacity),
           engine_totals: snapshot.engine_totals,
           rate_limits: snapshot.rate_limits,
           polling: Map.get(snapshot, :polling)
