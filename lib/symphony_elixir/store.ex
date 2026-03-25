@@ -10,7 +10,8 @@ defmodule SymphonyElixir.Store do
   require Logger
   import Ecto.Query
   alias SymphonyElixir.Repo
-  alias SymphonyElixir.Store.{Agent, IssueClaim, Message, Project, Session, Setting}
+  alias SymphonyElixir.Store.{Agent, IssueClaim, Message, Organization, Project, Session, Setting}
+  alias SymphonyElixir.Store.{User, UserOrganization}
 
   # ── Agent CRUD ─────────────────────────────────────────────────────
 
@@ -836,5 +837,62 @@ defmodule SymphonyElixir.Store do
         avg_cost_cents_per_session: avg
       }
     end)
+  end
+
+  # ── User CRUD ──────────────────────────────────────────────────────
+
+  @spec create_user(map()) :: {:ok, User.t()} | {:error, Ecto.Changeset.t()}
+  def create_user(attrs) do
+    %User{}
+    |> User.registration_changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @spec get_user(Ecto.UUID.t()) :: User.t() | nil
+  def get_user(id) do
+    Repo.get(User, id)
+  end
+
+  @spec get_user_by_email(String.t()) :: User.t() | nil
+  def get_user_by_email(email) when is_binary(email) do
+    Repo.get_by(User, email: email)
+  end
+
+  # ── Organization CRUD ──────────────────────────────────────────────
+
+  @spec create_organization(map()) :: {:ok, Organization.t()} | {:error, Ecto.Changeset.t()}
+  def create_organization(attrs) do
+    %Organization{}
+    |> Organization.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @spec get_organization(Ecto.UUID.t()) :: Organization.t() | nil
+  def get_organization(id) do
+    Repo.get(Organization, id)
+  end
+
+  @spec get_organization_by_slug(String.t()) :: Organization.t() | nil
+  def get_organization_by_slug(slug) when is_binary(slug) do
+    Repo.get_by(Organization, slug: slug)
+  end
+
+  # ── User-Organization membership ───────────────────────────────────
+
+  @spec add_user_to_organization(Ecto.UUID.t(), Ecto.UUID.t(), String.t()) ::
+          {:ok, UserOrganization.t()} | {:error, Ecto.Changeset.t()}
+  def add_user_to_organization(user_id, organization_id, role \\ "member") do
+    %UserOrganization{}
+    |> UserOrganization.changeset(%{user_id: user_id, organization_id: organization_id, role: role})
+    |> Ecto.Changeset.put_change(:inserted_at, DateTime.truncate(DateTime.utc_now(), :second))
+    |> Repo.insert()
+  end
+
+  @spec get_user_organizations(Ecto.UUID.t()) :: [Organization.t()]
+  def get_user_organizations(user_id) do
+    Organization
+    |> join(:inner, [o], uo in UserOrganization, on: uo.organization_id == o.id)
+    |> where([_o, uo], uo.user_id == ^user_id)
+    |> Repo.all()
   end
 end
