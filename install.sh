@@ -26,6 +26,17 @@ header()  { echo -e "\n${BOLD}── $* ──${NC}"; }
 handle_update() {
   header "Updating Symphony"
   cd "${INSTALL_DIR}"
+
+  curl -fsSL "${RAW_BASE}/install.sh" -o "${INSTALL_DIR}/install.sh"
+  chmod +x "${INSTALL_DIR}/install.sh"
+  info "Updated install.sh"
+
+  curl -fsSL "${RAW_BASE}/docker-compose.prod.yml" -o "${INSTALL_DIR}/docker-compose.prod.yml"
+  info "Updated docker-compose.prod.yml"
+
+  curl -fsSL "${RAW_BASE}/deploy/Caddyfile" -o "${INSTALL_DIR}/Caddyfile"
+  info "Updated Caddyfile"
+
   docker compose -f docker-compose.prod.yml pull
   docker compose -f docker-compose.prod.yml up -d
   info "Symphony updated successfully."
