@@ -616,7 +616,12 @@ defmodule SymphonyElixir.Codex.AppServer do
         _ -> :tool_call_failed
       end
 
-    emit_message(on_message, event, %{payload: payload, raw: payload_string}, metadata)
+    emit_message(
+      on_message,
+      event,
+      %{payload: Map.put(payload, "result", result), raw: payload_string},
+      metadata
+    )
 
     :approved
   end

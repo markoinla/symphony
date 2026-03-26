@@ -1182,14 +1182,17 @@ defmodule SymphonyElixir.Orchestrator do
     end)
   end
 
-  defp maybe_create_proactive_agent_session(%Issue{id: issue_id} = issue)
+  defp maybe_create_proactive_agent_session(%Issue{id: issue_id, identifier: identifier} = issue)
        when is_binary(issue_id) do
     if Config.settings!().linear_agent.enabled do
       do_create_proactive_agent_session(issue)
     end
   rescue
     e ->
-      Logger.warning("Error creating proactive agent session: #{Exception.message(e)}")
+      Logger.warning("Error creating proactive agent session: #{Exception.message(e)}",
+        issue_id: issue_id,
+        issue_identifier: identifier
+      )
   end
 
   defp maybe_create_proactive_agent_session(_issue), do: :ok
@@ -1204,7 +1207,10 @@ defmodule SymphonyElixir.Orchestrator do
       maybe_set_agent_external_urls(issue)
     else
       {:error, reason} ->
-        Logger.warning("Failed to create proactive agent session for #{issue_id}: #{inspect(reason)}")
+        Logger.warning("Failed to create Linear agent session: #{inspect(reason)}",
+          issue_id: issue_id,
+          issue_identifier: issue.identifier
+        )
     end
   end
 

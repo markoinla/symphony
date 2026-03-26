@@ -43,11 +43,23 @@ defmodule SymphonyElixir.Linear.AgentAPI do
     with {:ok, response} <-
            agent_graphql(@create_session_mutation, %{input: %{issueId: issue_id}}),
          true <- get_in(response, ["data", "agentSessionCreateOnIssue", "success"]) == true do
-      {:ok, get_in(response, ["data", "agentSessionCreateOnIssue", "agentSession", "id"])}
+      session_id = get_in(response, ["data", "agentSessionCreateOnIssue", "agentSession", "id"])
+      Logger.info("Created Linear agent session", issue_id: issue_id, agent_session_id: session_id)
+      {:ok, session_id}
     else
-      false -> {:error, :session_create_failed}
-      {:error, reason} -> {:error, reason}
-      _ -> {:error, :session_create_failed}
+      false ->
+        Logger.warning("Linear agent session create returned success=false", issue_id: issue_id)
+        {:error, :session_create_failed}
+
+      {:error, reason} ->
+        {:error, reason}
+
+      other ->
+        Logger.warning("Linear agent session create unexpected response: #{inspect(other)}",
+          issue_id: issue_id
+        )
+
+        {:error, :session_create_failed}
     end
   end
 

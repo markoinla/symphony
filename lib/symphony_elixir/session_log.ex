@@ -285,6 +285,26 @@ defmodule SymphonyElixir.SessionLog do
 
   # ── Tool call deduplication ──────────────────────────────────────────
 
+  # Merge tool result into the last tool_call when the result arrives with a
+  # tool_use_id (not the original tool name). Claude Code sends tool results
+  # keyed by tool_use_id, so we match any completion/failure into the preceding
+  # tool_call message.
+  defp handle_tool_call(
+         _tool_name,
+         %{status: status} = metadata,
+         _engine_message,
+         %{last_tool_call: %{} = last} = state
+       )
+       when status in ["completed", "failed"] do
+    merged = merge_tool_metadata(last.metadata, metadata)
+    updated = %{last | metadata: merged}
+
+    ObservabilityPubSub.broadcast_session_message_update(state.issue_id, updated)
+    update_persisted_metadata(state.db_session_id, updated)
+
+    {:noreply, %{state | last_tool_call: updated}}
+  end
+
   # Merge with existing tool_call if same tool_name (dedup duplicate events)
   defp handle_tool_call(
          tool_name,
@@ -326,6 +346,7 @@ defmodule SymphonyElixir.SessionLog do
     |> maybe_put_arg(:error, first_present(incoming[:error], existing[:error]))
     |> maybe_put_arg(:reason, first_present(incoming[:reason], existing[:reason]))
     |> maybe_put_arg(:decision, first_present(incoming[:decision], existing[:decision]))
+    |> maybe_put_arg(:result, first_present(incoming[:result], existing[:result]))
   end
 
   defp merge_tool_args(existing, incoming) do
@@ -392,7 +413,10 @@ defmodule SymphonyElixir.SessionLog do
     payload = Map.get(msg, :payload, %{})
     tool_name = extract_tool_name(payload)
     args = extract_tool_args(payload)
-    {:message, :tool_call, tool_name || "unknown", %{args: args, status: "completed"}}
+    result = extract_tool_result(payload)
+    metadata = %{args: args, status: "completed"}
+    metadata = if result, do: Map.put(metadata, :result, result), else: metadata
+    {:message, :tool_call, tool_name || "unknown", metadata}
   end
 
   defp classify_message(%{event: :tool_call_failed} = msg) do
@@ -480,7 +504,8 @@ defmodule SymphonyElixir.SessionLog do
   # Claude Code events: tool use notification
   defp classify_by_method(payload, "claude/tool_use") do
     tool_name = payload_path(payload, ["params", "name"]) || "unknown"
-    {:message, :tool_call, tool_name, %{status: "started"}}
+    args = extract_claude_tool_args(payload)
+    {:message, :tool_call, tool_name, %{args: args, status: "started"}}
   end
 
   # Claude Code events: tool result
@@ -488,7 +513,8 @@ defmodule SymphonyElixir.SessionLog do
     is_error = payload_path(payload, ["params", "is_error"])
     tool_id = payload_path(payload, ["params", "tool_use_id"]) || "unknown"
     status = if is_error, do: "failed", else: "completed"
-    {:message, :tool_call, tool_id, %{status: status}}
+    result = extract_claude_tool_result(payload)
+    {:message, :tool_call, tool_id, %{status: status, result: result}}
   end
 
   defp classify_by_method(_payload, _method), do: nil
@@ -728,6 +754,32 @@ defmodule SymphonyElixir.SessionLog do
   end
 
   defp extract_tool_args(_payload), do: %{}
+
+  defp extract_claude_tool_args(payload) when is_map(payload) do
+    case payload_path(payload, ["params", "input"]) do
+      args when is_map(args) -> summarize_args(args)
+      _ -> %{}
+    end
+  end
+
+  defp extract_claude_tool_result(payload) when is_map(payload) do
+    case payload_path(payload, ["params", "content"]) do
+      content when is_binary(content) and content != "" -> summarize_value(content)
+      _ -> nil
+    end
+  end
+
+  defp extract_claude_tool_result(_payload), do: nil
+
+  defp extract_tool_result(payload) when is_map(payload) do
+    case Map.get(payload, "result") do
+      result when is_map(result) -> summarize_args(result)
+      result when is_binary(result) -> summarize_value(result)
+      _ -> nil
+    end
+  end
+
+  defp extract_tool_result(_payload), do: nil
 
   defp summarize_args(args) when is_map(args) do
     Map.new(args, fn {k, v} ->
