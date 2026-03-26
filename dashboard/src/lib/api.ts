@@ -551,7 +551,7 @@ export async function getSessionStats(
 
 // --- Cost Analytics ---
 
-export type CostRange = '7d' | '30d' | '90d'
+export type CostRange = '24h' | '7d' | '30d' | '90d'
 
 export type AnalyticsSummary = {
   total_cost_cents: number

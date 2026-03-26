@@ -9,7 +9,7 @@ defmodule SymphonyElixirWeb.AnalyticsController do
   alias SymphonyElixir.Store
 
   @spec cost(Conn.t(), map()) :: Conn.t()
-  def cost(conn, %{"range" => range}) when range in ["7d", "30d", "90d"] do
+  def cost(conn, %{"range" => range}) when range in ["24h", "7d", "30d", "90d"] do
     data = Store.analytics_cost(range, org_id: org_id(conn))
     json(conn, data)
   end
@@ -17,7 +17,7 @@ defmodule SymphonyElixirWeb.AnalyticsController do
   def cost(conn, _params) do
     conn
     |> put_status(400)
-    |> json(%{error: "range must be one of: 7d, 30d, 90d"})
+    |> json(%{error: "range must be one of: 24h, 7d, 30d, 90d"})
   end
 
   defp org_id(conn) do

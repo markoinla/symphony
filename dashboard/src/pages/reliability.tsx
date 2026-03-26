@@ -35,10 +35,10 @@ import { formatQueryError } from '../lib/helpers'
 const RANGE_OPTIONS: SessionStatsRange[] = ['24h', '7d', '30d']
 
 const CATEGORY_COLORS: Record<string, string> = {
-  infra: '#ef4444',
-  agent: '#f97316',
-  config: '#eab308',
-  timeout: '#3b82f6',
+  infra: '#64748b',
+  agent: '#78716c',
+  config: '#71717a',
+  timeout: '#9ca3af',
 }
 
 function formatBucket(bucket: string, range: SessionStatsRange) {

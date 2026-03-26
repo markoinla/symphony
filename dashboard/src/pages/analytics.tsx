@@ -22,26 +22,30 @@ import {
 } from '../components/ui'
 import { formatQueryError } from '../lib/helpers'
 
-const RANGE_OPTIONS: CostRange[] = ['7d', '30d', '90d']
+const RANGE_OPTIONS: CostRange[] = ['24h', '7d', '30d', '90d']
 
 const WORKFLOW_COLORS = [
-  '#6366f1', // indigo
-  '#f59e0b', // amber
-  '#10b981', // emerald
-  '#ef4444', // red
-  '#8b5cf6', // violet
-  '#06b6d4', // cyan
-  '#f97316', // orange
-  '#ec4899', // pink
-  '#14b8a6', // teal
-  '#84cc16', // lime
+  '#64748b', // slate
+  '#78716c', // stone
+  '#71717a', // zinc
+  '#6b7280', // gray
+  '#9ca3af', // gray-light
+  '#a1a1aa', // zinc-light
+  '#a8a29e', // stone-light
+  '#94a3b8', // slate-light
+  '#737373', // neutral
+  '#8b8b8b', // neutral-light
 ]
 
 function formatDollars(cents: number) {
   return `$${(cents / 100).toFixed(2)}`
 }
 
-function formatDate(dateStr: string) {
+function formatDate(dateStr: string, range: CostRange = '30d') {
+  if (range === '24h') {
+    const d = new Date(dateStr)
+    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+  }
   const d = new Date(dateStr + 'T00:00:00')
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
@@ -179,7 +183,7 @@ export function AnalyticsView() {
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-th-border, #e5e7eb)" />
                   <XAxis
                     dataKey="date"
-                    tickFormatter={formatDate}
+                    tickFormatter={(v: string) => formatDate(v, range)}
                     tick={{ fontSize: 12 }}
                     stroke="var(--color-th-text-4, #9ca3af)"
                   />
@@ -193,7 +197,7 @@ export function AnalyticsView() {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     formatter={(value: any) => [`$${Number(value).toFixed(2)}`]}
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    labelFormatter={(label: any) => formatDate(String(label))}
+                    labelFormatter={(label: any) => formatDate(String(label), range)}
                     contentStyle={{
                       backgroundColor: 'var(--color-th-surface, #fff)',
                       border: '1px solid var(--color-th-border, #e5e7eb)',
