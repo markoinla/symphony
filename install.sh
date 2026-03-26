@@ -20,7 +20,7 @@ BRANCH="main"
 INSTALL_DIR="/opt/symphony"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
 PLUGIN_VERSION="1.0.0"
-WORKFLOW_FILES=(WORKFLOW.md ENRICHMENT.md TRIAGE.md MENTION.md REVIEW.md EPIC_SPLITTER.md)
+WORKFLOW_FILES=(WORKFLOW.md ENRICHMENT.md TRIAGE.md MENTION.md REVIEW.md EPIC_SPLITTER.md MERGING.md)
 
 # ── Colors ──────────────────────────────────────────────────────────────────────
 

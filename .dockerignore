@@ -16,6 +16,7 @@ docs/
 !MENTION.md
 !REVIEW.md
 !EPIC_SPLITTER.md
+!MERGING.md
 .env
 .env.*
 log/
