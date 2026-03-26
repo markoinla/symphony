@@ -64,7 +64,8 @@ defmodule SymphonyElixir.Orchestrator do
             retry_attempts: map(),
             engine_totals: map() | nil,
             engine_rate_limits: map() | nil,
-            last_config_error: atom() | nil
+            last_config_error: atom() | nil,
+            webhook_hint_timestamps: %{optional(String.t()) => integer()}
           }
 
     defstruct [
@@ -84,7 +85,8 @@ defmodule SymphonyElixir.Orchestrator do
       retry_attempts: %{},
       engine_totals: nil,
       engine_rate_limits: nil,
-      last_config_error: nil
+      last_config_error: nil,
+      webhook_hint_timestamps: %{}
     ]
   end
 
@@ -140,6 +142,23 @@ defmodule SymphonyElixir.Orchestrator do
       {:ok, :stopped} -> :ok
       {:error, :not_found} -> {:error, :not_found}
     end
+  end
+
+  @doc """
+  Broadcast a webhook-driven issue hint to all orchestrators.
+
+  Each orchestrator independently decides whether the issue is relevant
+  and whether to fetch/dispatch it.
+  """
+  @spec webhook_issue_hint(String.t(), map()) :: :ok
+  def webhook_issue_hint(issue_id, meta) when is_binary(issue_id) and is_map(meta) do
+    servers = workflow_servers()
+    Logger.info("webhook_issue_hint issue_id=#{issue_id} broadcasting to #{length(servers)} orchestrator(s)")
+
+    Enum.each(servers, fn {key, server} ->
+      Logger.debug("webhook_issue_hint casting to orchestrator #{key}")
+      GenServer.cast(server, {:webhook_issue_hint, issue_id, meta})
+    end)
   end
 
   @impl true
@@ -310,6 +329,7 @@ defmodule SymphonyElixir.Orchestrator do
     state = maybe_dispatch(state)
     state = schedule_tick(state, state.poll_interval_ms)
     state = %{state | poll_check_in_progress: false}
+    state = cleanup_stale_webhook_hints(state)
 
     notify_dashboard()
     {:noreply, state}
@@ -1708,6 +1728,169 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # -- Webhook issue hints --------------------------------------------------
+
+  @webhook_debounce_ms 5_000
+  @webhook_hint_stale_ms 60_000
+
+  @impl true
+  def handle_cast({:webhook_issue_hint, issue_id, meta}, state) do
+    Logger.info("Orchestrator #{state.workflow_name} received webhook hint for #{issue_id}")
+
+    if webhook_enabled?(state) do
+      try do
+        state = handle_webhook_issue_hint(state, issue_id, meta)
+        notify_dashboard()
+        {:noreply, state}
+      rescue
+        e ->
+          Logger.error("Webhook hint crashed for #{issue_id} in #{state.workflow_name}: #{Exception.message(e)}")
+          {:noreply, state}
+      end
+    else
+      Logger.info("Webhook hint ignored for #{issue_id}: webhooks disabled for #{state.workflow_name}")
+      log_webhook_result(issue_id, meta, "disabled", "webhooks disabled for workflow #{state.workflow_name}")
+      {:noreply, state}
+    end
+  end
+
+  defp webhook_enabled?(%State{workflow_name: workflow_name}) do
+    Config.settings!(workflow_name).webhook.enabled
+  rescue
+    _ -> false
+  end
+
+  defp handle_webhook_issue_hint(state, issue_id, meta) do
+    now_ms = System.monotonic_time(:millisecond)
+    last_hint = Map.get(state.webhook_hint_timestamps, issue_id, now_ms - @webhook_debounce_ms - 1)
+
+    if now_ms - last_hint < @webhook_debounce_ms do
+      Logger.debug("Webhook hint debounced for #{issue_id} in #{state.workflow_name}")
+      state
+    else
+      timestamps = Map.put(state.webhook_hint_timestamps, issue_id, now_ms)
+      state = %{state | webhook_hint_timestamps: timestamps}
+      do_handle_webhook_hint(state, issue_id, meta)
+    end
+  end
+
+  defp do_handle_webhook_hint(state, issue_id, meta) do
+    slots = available_slots(state)
+    running? = Map.has_key?(state.running, issue_id)
+    retrying? = Map.has_key?(state.retry_attempts, issue_id)
+
+    Logger.info(
+      "Webhook hint eval: issue_id=#{issue_id} workflow=#{state.workflow_name} " <>
+        "running=#{running?} retrying=#{retrying?} slots=#{slots}"
+    )
+
+    cond do
+      running? ->
+        log_webhook_result(issue_id, meta, "reconcile", "issue already running, reconciling")
+        reconcile_single_running_issue(state, issue_id)
+
+      retrying? ->
+        log_webhook_result(issue_id, meta, "skipped", "issue in retry queue")
+        state
+
+      slots > 0 ->
+        attempt_webhook_dispatch(state, issue_id, meta)
+
+      true ->
+        Logger.info("Webhook hint for #{issue_id} ignored: no available slots")
+        log_webhook_result(issue_id, meta, "skipped", "no available slots")
+        state
+    end
+  end
+
+  defp reconcile_single_running_issue(state, issue_id) do
+    case Tracker.fetch_issue_states_by_ids([issue_id], state.workflow_name) do
+      {:ok, issues} ->
+        reconcile_running_issue_states(
+          issues,
+          state,
+          active_state_set(),
+          terminal_state_set()
+        )
+        |> reconcile_missing_running_issue_ids([issue_id], issues)
+
+      {:error, reason} ->
+        Logger.debug("Webhook reconcile failed for #{issue_id}: #{inspect(reason)}")
+        state
+    end
+  end
+
+  defp attempt_webhook_dispatch(state, issue_id, meta) do
+    case Config.validate!(state.workflow_name) do
+      :ok ->
+        db_claims = Store.list_claimed_issue_ids(org_id: org_id(state))
+
+        if MapSet.member?(db_claims, issue_id) do
+          Logger.debug("Webhook dispatch skipped for #{issue_id}: already claimed")
+          log_webhook_result(issue_id, meta, "skipped", "already claimed")
+          state
+        else
+          do_attempt_webhook_fetch_and_dispatch(state, issue_id, db_claims, meta)
+        end
+
+      {:error, reason} ->
+        Logger.debug("Webhook dispatch skipped for #{issue_id}: #{inspect(reason)}")
+        log_webhook_result(issue_id, meta, "skipped", "config validation failed: #{inspect(reason)}")
+        state
+    end
+  end
+
+  defp do_attempt_webhook_fetch_and_dispatch(state, issue_id, db_claims, meta) do
+    case Tracker.fetch_issue_states_by_ids([issue_id], state.workflow_name) do
+      {:ok, [issue | _]} ->
+        if should_dispatch_issue?(issue, state, active_state_set(), terminal_state_set(), db_claims) do
+          Logger.info("Webhook dispatching issue_id=#{issue_id} workflow=#{state.workflow_name}")
+          log_webhook_result(issue_id, meta, "dispatched", "dispatching via #{state.workflow_name}")
+          dispatch_issue(state, issue)
+        else
+          Logger.debug("Webhook dispatch skipped for #{issue_id}: not eligible")
+          log_webhook_result(issue_id, meta, "skipped", "not eligible for #{state.workflow_name}")
+          state
+        end
+
+      {:ok, []} ->
+        Logger.debug("Webhook dispatch skipped for #{issue_id}: issue not found in Linear")
+        log_webhook_result(issue_id, meta, "skipped", "issue not found in Linear")
+        state
+
+      {:error, reason} ->
+        Logger.debug("Webhook dispatch skipped for #{issue_id}: #{inspect(reason)}")
+        log_webhook_result(issue_id, meta, "skipped", "fetch error: #{inspect(reason)}")
+        state
+    end
+  end
+
+  defp cleanup_stale_webhook_hints(%State{webhook_hint_timestamps: timestamps} = state) do
+    now_ms = System.monotonic_time(:millisecond)
+
+    cleaned =
+      Map.reject(timestamps, fn {_id, ts} -> now_ms - ts > @webhook_hint_stale_ms end)
+
+    %{state | webhook_hint_timestamps: cleaned}
+  end
+
+  defp log_webhook_result(issue_id, meta, result, detail) do
+    Store.log_webhook(%{
+      webhook_type: "OrchestratorHint",
+      action: to_string(Map.get(meta, :action, "unknown")),
+      issue_id: issue_id,
+      issue_identifier: Map.get(meta, :identifier),
+      state_name: Map.get(meta, :state_name),
+      result: result,
+      detail: detail,
+      received_at: DateTime.utc_now() |> DateTime.truncate(:second)
+    })
+  rescue
+    e -> Logger.warning("Failed to log webhook result: #{Exception.message(e)}")
+  end
+
+  # -- End webhook hints ----------------------------------------------------
+
   @impl true
   def handle_call(:snapshot, _from, state) do
     state = refresh_runtime_config(state)
@@ -2079,9 +2262,16 @@ defmodule SymphonyElixir.Orchestrator do
   defp refresh_runtime_config(%State{} = state) do
     config = Config.settings!(state.workflow_name)
 
+    poll_interval =
+      if config.webhook.enabled do
+        config.webhook.fallback_poll_interval_ms
+      else
+        config.polling.interval_ms
+      end
+
     %{
       state
-      | poll_interval_ms: config.polling.interval_ms,
+      | poll_interval_ms: poll_interval,
         max_concurrent_agents: config.agent.max_concurrent_agents
     }
   end

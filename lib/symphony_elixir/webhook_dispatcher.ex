@@ -21,7 +21,7 @@ defmodule SymphonyElixir.WebhookDispatcher do
       emit_initial_thought(agent_session_id, opts)
 
       # Check if already claimed (e.g., Orchestrator already picked it up)
-      case Store.claim_issue(issue_id, "webhook") do
+      case Store.claim_issue(issue_id, "webhook", org_id: resolve_org_id()) do
         {:ok, :claimed} ->
           dispatch_new_session(issue_id, agent_session_id, payload)
 
@@ -184,7 +184,8 @@ defmodule SymphonyElixir.WebhookDispatcher do
              Workflow.with_workflow(workflow_name, fn ->
                SymphonyElixir.AgentRunner.run(issue, nil,
                  max_turns: config.agent.max_turns,
-                 prompt_context: prompt_context
+                 prompt_context: prompt_context,
+                 organization_id: resolve_org_id()
                )
              end)
            rescue
@@ -345,6 +346,13 @@ defmodule SymphonyElixir.WebhookDispatcher do
     get_in(payload, ["agentActivity", "signal"]) ||
       get_in(payload, ["data", "agentActivity", "signal"]) ||
       get_in(payload, ["signal"])
+  end
+
+  defp resolve_org_id do
+    case Store.list_projects() do
+      [%Store.Project{organization_id: org_id} | _] when is_binary(org_id) -> org_id
+      _ -> nil
+    end
   end
 
   defp issue_has_skip_label?(%Issue{} = issue) do
