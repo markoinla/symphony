@@ -658,9 +658,9 @@ defmodule SymphonyElixir.Orchestrator do
         refresh_running_issue_state(state, issue)
 
       true ->
-        Logger.info("Issue moved to non-active state: #{issue_context(issue)} state=#{issue.state}; stopping active agent")
+        Logger.info("Issue moved to non-active state: #{issue_context(issue)} state=#{issue.state}; stopping active agent (completed)")
 
-        terminate_running_issue(state, issue.id, false)
+        terminate_running_issue(state, issue.id, false, :completed)
     end
   end
 
@@ -740,6 +740,7 @@ defmodule SymphonyElixir.Orchestrator do
         finalize_db_session(running_entry, reason)
 
         Store.release_issue_claim(issue_id)
+        rebroadcast_hint_after_release(issue_id, state.workflow_name)
 
         %{
           state
@@ -1536,7 +1537,33 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp release_issue_claim(%State{} = state, issue_id) do
     Store.release_issue_claim(issue_id)
+
+    # Re-broadcast hint so other workflows can evaluate this issue now that
+    # the claim is released (prevents race where a hint arrived while claimed).
+    rebroadcast_hint_after_release(issue_id, state.workflow_name)
+
     %{state | cooldowns: Map.delete(state.cooldowns, issue_id), completion_counts: Map.delete(state.completion_counts, issue_id)}
+  end
+
+  defp rebroadcast_hint_after_release(issue_id, source_workflow) do
+    targets =
+      workflow_servers()
+      |> Enum.reject(fn {key, _server} -> key == source_workflow end)
+
+    if targets != [] do
+      Logger.info("Rebroadcasting hint for issue_id=#{issue_id} from #{source_workflow} to #{length(targets)} workflow(s)")
+
+      Enum.each(targets, fn {_key, server} ->
+        GenServer.cast(
+          server,
+          {:webhook_issue_hint, issue_id,
+           %{
+             action: "update",
+             source: :rebroadcast
+           }}
+        )
+      end)
+    end
   end
 
   defp retry_delay(attempt, metadata) when is_integer(attempt) and attempt > 0 and is_map(metadata) do
@@ -1761,16 +1788,22 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_webhook_issue_hint(state, issue_id, meta) do
-    now_ms = System.monotonic_time(:millisecond)
-    last_hint = Map.get(state.webhook_hint_timestamps, issue_id, now_ms - @webhook_debounce_ms - 1)
-
-    if now_ms - last_hint < @webhook_debounce_ms do
-      Logger.debug("Webhook hint debounced for #{issue_id} in #{state.workflow_name}")
-      state
-    else
-      timestamps = Map.put(state.webhook_hint_timestamps, issue_id, now_ms)
-      state = %{state | webhook_hint_timestamps: timestamps}
+    # Rebroadcast hints bypass debounce — they fire specifically because a
+    # prior hint was skipped while the claim was still held.
+    if Map.get(meta, :source) == :rebroadcast do
       do_handle_webhook_hint(state, issue_id, meta)
+    else
+      now_ms = System.monotonic_time(:millisecond)
+      last_hint = Map.get(state.webhook_hint_timestamps, issue_id, now_ms - @webhook_debounce_ms - 1)
+
+      if now_ms - last_hint < @webhook_debounce_ms do
+        Logger.debug("Webhook hint debounced for #{issue_id} in #{state.workflow_name}")
+        state
+      else
+        timestamps = Map.put(state.webhook_hint_timestamps, issue_id, now_ms)
+        state = %{state | webhook_hint_timestamps: timestamps}
+        do_handle_webhook_hint(state, issue_id, meta)
+      end
     end
   end
 
