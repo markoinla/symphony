@@ -315,6 +315,190 @@ defmodule SymphonyElixir.SessionLogTest do
     assert session.status == "running"
   end
 
+  test "claude code tool_use and tool_result are correlated by tool_use_id" do
+    issue_id = unique_id("issue")
+    session_id = unique_id("session")
+
+    assert :ok = ObservabilityPubSub.subscribe_session(issue_id)
+    start_session_log!(issue_id, session_id)
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    # tool_use: starts a Read call
+    SessionLog.append(issue_id, session_id, %{
+      event: :notification,
+      timestamp: now,
+      payload: %{
+        "method" => "claude/tool_use",
+        "params" => %{
+          "id" => "toolu_abc123",
+          "name" => "Read",
+          "input" => %{"file_path" => "/tmp/foo.ex", "limit" => 50}
+        }
+      }
+    })
+
+    assert_receive {:session_message,
+                    %{
+                      id: 1,
+                      type: :tool_call,
+                      content: "Read",
+                      metadata: %{status: "started", args: %{"file_path" => "/tmp/foo.ex", "limit" => 50}}
+                    }}
+
+    # An intervening non-tool message (e.g. assistant text) that would reset last_tool_call
+    SessionLog.append(issue_id, session_id, %{
+      event: :notification,
+      timestamp: now,
+      payload: %{
+        "method" => "claude/assistant_message",
+        "params" => %{"content" => "Reading the file now."}
+      }
+    })
+
+    assert_receive {:session_message, %{id: 2, type: :response, content: "Reading the file now."}}
+
+    # tool_result: arrives with tool_use_id, should merge into message #1
+    SessionLog.append(issue_id, session_id, %{
+      event: :notification,
+      timestamp: now,
+      payload: %{
+        "method" => "claude/tool_result",
+        "params" => %{
+          "tool_use_id" => "toolu_abc123",
+          "content" => "defmodule Foo do\n  def bar, do: :ok\nend"
+        }
+      }
+    })
+
+    assert_receive {:session_message_update,
+                    %{
+                      id: 1,
+                      type: :tool_call,
+                      content: "Read",
+                      metadata: %{status: "completed", result: _result}
+                    }}
+
+    # Only 2 messages total: the tool_call and the response (no separate completion message)
+    assert_messages(issue_id, session_id, [
+      %{id: 1, type: :tool_call, content: "Read"},
+      %{id: 2, type: :response, content: "Reading the file now."}
+    ])
+  end
+
+  test "claude code parallel tool calls are tracked independently" do
+    issue_id = unique_id("issue")
+    session_id = unique_id("session")
+
+    assert :ok = ObservabilityPubSub.subscribe_session(issue_id)
+    start_session_log!(issue_id, session_id)
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    # Two tool_use events for the same tool name but different IDs
+    SessionLog.append(issue_id, session_id, %{
+      event: :notification,
+      timestamp: now,
+      payload: %{
+        "method" => "claude/tool_use",
+        "params" => %{
+          "id" => "toolu_read1",
+          "name" => "Read",
+          "input" => %{"file_path" => "/tmp/a.ex"}
+        }
+      }
+    })
+
+    assert_receive {:session_message, %{id: 1, type: :tool_call, content: "Read"}}
+
+    SessionLog.append(issue_id, session_id, %{
+      event: :notification,
+      timestamp: now,
+      payload: %{
+        "method" => "claude/tool_use",
+        "params" => %{
+          "id" => "toolu_read2",
+          "name" => "Read",
+          "input" => %{"file_path" => "/tmp/b.ex"}
+        }
+      }
+    })
+
+    # Should create a second message, NOT merge into the first
+    assert_receive {:session_message, %{id: 2, type: :tool_call, content: "Read"}}
+
+    # Results arrive in reverse order
+    SessionLog.append(issue_id, session_id, %{
+      event: :notification,
+      timestamp: now,
+      payload: %{
+        "method" => "claude/tool_result",
+        "params" => %{
+          "tool_use_id" => "toolu_read2",
+          "content" => "file b content"
+        }
+      }
+    })
+
+    assert_receive {:session_message_update, %{id: 2, metadata: %{status: "completed"}}}
+
+    SessionLog.append(issue_id, session_id, %{
+      event: :notification,
+      timestamp: now,
+      payload: %{
+        "method" => "claude/tool_result",
+        "params" => %{
+          "tool_use_id" => "toolu_read1",
+          "content" => "file a content"
+        }
+      }
+    })
+
+    assert_receive {:session_message_update, %{id: 1, metadata: %{status: "completed"}}}
+
+    # Two distinct tool_call messages
+    assert_messages(issue_id, session_id, [
+      %{id: 1, type: :tool_call, content: "Read"},
+      %{id: 2, type: :tool_call, content: "Read"}
+    ])
+  end
+
+  test "claude code tool_result extracts result from content block list" do
+    issue_id = unique_id("issue")
+    session_id = unique_id("session")
+
+    assert :ok = ObservabilityPubSub.subscribe_session(issue_id)
+    start_session_log!(issue_id, session_id)
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    SessionLog.append(issue_id, session_id, %{
+      event: :notification,
+      timestamp: now,
+      payload: %{
+        "method" => "claude/tool_use",
+        "params" => %{"id" => "toolu_list1", "name" => "Bash", "input" => %{"command" => "ls"}}
+      }
+    })
+
+    assert_receive {:session_message, %{id: 1}}
+
+    # tool_result with content as a list of content blocks
+    SessionLog.append(issue_id, session_id, %{
+      event: :notification,
+      timestamp: now,
+      payload: %{
+        "method" => "claude/tool_result",
+        "params" => %{
+          "tool_use_id" => "toolu_list1",
+          "content" => [%{"type" => "text", "text" => "file1.ex\nfile2.ex"}]
+        }
+      }
+    })
+
+    assert_receive {:session_message_update, %{id: 1, metadata: %{status: "completed", result: "file1.ex\nfile2.ex"}}}
+  end
+
   defp start_session_log!(issue_id, session_id, opts \\ []) do
     workflow_name = Keyword.get(opts, :workflow_name)
 

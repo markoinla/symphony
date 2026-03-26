@@ -1,6 +1,6 @@
 import Config
 
-config :logger, :default_formatter, metadata: [:request_id]
+config :logger, :default_formatter, metadata: [:request_id, :issue_id, :issue_identifier, :session_id, :agent_session_id]
 
 config :phoenix, :json_library, Jason
 
