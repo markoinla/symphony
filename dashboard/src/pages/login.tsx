@@ -81,6 +81,7 @@ export function LoginView() {
             )}
           </div>
           <Input
+            autoComplete="email"
             autoFocus
             disabled={backendStatus !== 'connected'}
             name="email"
@@ -90,6 +91,7 @@ export function LoginView() {
             value={email}
           />
           <Input
+            autoComplete="current-password"
             disabled={backendStatus !== 'connected'}
             name="password"
             onChange={(e) => setPassword(e.target.value)}

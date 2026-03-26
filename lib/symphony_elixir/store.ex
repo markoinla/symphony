@@ -11,7 +11,7 @@ defmodule SymphonyElixir.Store do
   import Ecto.Query
   alias SymphonyElixir.Repo
   alias SymphonyElixir.Store.{Agent, IssueClaim, Message, Organization, Project, Session, Setting}
-  alias SymphonyElixir.Store.{User, UserOrganization}
+  alias SymphonyElixir.Store.{User, UserOrganization, WebhookLog}
 
   # ── Agent CRUD ─────────────────────────────────────────────────────
 
@@ -928,4 +928,35 @@ defmodule SymphonyElixir.Store do
     |> where([_o, uo], uo.user_id == ^user_id)
     |> Repo.all()
   end
+
+  # ── Webhook Logs ──────────────────────────────────────────────────
+
+  @spec log_webhook(map()) :: {:ok, WebhookLog.t()} | {:error, Ecto.Changeset.t()}
+  def log_webhook(attrs) when is_map(attrs) do
+    %WebhookLog{}
+    |> WebhookLog.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @spec list_webhook_logs(keyword()) :: [WebhookLog.t()]
+  def list_webhook_logs(opts \\ []) do
+    limit = Keyword.get(opts, :limit, 50)
+    issue_id = Keyword.get(opts, :issue_id)
+    issue_identifier = Keyword.get(opts, :issue_identifier)
+
+    WebhookLog
+    |> maybe_filter_webhook_issue_id(issue_id)
+    |> maybe_filter_webhook_issue_identifier(issue_identifier)
+    |> order_by([w], desc: w.received_at)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  defp maybe_filter_webhook_issue_id(query, nil), do: query
+  defp maybe_filter_webhook_issue_id(query, id), do: where(query, [w], w.issue_id == ^id)
+
+  defp maybe_filter_webhook_issue_identifier(query, nil), do: query
+
+  defp maybe_filter_webhook_issue_identifier(query, identifier),
+    do: where(query, [w], w.issue_identifier == ^identifier)
 end

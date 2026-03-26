@@ -1,11 +1,13 @@
 defmodule SymphonyElixirWeb.WebhookController do
   @moduledoc """
-  Handles Linear Agent webhook events (AgentSessionEvent).
+  Handles Linear webhook events: AgentSessionEvent (agent sessions)
+  and data-change events (Issue/Comment create/update/remove).
   """
 
   use Phoenix.Controller, formats: [:json]
   require Logger
 
+  alias SymphonyElixir.Linear.IssueWebhookHandler
   alias SymphonyElixir.WebhookDispatcher
 
   @spec linear(Plug.Conn.t(), map()) :: Plug.Conn.t()
@@ -33,9 +35,21 @@ defmodule SymphonyElixirWeb.WebhookController do
     conn
   end
 
+  # Data-change webhooks: Issue and Comment events from Linear
+  def linear(conn, %{"type" => type} = params) when type in ["Issue", "Comment"] do
+    conn = json(conn, %{ok: true})
+
+    Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
+      IssueWebhookHandler.dispatch(params)
+    end)
+
+    conn
+  end
+
   def linear(conn, params) do
     action = Map.get(params, "action", "unknown")
-    Logger.debug("Ignoring webhook action=#{action}")
+    type = Map.get(params, "type", "unknown")
+    Logger.debug("Ignoring webhook type=#{type} action=#{action}")
     json(conn, %{ok: true})
   end
 end

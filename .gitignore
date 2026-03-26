@@ -67,3 +67,6 @@ workers/*/.wrangler/
 .wrangler/
 node_modules/.cache/
 node_modules/.mf/
+
+# Reference files (schemas, specs, etc.)
+/references/
