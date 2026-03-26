@@ -36,7 +36,7 @@ The core pipeline flows: **Orchestrator** → **AgentRunner** → **Workspace** 
 - `SymphonyElixir.AgentRunner` — Executes a single issue in an isolated workspace with Codex.
 - `SymphonyElixir.Workspace` — Creates per-issue workspaces (local or SSH workers). **Safety-critical: never run Codex in the source repo.**
 - `SymphonyElixir.Codex.AppServer` — Manages Codex app-server sessions (start, turn, tool responses).
-- `SymphonyElixir.Store` — SQLite persistence layer with Ecto schemas for Projects, Sessions, Messages, Settings, IssueClaims.
+- `SymphonyElixir.Store` — PostgreSQL persistence layer with Ecto schemas for Projects, Sessions, Messages, Settings, IssueClaims.
 - `SymphonyElixir.Config` / `Config.Schema` — Parses YAML front matter from `WORKFLOW.md` files.
 - `SymphonyElixir.Linear.*` — Linear GraphQL API client (polling, comments, state transitions, labels).
 - `SymphonyElixir.Tracker` — Abstract tracker interface with Linear and memory implementations.
@@ -68,6 +68,14 @@ REST JSON API under `/api/v1/*`:
 - `GET /api/v1/stream/session/:issue_id` — SSE session timeline
 - `GET/POST /api/v1/projects` — Project CRUD
 - `GET/PUT/DELETE /api/v1/settings/:key` — Settings management
+
+## Database
+
+PostgreSQL runs in Docker (`symphony-postgres`). Connect with:
+
+```bash
+PGPASSWORD=postgres psql -h localhost -U postgres -d symphony_dev
+```
 
 ## Debugging Sessions
 

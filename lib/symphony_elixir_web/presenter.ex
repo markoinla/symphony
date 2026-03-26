@@ -749,6 +749,7 @@ defmodule SymphonyElixirWeb.Presenter do
     %{
       id: project.id,
       name: project.name,
+      linear_project_id: project.linear_project_id,
       linear_project_slug: project.linear_project_slug,
       linear_organization_slug: project.linear_organization_slug,
       linear_filter_by: project.linear_filter_by,

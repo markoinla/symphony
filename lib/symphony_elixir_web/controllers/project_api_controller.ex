@@ -5,8 +5,10 @@ defmodule SymphonyElixirWeb.ProjectApiController do
 
   use Phoenix.Controller, formats: [:json]
 
+  require Logger
+
   alias Plug.Conn
-  alias SymphonyElixir.{Settings, Store}
+  alias SymphonyElixir.{Linear.Client, Settings, Store}
   alias SymphonyElixirWeb.{ObservabilityPubSub, Presenter}
 
   import SymphonyElixirWeb.ErrorHelpers, only: [error_response: 4, changeset_error_response: 4]
@@ -29,7 +31,11 @@ defmodule SymphonyElixirWeb.ProjectApiController do
 
   @spec create(Conn.t(), map()) :: Conn.t()
   def create(conn, params) do
-    attrs = params |> project_attrs() |> Map.put(:organization_id, org_id(conn))
+    attrs =
+      params
+      |> project_attrs()
+      |> Map.put(:organization_id, org_id(conn))
+      |> resolve_linear_project_id()
 
     case Store.create_project(attrs) do
       {:ok, project} ->
@@ -48,7 +54,9 @@ defmodule SymphonyElixirWeb.ProjectApiController do
   def update(conn, %{"id" => id} = params) do
     case Integer.parse(id) do
       {project_id, ""} ->
-        case Store.update_project(project_id, project_attrs(params)) do
+        attrs = params |> project_attrs() |> resolve_linear_project_id()
+
+        case Store.update_project(project_id, attrs) do
           {:ok, project} ->
             ObservabilityPubSub.broadcast_projects_changed()
             json(conn, %{project: project_payload(project)})
@@ -128,6 +136,20 @@ defmodule SymphonyElixirWeb.ProjectApiController do
 
   defp blank_to_nil(""), do: nil
   defp blank_to_nil(value), do: value
+
+  defp resolve_linear_project_id(%{linear_project_slug: slug} = attrs)
+       when is_binary(slug) and slug != "" do
+    case Client.fetch_project_id(slug) do
+      {:ok, project_id} ->
+        Map.put(attrs, :linear_project_id, project_id)
+
+      {:error, reason} ->
+        Logger.warning("Failed to resolve Linear project ID for slug #{slug}: #{inspect(reason)}")
+        attrs
+    end
+  end
+
+  defp resolve_linear_project_id(attrs), do: attrs
 
   defp org_id(conn) do
     case conn.assigns[:current_org] do

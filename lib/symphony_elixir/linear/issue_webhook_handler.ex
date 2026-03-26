@@ -45,11 +45,17 @@ defmodule SymphonyElixir.Linear.IssueWebhookHandler do
     state_name = get_in(data, ["state", "name"])
     identifier = Map.get(data, "identifier", "unknown")
 
-    meta = build_issue_meta(action, data, state_name, identifier)
-    log_issue_hint(action, state_name, identifier, payload)
-    log_to_db("Issue", action, data, "hint_sent", nil)
+    if issue_matches_configured_project?(data) do
+      meta = build_issue_meta(action, data, state_name, identifier)
+      log_issue_hint(action, state_name, identifier, payload)
+      log_to_db("Issue", action, data, "hint_sent", nil)
 
-    Orchestrator.webhook_issue_hint(issue_id, meta)
+      Orchestrator.webhook_issue_hint(issue_id, meta)
+    else
+      Logger.debug("Webhook skipped: #{identifier} project not in configured projects")
+      log_to_db("Issue", action, data, "skipped", "project not configured")
+      :ok
+    end
   end
 
   defp dispatch_issue_event(_action, _data, _payload) do
@@ -121,6 +127,16 @@ defmodule SymphonyElixir.Linear.IssueWebhookHandler do
 
       _ ->
         []
+    end
+  end
+
+  defp issue_matches_configured_project?(data) do
+    case Map.get(data, "projectId") do
+      nil ->
+        false
+
+      project_id ->
+        project_id in Store.list_linear_project_ids()
     end
   end
 

@@ -89,6 +89,14 @@ defmodule SymphonyElixir.Store do
     end)
   end
 
+  @spec list_linear_project_ids() :: MapSet.t(String.t())
+  def list_linear_project_ids do
+    list_projects()
+    |> Enum.map(& &1.linear_project_id)
+    |> Enum.reject(&is_nil/1)
+    |> MapSet.new()
+  end
+
   @spec create_project(map()) :: {:ok, Ecto.Schema.t()} | {:error, Ecto.Changeset.t()}
   def create_project(attrs) do
     now =
