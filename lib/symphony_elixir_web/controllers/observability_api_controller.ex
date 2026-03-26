@@ -208,7 +208,11 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   defp maybe_put_workflow_name(opts, _workflow_name), do: opts
 
   defp orchestrator do
-    Endpoint.config(:orchestrator) || SymphonyElixir.Orchestrator.default_source()
+    case Endpoint.config(:orchestrator) do
+      source when is_list(source) and source != [] -> source
+      source when not is_nil(source) and not is_list(source) -> source
+      _nil_or_empty -> SymphonyElixir.Orchestrator.default_source()
+    end
   end
 
   defp snapshot_timeout_ms do
