@@ -3,7 +3,7 @@ defmodule SymphonyElixir.HttpServer do
   Compatibility facade that starts the Phoenix observability endpoint when enabled.
   """
 
-  alias SymphonyElixir.{Config, Orchestrator}
+  alias SymphonyElixir.Config
   alias SymphonyElixirWeb.Endpoint
 
   @secret_key_bytes 48
@@ -21,18 +21,19 @@ defmodule SymphonyElixir.HttpServer do
     case Keyword.get(opts, :port, Config.server_port()) do
       port when is_integer(port) and port >= 0 ->
         host = Keyword.get(opts, :host, Config.settings!().server.host)
-        orchestrator = Keyword.get(opts, :orchestrator, Orchestrator.default_source())
+        orchestrator = Keyword.get(opts, :orchestrator)
         snapshot_timeout_ms = Keyword.get(opts, :snapshot_timeout_ms, 15_000)
 
         with {:ok, ip} <- parse_host(host) do
-          endpoint_opts = [
-            server: true,
-            http: [ip: ip, port: port],
-            url: [host: normalize_host(host)],
-            orchestrator: orchestrator,
-            snapshot_timeout_ms: snapshot_timeout_ms,
-            secret_key_base: secret_key_base()
-          ]
+          endpoint_opts =
+            [
+              server: true,
+              http: [ip: ip, port: port],
+              url: [host: normalize_host(host)],
+              snapshot_timeout_ms: snapshot_timeout_ms,
+              secret_key_base: secret_key_base()
+            ]
+            |> maybe_put_orchestrator(orchestrator)
 
           endpoint_config =
             :symphony_elixir
@@ -81,6 +82,9 @@ defmodule SymphonyElixir.HttpServer do
   defp normalize_host(host) when host in ["", nil], do: "127.0.0.1"
   defp normalize_host(host) when is_binary(host), do: host
   defp normalize_host(host), do: to_string(host)
+
+  defp maybe_put_orchestrator(opts, nil), do: opts
+  defp maybe_put_orchestrator(opts, orchestrator), do: Keyword.put(opts, :orchestrator, orchestrator)
 
   defp secret_key_base do
     case System.get_env("SYMPHONY_SECRET_KEY_BASE") do
