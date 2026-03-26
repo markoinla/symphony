@@ -782,13 +782,13 @@ defmodule SymphonyElixir.Store do
   # ── Analytics ─────────────────────────────────────────────────────
 
   @spec analytics_cost(String.t(), keyword()) :: map()
-  def analytics_cost(range, opts \\ []) when range in ["7d", "30d", "90d"] do
+  def analytics_cost(range, opts \\ []) when range in ["24h", "7d", "30d", "90d"] do
     days = range_to_days(range)
     since = DateTime.utc_now() |> DateTime.add(-days, :day) |> DateTime.truncate(:second)
     org_id = Keyword.get(opts, :org_id)
 
     summary = summary_query(since, org_id)
-    daily = daily_query(since, org_id)
+    daily = daily_query(since, org_id, range)
     by_workflow = by_workflow_query(since, org_id)
 
     %{
@@ -799,6 +799,7 @@ defmodule SymphonyElixir.Store do
     }
   end
 
+  defp range_to_days("24h"), do: 1
   defp range_to_days("7d"), do: 7
   defp range_to_days("30d"), do: 30
   defp range_to_days("90d"), do: 90
@@ -824,7 +825,34 @@ defmodule SymphonyElixir.Store do
     }
   end
 
-  defp daily_query(since, org_id) do
+  defp daily_query(since, org_id, "24h") do
+    Session
+    |> where([s], s.started_at >= ^since and s.status != "running" and not is_nil(s.workflow))
+    |> maybe_filter_org_id(org_id)
+    |> group_by([s], [fragment("date_trunc('hour', ?)", s.started_at), s.workflow])
+    |> order_by([s], asc: fragment("date_trunc('hour', ?)", s.started_at))
+    |> select([s], %{
+      date: fragment("date_trunc('hour', ?)", s.started_at),
+      workflow: s.workflow,
+      cost_cents: coalesce(sum(s.estimated_cost_cents), 0),
+      sessions: count(s.id),
+      input_tokens: coalesce(sum(s.input_tokens), 0),
+      output_tokens: coalesce(sum(s.output_tokens), 0)
+    })
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      %{
+        date: row.date |> NaiveDateTime.truncate(:second) |> NaiveDateTime.to_iso8601(),
+        workflow: row.workflow,
+        cost_cents: row.cost_cents || 0,
+        sessions: row.sessions || 0,
+        input_tokens: row.input_tokens || 0,
+        output_tokens: row.output_tokens || 0
+      }
+    end)
+  end
+
+  defp daily_query(since, org_id, _range) do
     Session
     |> where([s], s.started_at >= ^since and s.status != "running" and not is_nil(s.workflow))
     |> maybe_filter_org_id(org_id)
