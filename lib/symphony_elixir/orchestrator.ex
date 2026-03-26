@@ -1221,6 +1221,17 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp maybe_set_agent_external_urls(_issue), do: :ok
 
+  defp issue_belongs_to_project?(_issue, nil), do: true
+
+  defp issue_belongs_to_project?(%Issue{project_slug_id: nil}, _project), do: true
+
+  defp issue_belongs_to_project?(%Issue{project_slug_id: slug_id}, %Project{linear_project_slug: project_slug})
+       when is_binary(project_slug) do
+    String.ends_with?(project_slug, slug_id)
+  end
+
+  defp issue_belongs_to_project?(_issue, _project), do: true
+
   defp resolve_project(nil) do
     case Store.list_projects() do
       [%Project{} = project | _] -> project
@@ -1876,14 +1887,21 @@ defmodule SymphonyElixir.Orchestrator do
   defp do_attempt_webhook_fetch_and_dispatch(state, issue_id, db_claims, meta) do
     case Tracker.fetch_issue_states_by_ids([issue_id], state.workflow_name) do
       {:ok, [issue | _]} ->
-        if should_dispatch_issue?(issue, state, active_state_set(), terminal_state_set(), db_claims) do
-          Logger.info("Webhook dispatching issue_id=#{issue_id} workflow=#{state.workflow_name}")
-          log_webhook_result(issue_id, meta, "dispatched", "dispatching via #{state.workflow_name}")
-          dispatch_issue(state, issue)
-        else
-          Logger.debug("Webhook dispatch skipped for #{issue_id}: not eligible")
-          log_webhook_result(issue_id, meta, "skipped", "not eligible for #{state.workflow_name}")
-          state
+        cond do
+          not issue_belongs_to_project?(issue, state.project) ->
+            Logger.debug("Webhook dispatch skipped for #{issue_id}: project mismatch")
+            log_webhook_result(issue_id, meta, "skipped", "project mismatch for #{state.workflow_name}")
+            state
+
+          should_dispatch_issue?(issue, state, active_state_set(), terminal_state_set(), db_claims) ->
+            Logger.info("Webhook dispatching issue_id=#{issue_id} workflow=#{state.workflow_name}")
+            log_webhook_result(issue_id, meta, "dispatched", "dispatching via #{state.workflow_name}")
+            dispatch_issue(state, issue)
+
+          true ->
+            Logger.debug("Webhook dispatch skipped for #{issue_id}: not eligible")
+            log_webhook_result(issue_id, meta, "skipped", "not eligible for #{state.workflow_name}")
+            state
         end
 
       {:ok, []} ->

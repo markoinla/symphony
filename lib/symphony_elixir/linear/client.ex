@@ -325,6 +325,33 @@ defmodule SymphonyElixir.Linear.Client do
   }
   """
 
+  @project_id_query """
+  query SymphonyLinearProjectId($slugId: String!) {
+    projects(filter: {slugId: {eq: $slugId}}) {
+      nodes {
+        id
+        slugId
+      }
+    }
+  }
+  """
+
+  @spec fetch_project_id(String.t()) :: {:ok, String.t()} | {:error, term()}
+  def fetch_project_id(slug) when is_binary(slug) do
+    slug_id = extract_slug_id(slug)
+
+    case graphql(@project_id_query, %{slugId: slug_id}) do
+      {:ok, %{"data" => %{"projects" => %{"nodes" => [%{"id" => id} | _]}}}} when is_binary(id) ->
+        {:ok, id}
+
+      {:ok, _body} ->
+        {:error, :project_not_found}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   @spec fetch_organization_id() :: {:ok, String.t()} | {:error, term()}
   def fetch_organization_id do
     case graphql(@org_query, %{}) do
