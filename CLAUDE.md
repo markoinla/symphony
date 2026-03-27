@@ -77,7 +77,19 @@ PostgreSQL runs in Docker (`symphony-postgres`). Connect with:
 PGPASSWORD=postgres psql -h localhost -U postgres -d symphony_dev
 ```
 
-## Debugging Sessions
+## Debugging
+
+### System diagnostics
+
+`GET /diagnostics` — unauthenticated, returns a comprehensive snapshot for production troubleshooting:
+
+```bash
+curl localhost:4000/diagnostics | jq .
+```
+
+Sections: `system` (OTP/Elixir version, uptime, memory, BEAM process counts, registry counts), `orchestrator` (running/retrying agents, engine totals, rate limits), `workflows` (per-workflow config, polling/webhook settings, worker mode), `database` (session counts by status, pool config), `issue_claims` (active dispatch locks), `worker_health` (24h per-host failure rates), `dead_letters` (permanently failed sessions), `webhooks` (last 20 events), `error_distribution` (24h error counts by category), `projects`, `recent_errors` (last 20).
+
+### Session debugging
 
 Use the debug endpoint to get a complete picture of any session:
 

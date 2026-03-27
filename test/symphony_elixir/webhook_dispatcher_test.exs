@@ -250,6 +250,9 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
     test "skips dispatch when issue has a configured skip label" do
       issue_id = "test-skip-#{System.unique_integer([:positive])}"
 
+      # Create a project so resolve_org_id() returns a valid organization_id
+      {:ok, _project} = Store.create_project(%{name: "Test", linear_project_slug: "test-skip", organization_id: test_org_id()})
+
       # Re-write workflow with skip_labels configured
       workflow_path = Workflow.workflow_file_paths() |> List.first()
       write_workflow_file!(workflow_path, tracker_skip_labels: ["needs-human-review", "reviewed-by-agent"])

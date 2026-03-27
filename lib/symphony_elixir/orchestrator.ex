@@ -35,6 +35,8 @@ defmodule SymphonyElixir.Orchestrator do
   # Grace period before sweeping orphaned DB sessions on startup, giving live
   # agent tasks time to register in the SessionLogRegistry.
   @stale_session_grace_ms 30_000
+  @hint_drain_interval_ms 1_000
+  @stale_hint_ttl_seconds 300
   @empty_engine_totals %{
     input_tokens: 0,
     output_tokens: 0,
@@ -64,8 +66,7 @@ defmodule SymphonyElixir.Orchestrator do
             retry_attempts: map(),
             engine_totals: map() | nil,
             engine_rate_limits: map() | nil,
-            last_config_error: atom() | nil,
-            webhook_hint_timestamps: %{optional(String.t()) => integer()}
+            last_config_error: atom() | nil
           }
 
     defstruct [
@@ -85,8 +86,7 @@ defmodule SymphonyElixir.Orchestrator do
       retry_attempts: %{},
       engine_totals: nil,
       engine_rate_limits: nil,
-      last_config_error: nil,
-      webhook_hint_timestamps: %{}
+      last_config_error: nil
     ]
   end
 
@@ -145,10 +145,11 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc """
-  Broadcast a webhook-driven issue hint to all orchestrators.
+  Broadcast a non-dispatch webhook hint to all orchestrators for reconciliation.
 
-  Each orchestrator independently decides whether the issue is relevant
-  and whether to fetch/dispatch it.
+  Used for comments and non-state-change updates (labels, assignment) on
+  running issues. State-change dispatch candidates go through the durable
+  `webhook_hint_queue` table instead.
   """
   @spec webhook_issue_hint(String.t(), map()) :: :ok
   def webhook_issue_hint(issue_id, meta) when is_binary(issue_id) and is_map(meta) do
@@ -200,6 +201,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     run_terminal_workspace_cleanup()
     Process.send_after(self(), :finalize_stale_sessions, @stale_session_grace_ms)
+    schedule_hint_drain()
     state = schedule_tick(state, 0)
 
     {:ok, state}
@@ -329,9 +331,15 @@ defmodule SymphonyElixir.Orchestrator do
     state = maybe_dispatch(state)
     state = schedule_tick(state, state.poll_interval_ms)
     state = %{state | poll_check_in_progress: false}
-    state = cleanup_stale_webhook_hints(state)
+    Store.cleanup_stale_hints(@stale_hint_ttl_seconds)
 
     notify_dashboard()
+    {:noreply, state}
+  end
+
+  def handle_info(:drain_hint_queue, state) do
+    state = drain_and_dispatch_hints(state)
+    schedule_hint_drain()
     {:noreply, state}
   end
 
@@ -503,6 +511,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   def handle_info(:finalize_stale_sessions, state) do
     finalize_stale_db_sessions(state)
+    reap_orphaned_processes()
     {:noreply, state}
   end
 
@@ -1227,17 +1236,6 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp maybe_set_agent_external_urls(_issue), do: :ok
 
-  defp issue_belongs_to_project?(_issue, nil), do: true
-
-  defp issue_belongs_to_project?(%Issue{project_slug_id: nil}, _project), do: true
-
-  defp issue_belongs_to_project?(%Issue{project_slug_id: slug_id}, %Project{linear_project_slug: project_slug})
-       when is_binary(project_slug) do
-    String.ends_with?(project_slug, slug_id)
-  end
-
-  defp issue_belongs_to_project?(_issue, _project), do: true
-
   defp resolve_project(nil) do
     case Store.list_projects() do
       [%Project{} = project | _] -> project
@@ -1460,6 +1458,22 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # Runs the process reaper at most once per BEAM instance. Multiple orchestrators
+  # fire :finalize_stale_sessions independently; the first one to arrive does the
+  # reap and the rest skip via :persistent_term guard.
+  defp reap_orphaned_processes do
+    key = {__MODULE__, :process_reaper_ran}
+
+    case :persistent_term.get(key, false) do
+      true ->
+        :ok
+
+      false ->
+        :persistent_term.put(key, true)
+        SymphonyElixir.ProcessReaper.reap_orphaned_agents()
+    end
+  end
+
   defp sweep_orphaned_db_sessions(%State{project_id: project_id, workflow_name: workflow_name} = state) do
     # Exclude issue IDs the orchestrator is actively tracking — these are legitimately
     # running regardless of SessionLogRegistry state (e.g. long thinking, waiting on tools).
@@ -1563,24 +1577,12 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp rebroadcast_hint_after_release(issue_id, source_workflow) do
-    targets =
-      workflow_servers()
-      |> Enum.reject(fn {key, _server} -> key == source_workflow end)
+    Logger.info("Re-enqueuing hint for issue_id=#{issue_id} after claim release from #{source_workflow}")
 
-    if targets != [] do
-      Logger.info("Rebroadcasting hint for issue_id=#{issue_id} from #{source_workflow} to #{length(targets)} workflow(s)")
-
-      Enum.each(targets, fn {_key, server} ->
-        GenServer.cast(
-          server,
-          {:webhook_issue_hint, issue_id,
-           %{
-             action: "update",
-             source: :rebroadcast
-           }}
-        )
-      end)
-    end
+    Store.enqueue_webhook_hint(issue_id, %{
+      action: "update",
+      source: :rebroadcast
+    })
   end
 
   defp retry_delay(attempt, metadata) when is_integer(attempt) and attempt > 0 and is_map(metadata) do
@@ -1773,27 +1775,47 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # -- Webhook issue hints --------------------------------------------------
-
-  @webhook_debounce_ms 5_000
-  @webhook_hint_stale_ms 60_000
+  #
+  # State-change webhooks are enqueued in Postgres by IssueWebhookHandler
+  # and drained here on a 1-second timer via `drain_and_dispatch_hints/1`.
+  #
+  # Non-state-change webhooks (comments, label/assignment updates) still
+  # arrive as GenServer casts for reconciliation of running issues.
+  # -----------------------------------------------------------------
 
   @impl true
   def handle_cast({:webhook_issue_hint, issue_id, meta}, state) do
-    Logger.info("Orchestrator #{state.workflow_name} received webhook hint for #{issue_id}")
+    Logger.info("Orchestrator #{state.workflow_name} received webhook hint for #{issue_id} (reconciliation)")
 
-    if webhook_enabled?(state) do
+    if webhook_enabled?(state) and Map.has_key?(state.running, issue_id) do
       try do
-        state = handle_webhook_issue_hint(state, issue_id, meta)
+        state = reconcile_single_running_issue(state, issue_id)
+        log_webhook_result(issue_id, meta, "reconcile", "issue already running, reconciling")
         notify_dashboard()
         {:noreply, state}
       rescue
         e ->
-          Logger.error("Webhook hint crashed for #{issue_id} in #{state.workflow_name}: #{Exception.message(e)}")
+          Logger.error("Webhook reconcile crashed for #{issue_id} in #{state.workflow_name}: #{Exception.message(e)}")
           {:noreply, state}
       end
     else
-      Logger.info("Webhook hint ignored for #{issue_id}: webhooks disabled for #{state.workflow_name}")
-      log_webhook_result(issue_id, meta, "disabled", "webhooks disabled for workflow #{state.workflow_name}")
+      Logger.debug("Webhook hint ignored for #{issue_id}: not running or webhooks disabled")
+      {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_cast({:webhook_dispatch_hint, issue_ids}, state) when is_list(issue_ids) do
+    Logger.info(
+      "Orchestrator #{state.workflow_name} received dispatch hint for #{length(issue_ids)} issue(s): #{Enum.join(issue_ids, ", ")}"
+    )
+
+    if webhook_enabled?(state) do
+      state = maybe_dispatch(state)
+      notify_dashboard()
+      {:noreply, state}
+    else
+      Logger.debug("Dispatch hint ignored for #{state.workflow_name}: webhooks disabled")
       {:noreply, state}
     end
   end
@@ -1802,55 +1824,6 @@ defmodule SymphonyElixir.Orchestrator do
     Config.settings!(workflow_name).webhook.enabled
   rescue
     _ -> false
-  end
-
-  defp handle_webhook_issue_hint(state, issue_id, meta) do
-    # Rebroadcast hints bypass debounce — they fire specifically because a
-    # prior hint was skipped while the claim was still held.
-    if Map.get(meta, :source) == :rebroadcast do
-      do_handle_webhook_hint(state, issue_id, meta)
-    else
-      now_ms = System.monotonic_time(:millisecond)
-      last_hint = Map.get(state.webhook_hint_timestamps, issue_id, now_ms - @webhook_debounce_ms - 1)
-
-      if now_ms - last_hint < @webhook_debounce_ms do
-        Logger.debug("Webhook hint debounced for #{issue_id} in #{state.workflow_name}")
-        state
-      else
-        timestamps = Map.put(state.webhook_hint_timestamps, issue_id, now_ms)
-        state = %{state | webhook_hint_timestamps: timestamps}
-        do_handle_webhook_hint(state, issue_id, meta)
-      end
-    end
-  end
-
-  defp do_handle_webhook_hint(state, issue_id, meta) do
-    slots = available_slots(state)
-    running? = Map.has_key?(state.running, issue_id)
-    retrying? = Map.has_key?(state.retry_attempts, issue_id)
-
-    Logger.info(
-      "Webhook hint eval: issue_id=#{issue_id} workflow=#{state.workflow_name} " <>
-        "running=#{running?} retrying=#{retrying?} slots=#{slots}"
-    )
-
-    cond do
-      running? ->
-        log_webhook_result(issue_id, meta, "reconcile", "issue already running, reconciling")
-        reconcile_single_running_issue(state, issue_id)
-
-      retrying? ->
-        log_webhook_result(issue_id, meta, "skipped", "issue in retry queue")
-        state
-
-      slots > 0 ->
-        attempt_webhook_dispatch(state, issue_id, meta)
-
-      true ->
-        Logger.info("Webhook hint for #{issue_id} ignored: no available slots")
-        log_webhook_result(issue_id, meta, "skipped", "no available slots")
-        state
-    end
   end
 
   defp reconcile_single_running_issue(state, issue_id) do
@@ -1870,65 +1843,41 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp attempt_webhook_dispatch(state, issue_id, meta) do
-    case Config.validate!(state.workflow_name) do
-      :ok ->
-        db_claims = Store.list_claimed_issue_ids(org_id: org_id(state))
-
-        if MapSet.member?(db_claims, issue_id) do
-          Logger.debug("Webhook dispatch skipped for #{issue_id}: already claimed")
-          log_webhook_result(issue_id, meta, "skipped", "already claimed")
-          state
-        else
-          do_attempt_webhook_fetch_and_dispatch(state, issue_id, db_claims, meta)
-        end
-
-      {:error, reason} ->
-        Logger.debug("Webhook dispatch skipped for #{issue_id}: #{inspect(reason)}")
-        log_webhook_result(issue_id, meta, "skipped", "config validation failed: #{inspect(reason)}")
-        state
-    end
+  defp schedule_hint_drain do
+    Process.send_after(self(), :drain_hint_queue, @hint_drain_interval_ms)
   end
 
-  defp do_attempt_webhook_fetch_and_dispatch(state, issue_id, db_claims, meta) do
-    case Tracker.fetch_issue_states_by_ids([issue_id], state.workflow_name) do
-      {:ok, [issue | _]} ->
-        cond do
-          not issue_belongs_to_project?(issue, state.project) ->
-            Logger.debug("Webhook dispatch skipped for #{issue_id}: project mismatch")
-            log_webhook_result(issue_id, meta, "skipped", "project mismatch for #{state.workflow_name}")
-            state
+  defp drain_and_dispatch_hints(state) do
+    unless webhook_enabled?(state), do: throw(:skip)
 
-          should_dispatch_issue?(issue, state, active_state_set(), terminal_state_set(), db_claims) ->
-            Logger.info("Webhook dispatching issue_id=#{issue_id} workflow=#{state.workflow_name}")
-            log_webhook_result(issue_id, meta, "dispatched", "dispatching via #{state.workflow_name}")
-            dispatch_issue(state, issue)
+    hints = Store.drain_webhook_hints()
+    if hints == [], do: throw(:skip)
 
-          true ->
-            Logger.debug("Webhook dispatch skipped for #{issue_id}: not eligible")
-            log_webhook_result(issue_id, meta, "skipped", "not eligible for #{state.workflow_name}")
-            state
-        end
+    # Broadcast drained hints to ALL orchestrators so each workflow can evaluate
+    # the issue against its own active_states. The DB drain is a shared queue with
+    # no workflow scoping, so only one orchestrator wins the drain race — it must
+    # fan out to the others.
+    #
+    # We use :webhook_dispatch_hint (triggers maybe_dispatch) rather than
+    # :webhook_issue_hint (reconciliation-only for already-running issues).
+    issue_ids = Enum.map(hints, & &1.issue_id)
 
-      {:ok, []} ->
-        Logger.debug("Webhook dispatch skipped for #{issue_id}: issue not found in Linear")
-        log_webhook_result(issue_id, meta, "skipped", "issue not found in Linear")
-        state
+    Logger.info("Hint drain broadcasting #{length(issue_ids)} hint(s) from #{state.workflow_name}: #{Enum.join(issue_ids, ", ")}")
 
-      {:error, reason} ->
-        Logger.debug("Webhook dispatch skipped for #{issue_id}: #{inspect(reason)}")
-        log_webhook_result(issue_id, meta, "skipped", "fetch error: #{inspect(reason)}")
-        state
-    end
-  end
+    servers = workflow_servers()
 
-  defp cleanup_stale_webhook_hints(%State{webhook_hint_timestamps: timestamps} = state) do
-    now_ms = System.monotonic_time(:millisecond)
+    Enum.each(servers, fn {key, server} ->
+      GenServer.cast(server, {:webhook_dispatch_hint, issue_ids})
+      Logger.debug("Hint drain cast :webhook_dispatch_hint to #{key}")
+    end)
 
-    cleaned =
-      Map.reject(timestamps, fn {_id, ts} -> now_ms - ts > @webhook_hint_stale_ms end)
-
-    %{state | webhook_hint_timestamps: cleaned}
+    state
+  rescue
+    e ->
+      Logger.error("Hint drain crashed for #{state.workflow_name}: #{Exception.message(e)}")
+      state
+  catch
+    :skip -> state
   end
 
   defp log_webhook_result(issue_id, meta, result, detail) do

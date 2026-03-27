@@ -217,9 +217,15 @@ defmodule SymphonyElixir.ProxyClient do
 
   @spec proxy_base_url() :: String.t()
   defp proxy_base_url do
-    case System.get_env("SYMPHONY_ENV") do
-      "dev" -> @dev_proxy_url
-      _ -> @prod_proxy_url
+    case Store.get_setting("proxy.url") do
+      url when is_binary(url) and url != "" ->
+        url
+
+      _ ->
+        case System.get_env("SYMPHONY_ENV") do
+          "dev" -> @dev_proxy_url
+          _ -> @prod_proxy_url
+        end
     end
   end
 

@@ -79,6 +79,16 @@ handle_update() {
 
   docker compose -f docker-compose.prod.yml pull
   docker compose -f docker-compose.prod.yml up -d
+
+  # Defensive ownership fixup — ensure no root-owned files linger in user home
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    local user_home
+    user_home="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
+    chown -R "${SUDO_USER}:${SUDO_USER}" "${user_home}/.claude"
+    [[ -f "${user_home}/.claude.json" ]] && chown "${SUDO_USER}:${SUDO_USER}" "${user_home}/.claude.json"
+    [[ -d "${user_home}/.symphony" ]] && chown -R "${SUDO_USER}:${SUDO_USER}" "${user_home}/.symphony"
+  fi
+
   info "Symphony updated successfully."
   exit 0
 }
@@ -213,7 +223,13 @@ install_claude() {
     info "Claude Code CLI is already installed."
   else
     warn "Claude Code CLI not found. Installing..."
-    npm install -g @anthropic-ai/claude-code
+    # If npm lives inside SUDO_USER's nvm prefix, install as that user (nvm
+    # doesn't need root and running as root leaves root-owned files in $HOME).
+    if [[ -n "${SUDO_USER:-}" ]] && [[ "$(command -v npm)" == *"${SUDO_HOME:-}"* ]]; then
+      sudo -u "$SUDO_USER" env "PATH=$PATH" npm install -g @anthropic-ai/claude-code
+    else
+      npm install -g @anthropic-ai/claude-code
+    fi
     info "Claude Code CLI installed."
   fi
 
@@ -438,9 +454,10 @@ json.dump(data, sys.stdout, indent=2)
 IPEOF
   fi
 
-  # Ensure the regular user owns their .claude directory
+  # Ensure the regular user owns their .claude directory and state file
   if [[ -n "${SUDO_USER:-}" ]]; then
     chown -R "${SUDO_USER}:${SUDO_USER}" "${user_home}/.claude"
+    [[ -f "${user_home}/.claude.json" ]] && chown "${SUDO_USER}:${SUDO_USER}" "${user_home}/.claude.json"
   fi
 
   info "Installed agent skills (v${PLUGIN_VERSION}) to ${PLUGINS_DIR}"

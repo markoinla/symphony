@@ -1,10 +1,10 @@
 defmodule SymphonyElixir.Linear.IssueWebhookHandler do
   @moduledoc """
-  Handles Linear data-change webhook events (Issue create/update, Comment create)
-  and broadcasts hints to orchestrators for evaluation.
+  Handles Linear data-change webhook events (Issue create/update, Comment create).
 
-  Performs lightweight filtering to avoid sending irrelevant events,
-  then delegates full dispatch decisions to the orchestrator.
+  State-change webhooks are persisted to a durable hint queue in Postgres,
+  drained by the orchestrator on a fast interval. Non-state-change updates
+  and comments are forwarded directly via GenServer cast for reconciliation.
   """
 
   require Logger
@@ -48,9 +48,18 @@ defmodule SymphonyElixir.Linear.IssueWebhookHandler do
     if issue_matches_configured_project?(data) do
       meta = build_issue_meta(action, data, state_name, identifier)
       log_issue_hint(action, state_name, identifier, payload)
-      log_to_db("Issue", action, data, "hint_sent", nil)
 
-      Orchestrator.webhook_issue_hint(issue_id, meta)
+      if state_change_event?(action, payload) do
+        # State-change webhook → durable hint queue, drained by orchestrator
+        log_to_db("Issue", action, data, "enqueued", nil)
+        Store.enqueue_webhook_hint(issue_id, meta)
+      else
+        # Non-state-change update (labels, assignment) → direct cast for reconciliation
+        log_to_db("Issue", action, data, "hint_sent", nil)
+        Orchestrator.webhook_issue_hint(issue_id, meta)
+      end
+
+      :ok
     else
       Logger.debug("Webhook skipped: #{identifier} project not in configured projects")
       log_to_db("Issue", action, data, "skipped", "project not configured")
@@ -82,6 +91,19 @@ defmodule SymphonyElixir.Linear.IssueWebhookHandler do
     Logger.debug("Comment webhook missing data.issueId, skipping")
     :ok
   end
+
+  # A state-change event is either: an issue create (new issue appearing),
+  # or an issue update where stateId is in updatedFrom (the state changed).
+  defp state_change_event?("create", _payload), do: true
+
+  defp state_change_event?("update", payload) do
+    case Map.get(payload, "updatedFrom") do
+      %{"stateId" => _} -> true
+      _ -> false
+    end
+  end
+
+  defp state_change_event?(_action, _payload), do: false
 
   defp build_issue_meta(action, data, state_name, identifier) do
     base = %{

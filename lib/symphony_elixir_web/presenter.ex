@@ -18,6 +18,9 @@ defmodule SymphonyElixirWeb.Presenter do
 
       {:error, :timeout} ->
         %{generated_at: generated_at, error: %{code: "snapshot_timeout", message: "Snapshot timed out"}}
+
+      {:error, :unavailable} ->
+        %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
     end
   end
 
@@ -90,13 +93,14 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp fetch_snapshots(orchestrator, snapshot_timeout_ms) do
+    sources = orchestrator_sources(orchestrator)
+
     snapshots =
-      orchestrator_sources(orchestrator)
-      |> Enum.reduce([], fn {workflow_name, server}, acc ->
+      Enum.reduce(sources, [], fn {workflow_name, server}, acc ->
         case Orchestrator.snapshot(server, snapshot_timeout_ms) do
           %{} = snapshot -> [{workflow_name, snapshot} | acc]
           :timeout -> [{:timeout, workflow_name} | acc]
-          :unavailable -> acc
+          :unavailable -> [{:unavailable, workflow_name} | acc]
         end
       end)
       |> Enum.reverse()
@@ -108,16 +112,22 @@ defmodule SymphonyElixirWeb.Presenter do
       end)
 
     case ok_snapshots do
-      [] ->
-        if Enum.any?(snapshots, &match?({:timeout, _workflow_name}, &1)) do
-          {:error, :timeout}
-        else
-          # No orchestrators registered yet (e.g. during startup) — return empty
-          {:ok, [{nil, empty_snapshot()}]}
-        end
+      [] -> resolve_empty_snapshots(snapshots)
+      ok_snapshots -> {:ok, ok_snapshots}
+    end
+  end
 
-      ok_snapshots ->
-        {:ok, ok_snapshots}
+  defp resolve_empty_snapshots(snapshots) do
+    cond do
+      Enum.any?(snapshots, &match?({:timeout, _}, &1)) ->
+        {:error, :timeout}
+
+      Enum.any?(snapshots, &match?({:unavailable, _}, &1)) ->
+        {:error, :unavailable}
+
+      true ->
+        # No orchestrators registered yet (e.g. during startup) — return empty
+        {:ok, [{nil, empty_snapshot()}]}
     end
   end
 

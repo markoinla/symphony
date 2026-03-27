@@ -253,13 +253,14 @@ After each turn, AgentRunner checks whether to continue:
 If all conditions are met, a continuation turn runs with new comments and pending prompts merged
 into the prompt.
 
-### Webhook-driven re-poll
+### Webhook-driven dispatch
 
-Linear webhooks can nudge the orchestrator to poll sooner:
+State-change webhooks bypass the polling interval for fast dispatch:
 
 1. `Linear.IssueWebhookHandler` receives the webhook.
-2. Broadcasts `webhook_issue_hint` to all orchestrator instances.
-3. Orchestrator records the hint and checks the issue on the next tick.
+2. State-change events (issue create, or update with `stateId` in `updatedFrom`) are enqueued in the `webhook_hint_queue` Postgres table.
+3. Orchestrator drains the queue every 1 second, deduplicates by issue ID, and feeds hints into the same `choose_issues` pipeline used by polling.
+4. Non-state-change webhooks (comments, label/assignment changes) are cast directly for reconciliation of running issues.
 
 ### Mid-run user prompts
 
