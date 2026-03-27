@@ -24,6 +24,9 @@
 # If the VM crashes, it generates a dump, let's ignore it too.
 erl_crash.dump
 
+# Stray compiled BEAM files (e.g. from elixirc outside _build).
+*.beam
+
 # Elixir language server and tooling.
 /.elixir_ls/
 /.fetch/

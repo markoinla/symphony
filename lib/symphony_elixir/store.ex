@@ -11,7 +11,7 @@ defmodule SymphonyElixir.Store do
   import Ecto.Query
   alias SymphonyElixir.Repo
   alias SymphonyElixir.Store.{Agent, IssueClaim, Message, Organization, Project, Session, Setting}
-  alias SymphonyElixir.Store.{User, UserOrganization, WebhookLog}
+  alias SymphonyElixir.Store.{User, UserOrganization, WebhookHint, WebhookLog}
 
   # ── Agent CRUD ─────────────────────────────────────────────────────
 
@@ -437,6 +437,22 @@ defmodule SymphonyElixir.Store do
     |> limit(^limit)
     |> offset(^offset)
     |> preload(:project)
+    |> Repo.all()
+  end
+
+  @spec session_counts_by_status() :: %{optional(String.t()) => non_neg_integer()}
+  def session_counts_by_status do
+    Session
+    |> group_by([s], s.status)
+    |> select([s], {s.status, count(s.id)})
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  @spec list_issue_claims() :: [IssueClaim.t()]
+  def list_issue_claims do
+    IssueClaim
+    |> order_by([c], desc: c.claimed_at)
     |> Repo.all()
   end
 
@@ -995,4 +1011,57 @@ defmodule SymphonyElixir.Store do
 
   defp maybe_filter_webhook_issue_identifier(query, identifier),
     do: where(query, [w], w.issue_identifier == ^identifier)
+
+  # ── Webhook Hint Queue ─────────────────────────────────────────────
+
+  @spec enqueue_webhook_hint(String.t(), map()) :: {:ok, WebhookHint.t()} | {:error, Ecto.Changeset.t()}
+  def enqueue_webhook_hint(issue_id, meta \\ %{}) when is_binary(issue_id) do
+    %WebhookHint{}
+    |> WebhookHint.changeset(%{
+      issue_id: issue_id,
+      meta: meta,
+      inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+    })
+    |> Repo.insert()
+  end
+
+  @spec drain_webhook_hints() :: [%{issue_id: String.t(), meta: map()}]
+  def drain_webhook_hints do
+    Repo.transaction(fn ->
+      hints =
+        WebhookHint
+        |> order_by([h], asc: h.inserted_at)
+        |> lock("FOR UPDATE SKIP LOCKED")
+        |> Repo.all()
+
+      if hints != [] do
+        ids = Enum.map(hints, & &1.id)
+        Repo.delete_all(from(h in WebhookHint, where: h.id in ^ids))
+      end
+
+      # Deduplicate by issue_id, keeping the most recent row
+      hints
+      |> Enum.group_by(& &1.issue_id)
+      |> Enum.map(fn {issue_id, rows} ->
+        latest = Enum.max_by(rows, & &1.inserted_at, DateTime)
+        %{issue_id: issue_id, meta: latest.meta || %{}}
+      end)
+    end)
+    |> case do
+      {:ok, deduplicated} ->
+        deduplicated
+
+      {:error, reason} ->
+        Logger.warning("Failed to drain webhook hints: #{inspect(reason)}")
+        []
+    end
+  end
+
+  @spec cleanup_stale_hints(non_neg_integer()) :: {non_neg_integer(), nil}
+  def cleanup_stale_hints(ttl_seconds \\ 300) do
+    cutoff = DateTime.utc_now() |> DateTime.add(-ttl_seconds, :second)
+
+    from(h in WebhookHint, where: h.inserted_at < ^cutoff)
+    |> Repo.delete_all()
+  end
 end

@@ -4,6 +4,21 @@ defmodule SymphonyElixir.OrchestratorStarterTest do
   alias SymphonyElixir.{Orchestrator, Store, Workflow}
 
   describe "ensure_orchestrators via reconciliation" do
+    setup do
+      # Stop all orchestrators left over from previous tests
+      for {_key, server} <- Orchestrator.workflow_servers() do
+        case GenServer.whereis(server) do
+          pid when is_pid(pid) ->
+            DynamicSupervisor.terminate_child(SymphonyElixir.OrchestratorSupervisor, pid)
+
+          nil ->
+            :ok
+        end
+      end
+
+      :ok
+    end
+
     test "disabled agent's orchestrator is stopped on reconciliation" do
       # Get the workflow name from the test WORKFLOW.md
       [{workflow_name, _path}] = Workflow.named_workflow_paths()
@@ -12,8 +27,9 @@ defmodule SymphonyElixir.OrchestratorStarterTest do
       {:ok, _} = Store.upsert_agent(%{name: workflow_name})
       {:ok, _} = Store.update_agent(workflow_name, %{enabled: false})
 
-      # Start the OrchestratorStarter — init runs ensure_orchestrators synchronously
-      start_supervised!({SymphonyElixir.OrchestratorStarter, []})
+      # Start the OrchestratorStarter — init sends :ensure_orchestrators asynchronously
+      pid = start_supervised!({SymphonyElixir.OrchestratorStarter, []})
+      :sys.get_state(pid)
 
       # Verify no orchestrators are running for the disabled workflow
       running = Orchestrator.workflow_servers()
@@ -95,7 +111,8 @@ defmodule SymphonyElixir.OrchestratorStarterTest do
       {:ok, project1} = Store.create_project(%{name: "Project A", linear_project_slug: "proj-a", organization_id: test_org_id()})
       {:ok, project2} = Store.create_project(%{name: "Project B", linear_project_slug: "proj-b", organization_id: test_org_id()})
 
-      start_supervised!({SymphonyElixir.OrchestratorStarter, []})
+      pid = start_supervised!({SymphonyElixir.OrchestratorStarter, []})
+      :sys.get_state(pid)
 
       running_keys = Orchestrator.workflow_servers() |> Enum.map(fn {k, _} -> k end)
 
@@ -143,7 +160,8 @@ defmodule SymphonyElixir.OrchestratorStarterTest do
       # Ensure at least one project exists
       {:ok, project} = Store.create_project(%{name: "Test Project", linear_project_slug: "test-proj", organization_id: test_org_id()})
 
-      start_supervised!({SymphonyElixir.OrchestratorStarter, []})
+      pid = start_supervised!({SymphonyElixir.OrchestratorStarter, []})
+      :sys.get_state(pid)
 
       running_keys = Orchestrator.workflow_servers() |> Enum.map(fn {k, _} -> k end)
 

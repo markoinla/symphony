@@ -967,6 +967,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                %{
                  "id" => other_project.id,
                  "name" => "Other",
+                 "linear_project_id" => nil,
                  "linear_project_slug" => "other",
                  "linear_organization_slug" => "marko-la",
                  "linear_filter_by" => "project",
@@ -981,6 +982,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                %{
                  "id" => project.id,
                  "name" => "Symphony",
+                 "linear_project_id" => nil,
                  "linear_project_slug" => "symphony",
                  "linear_organization_slug" => "marko-la",
                  "linear_filter_by" => "project",

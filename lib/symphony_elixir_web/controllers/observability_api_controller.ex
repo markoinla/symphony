@@ -117,51 +117,82 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   @spec diagnostics(Conn.t(), map()) :: Conn.t()
   def diagnostics(conn, _params) do
-    payload = Presenter.state_payload(orchestrator(), snapshot_timeout_ms())
-
-    workflow_configs =
-      WorkflowStore.workflow_names()
-      |> Enum.map(fn name ->
-        settings = Config.settings!(name)
-
-        %{
-          workflow_name: name,
-          active_states: settings.tracker.active_states,
-          terminal_states: settings.tracker.terminal_states,
-          max_concurrent_agents: settings.agent.max_concurrent_agents,
-          max_concurrent_agents_by_state: settings.agent.max_concurrent_agents_by_state,
-          max_failure_retries: settings.agent.max_failure_retries,
-          retry_cooldown_ms: settings.agent.retry_cooldown_ms,
-          poll_interval_ms: settings.polling.interval_ms,
-          workers: worker_diagnostics(settings)
-        }
-      end)
-
-    recent_errors =
-      Store.list_sessions(limit: 10, status: "error")
-      |> Enum.map(fn s ->
-        %{
-          id: s.id,
-          issue_identifier: s.issue_identifier,
-          issue_title: s.issue_title,
-          workflow_name: s.workflow_name,
-          error: s.error,
-          error_category: Map.get(s, :error_category),
-          ended_at: format_datetime(Map.get(s, :ended_at)),
-          started_at: format_datetime(Map.get(s, :started_at))
-        }
-      end)
-
     diagnostics = %{
-      orchestrator: payload,
-      configs: workflow_configs,
-      recent_errors: recent_errors
+      system: system_diagnostics(),
+      orchestrator: Presenter.state_payload(orchestrator(), snapshot_timeout_ms()),
+      workflows: workflow_diagnostics(),
+      database: database_diagnostics(),
+      issue_claims: issue_claims_diagnostics(),
+      worker_health: Store.worker_host_stats("24h"),
+      dead_letters: dead_letter_diagnostics(),
+      webhooks: webhook_diagnostics(),
+      error_distribution: error_distribution_diagnostics(),
+      projects: project_diagnostics(),
+      recent_errors: recent_error_diagnostics()
     }
 
     json(conn, diagnostics)
   end
 
-  defp worker_diagnostics(settings) do
+  # ── Diagnostics helpers ───────────────────────────────────────────
+
+  defp system_diagnostics do
+    {uptime_ms, _} = :erlang.statistics(:wall_clock)
+
+    %{
+      node: node(),
+      otp_release: :erlang.system_info(:otp_release) |> List.to_string(),
+      elixir_version: System.version(),
+      uptime_seconds: div(uptime_ms, 1_000),
+      system_time: DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601(),
+      schedulers: :erlang.system_info(:schedulers_online),
+      process_count: :erlang.system_info(:process_count),
+      process_limit: :erlang.system_info(:process_limit),
+      memory: memory_diagnostics(),
+      registries: registry_diagnostics()
+    }
+  end
+
+  defp memory_diagnostics do
+    mem = :erlang.memory()
+
+    %{
+      total_mb: Float.round(mem[:total] / 1_048_576, 1),
+      processes_mb: Float.round(mem[:processes] / 1_048_576, 1),
+      ets_mb: Float.round(mem[:ets] / 1_048_576, 1),
+      binary_mb: Float.round(mem[:binary] / 1_048_576, 1)
+    }
+  end
+
+  defp registry_diagnostics do
+    %{
+      session_logs: Registry.count(SymphonyElixir.SessionLogRegistry),
+      orchestrators: Registry.count(SymphonyElixir.OrchestratorRegistry),
+      agent_sessions: Registry.count(SymphonyElixir.AgentSessionRegistry)
+    }
+  end
+
+  defp workflow_diagnostics do
+    WorkflowStore.workflow_names()
+    |> Enum.map(fn name ->
+      settings = Config.settings!(name)
+
+      %{
+        workflow_name: name,
+        active_states: settings.tracker.active_states,
+        terminal_states: settings.tracker.terminal_states,
+        max_concurrent_agents: settings.agent.max_concurrent_agents,
+        max_concurrent_agents_by_state: settings.agent.max_concurrent_agents_by_state,
+        max_failure_retries: settings.agent.max_failure_retries,
+        retry_cooldown_ms: settings.agent.retry_cooldown_ms,
+        poll_interval_ms: settings.polling.interval_ms,
+        webhook_enabled: settings.webhook.enabled,
+        workers: workflow_worker_info(settings)
+      }
+    end)
+  end
+
+  defp workflow_worker_info(settings) do
     case settings.worker do
       %{ssh_hosts: hosts} when is_list(hosts) and hosts != [] ->
         %{
@@ -174,6 +205,132 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
         %{mode: "local"}
     end
   end
+
+  defp database_diagnostics do
+    session_counts = Store.session_counts_by_status()
+    pool_stats = ecto_pool_stats()
+
+    %{
+      session_counts: session_counts,
+      total_sessions: session_counts |> Map.values() |> Enum.sum(),
+      ecto_pool: pool_stats
+    }
+  end
+
+  defp ecto_pool_stats do
+    repo_config = Application.get_env(:symphony_elixir, SymphonyElixir.Repo, [])
+
+    %{
+      pool_size: repo_config[:pool_size] || 10,
+      pool: to_string(repo_config[:pool] || DBConnection.ConnectionPool)
+    }
+  end
+
+  defp issue_claims_diagnostics do
+    claims = Store.list_issue_claims()
+
+    %{
+      count: length(claims),
+      claims:
+        Enum.map(claims, fn c ->
+          %{
+            issue_id: c.issue_id,
+            orchestrator_key: c.orchestrator_key,
+            claimed_at: format_datetime(c.claimed_at)
+          }
+        end)
+    }
+  end
+
+  defp dead_letter_diagnostics do
+    Store.dead_letter_sessions()
+    |> Enum.map(fn dl ->
+      %{
+        id: dl.id,
+        issue_identifier: dl.issue_identifier,
+        issue_title: dl.issue_title,
+        status: dl.status,
+        workflow_name: dl.workflow_name,
+        error_category: dl.error_category,
+        error: dl.error,
+        ended_at: format_datetime(dl.ended_at)
+      }
+    end)
+  end
+
+  defp webhook_diagnostics do
+    logs = Store.list_webhook_logs(limit: 20)
+
+    %{
+      recent_count: length(logs),
+      logs:
+        Enum.map(logs, fn w ->
+          %{
+            id: w.id,
+            webhook_type: w.webhook_type,
+            action: w.action,
+            issue_identifier: w.issue_identifier,
+            state_name: w.state_name,
+            result: w.result,
+            detail: w.detail,
+            received_at: format_datetime(w.received_at)
+          }
+        end)
+    }
+  end
+
+  defp error_distribution_diagnostics do
+    failure_counts = Store.failure_counts_by_bucket("24h")
+
+    totals =
+      Enum.reduce(failure_counts, %{infra: 0, agent: 0, config: 0, timeout: 0}, fn bucket, acc ->
+        %{
+          infra: acc.infra + Map.get(bucket, :infra, 0),
+          agent: acc.agent + Map.get(bucket, :agent, 0),
+          config: acc.config + Map.get(bucket, :config, 0),
+          timeout: acc.timeout + Map.get(bucket, :timeout, 0)
+        }
+      end)
+
+    %{
+      range: "24h",
+      totals: totals,
+      total: totals.infra + totals.agent + totals.config + totals.timeout,
+      by_bucket: failure_counts
+    }
+  end
+
+  defp project_diagnostics do
+    Store.list_projects()
+    |> Enum.map(fn p ->
+      %{
+        id: p.id,
+        name: p.name,
+        linear_project_id: p.linear_project_id,
+        github_repo: p.github_repo,
+        github_branch: p.github_branch
+      }
+    end)
+  end
+
+  defp recent_error_diagnostics do
+    Store.list_sessions(limit: 20, status: "error")
+    |> Enum.map(fn s ->
+      %{
+        id: s.id,
+        issue_identifier: s.issue_identifier,
+        issue_title: s.issue_title,
+        workflow_name: s.workflow_name,
+        error: s.error,
+        error_category: s.error_category,
+        worker_host: s.worker_host,
+        started_at: format_datetime(s.started_at),
+        ended_at: format_datetime(s.ended_at)
+      }
+    end)
+  end
+
+  # ── Shared helpers ──────────────────────────────────────────────
 
   defp maybe_put_issue_identifier(opts, issue_identifier)
        when is_binary(issue_identifier) and issue_identifier != "" do
