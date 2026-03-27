@@ -1806,9 +1806,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   @impl true
   def handle_cast({:webhook_dispatch_hint, issue_ids}, state) when is_list(issue_ids) do
-    Logger.info(
-      "Orchestrator #{state.workflow_name} received dispatch hint for #{length(issue_ids)} issue(s): #{Enum.join(issue_ids, ", ")}"
-    )
+    Logger.info("Orchestrator #{state.workflow_name} received dispatch hint for #{length(issue_ids)} issue(s): #{Enum.join(issue_ids, ", ")}")
 
     if webhook_enabled?(state) do
       state = maybe_dispatch(state)
