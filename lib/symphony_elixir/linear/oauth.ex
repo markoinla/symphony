@@ -162,17 +162,10 @@ defmodule SymphonyElixir.Linear.OAuth do
       _token ->
         expires_at = Store.get_setting("linear_oauth.expires_at")
 
-        if token_expired?(expires_at) do
-          case refresh_token() do
-            {:ok, _token_data} ->
-              refreshed_expires_at = Store.get_setting("linear_oauth.expires_at")
-              {:connected, refreshed_expires_at}
-
-            {:error, _reason} ->
-              {:expired, expires_at}
-          end
-        else
-          {:connected, expires_at}
+        cond do
+          not token_expired?(expires_at) -> {:connected, expires_at}
+          refresh_expired_token_ok?() -> {:connected, Store.get_setting("linear_oauth.expires_at")}
+          true -> {:expired, expires_at}
         end
     end
   end
@@ -214,6 +207,10 @@ defmodule SymphonyElixir.Linear.OAuth do
     end
 
     :ok
+  end
+
+  defp refresh_expired_token_ok? do
+    match?({:ok, _}, refresh_token())
   end
 
   defp token_needs_refresh? do

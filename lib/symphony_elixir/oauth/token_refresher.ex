@@ -39,29 +39,36 @@ defmodule SymphonyElixir.OAuth.TokenRefresher do
   end
 
   defp refresh_if_needed(prefix, refresh_fn) do
-    expires_at_str = SymphonyElixir.Store.get_setting("#{prefix}.expires_at")
-    refresh_token = SymphonyElixir.Store.get_setting("#{prefix}.refresh_token")
+    case seconds_until_expiry(prefix) do
+      {:ok, seconds} when seconds > 0 and seconds < @proactive_buffer_seconds ->
+        do_refresh(prefix, refresh_fn, seconds)
 
-    if is_binary(expires_at_str) and is_binary(refresh_token) do
-      case DateTime.from_iso8601(expires_at_str) do
-        {:ok, expires_at, _} ->
-          seconds_remaining = DateTime.diff(expires_at, DateTime.utc_now(), :second)
+      _ ->
+        :ok
+    end
+  end
 
-          if seconds_remaining < @proactive_buffer_seconds and seconds_remaining > 0 do
-            Logger.info("#{prefix}: token expires in #{seconds_remaining}s, refreshing proactively")
+  defp seconds_until_expiry(prefix) do
+    store = SymphonyElixir.Store
 
-            case refresh_fn.() do
-              {:ok, _} ->
-                Logger.info("#{prefix}: proactive token refresh succeeded")
+    with expires_str when is_binary(expires_str) <- store.get_setting("#{prefix}.expires_at"),
+         refresh when is_binary(refresh) <- store.get_setting("#{prefix}.refresh_token"),
+         {:ok, expires_at, _} <- DateTime.from_iso8601(expires_str) do
+      {:ok, DateTime.diff(expires_at, DateTime.utc_now(), :second)}
+    else
+      _ -> :skip
+    end
+  end
 
-              {:error, reason} ->
-                Logger.warning("#{prefix}: proactive token refresh failed: #{inspect(reason)}")
-            end
-          end
+  defp do_refresh(prefix, refresh_fn, seconds_remaining) do
+    Logger.info("#{prefix}: token expires in #{seconds_remaining}s, refreshing proactively")
 
-        _ ->
-          :ok
-      end
+    case refresh_fn.() do
+      {:ok, _} ->
+        Logger.info("#{prefix}: proactive token refresh succeeded")
+
+      {:error, reason} ->
+        Logger.warning("#{prefix}: proactive token refresh failed: #{inspect(reason)}")
     end
   end
 
