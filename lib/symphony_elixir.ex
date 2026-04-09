@@ -139,6 +139,7 @@ defmodule SymphonyElixir.Application do
         SymphonyElixir.HttpServer,
         SymphonyElixir.OrchestratorStarter,
         SymphonyElixir.StatusDashboard,
+        SymphonyElixir.OAuth.TokenRefresher,
         {Task, &register_with_proxy/0}
       ]
     end
