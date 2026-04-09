@@ -119,7 +119,14 @@ defmodule SymphonyElixir.GitHub.OAuth do
         expires_at = Store.get_setting("github_oauth.expires_at")
 
         if expires_at && token_expired?(expires_at) do
-          {:expired, expires_at}
+          case refresh_token() do
+            {:ok, _token_data} ->
+              refreshed_expires_at = Store.get_setting("github_oauth.expires_at")
+              {:connected, refreshed_expires_at}
+
+            {:error, _reason} ->
+              {:expired, expires_at}
+          end
         else
           {:connected, expires_at}
         end
