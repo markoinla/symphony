@@ -33,7 +33,7 @@ defmodule SymphonyElixir.OAuth.TokenRefresher do
   @impl true
   def handle_info(:check_tokens, state) do
     refresh_if_needed("linear_oauth", &SymphonyElixir.Linear.OAuth.refresh_token/0)
-    refresh_if_needed("github_oauth", &refresh_github_token/0)
+    refresh_if_needed("github_oauth", &SymphonyElixir.GitHub.OAuth.refresh_token/0)
     schedule_check()
     {:noreply, state}
   end
@@ -70,15 +70,6 @@ defmodule SymphonyElixir.OAuth.TokenRefresher do
       {:error, reason} ->
         Logger.warning("#{prefix}: proactive token refresh failed: #{inspect(reason)}")
     end
-  end
-
-  defp refresh_github_token do
-    # GitHub.OAuth.refresh_token/0 is private; call current_access_token/0
-    # which triggers the lazy refresh internally when within the buffer window.
-    # We widen the check here so that current_access_token still gets called
-    # when there's time left, giving the internal maybe_refresh a chance to act.
-    _ = SymphonyElixir.GitHub.OAuth.current_access_token()
-    {:ok, :delegated}
   end
 
   defp schedule_check do

@@ -197,7 +197,8 @@ defmodule SymphonyElixir.GitHub.OAuth do
     end
   end
 
-  defp refresh_token do
+  @spec refresh_token() :: {:ok, map()} | {:error, term()}
+  def refresh_token do
     refresh_token_val = Store.get_setting("github_oauth.refresh_token")
     client_id = get_client_id()
     client_secret = get_client_secret()
