@@ -118,10 +118,13 @@ defmodule SymphonyElixir.GitHub.OAuth do
       _token ->
         expires_at = Store.get_setting("github_oauth.expires_at")
 
-        cond do
-          is_nil(expires_at) or not token_expired?(expires_at) -> {:connected, expires_at}
-          refresh_expired_token_ok?() -> {:connected, Store.get_setting("github_oauth.expires_at")}
-          true -> {:expired, expires_at}
+        if is_nil(expires_at) or token_expired?(expires_at) do
+          case expires_at do
+            nil -> {:connected, nil}
+            _ -> {:expired, expires_at}
+          end
+        else
+          {:connected, expires_at}
         end
     end
   end
@@ -163,10 +166,6 @@ defmodule SymphonyElixir.GitHub.OAuth do
     end
 
     :ok
-  end
-
-  defp refresh_expired_token_ok? do
-    match?({:ok, _}, refresh_token())
   end
 
   defp maybe_refresh(token) do
