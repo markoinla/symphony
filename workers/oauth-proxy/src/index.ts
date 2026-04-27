@@ -114,6 +114,11 @@ export default {
           return new Response("Method Not Allowed", { status: 405 });
         }
         return handleToken(request, env);
+      case "/refresh":
+        if (request.method !== "POST") {
+          return new Response("Method Not Allowed", { status: 405 });
+        }
+        return handleRefresh(request, env);
       case "/register":
         if (request.method !== "POST") {
           return new Response("Method Not Allowed", { status: 405 });
@@ -308,6 +313,73 @@ async function handleToken(request: Request, env: Env): Promise<Response> {
 
   // Expired or never existed
   return Response.json({ error: "expired or unknown state" }, { status: 410 });
+}
+
+/**
+ * Refresh an OAuth token using the proxy-owned client credentials.
+ *
+ * Authenticated via REGISTRATION_SECRET in the Authorization header.
+ * Body: { provider, refresh_token }
+ */
+async function handleRefresh(request: Request, env: Env): Promise<Response> {
+  const authHeader = request.headers.get("Authorization");
+  if (!authHeader || authHeader !== `Bearer ${env.REGISTRATION_SECRET}`) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+
+  let body: { provider?: string; refresh_token?: string };
+  try {
+    body = (await request.json()) as { provider?: string; refresh_token?: string };
+  } catch {
+    return Response.json({ error: "invalid JSON body" }, { status: 400 });
+  }
+
+  if (!body.provider || !body.refresh_token) {
+    return Response.json(
+      { error: "missing required fields: provider, refresh_token" },
+      { status: 400 },
+    );
+  }
+
+  if (!isProvider(body.provider)) {
+    return Response.json(
+      { error: `unsupported provider: ${body.provider}` },
+      { status: 400 },
+    );
+  }
+
+  const config = PROVIDERS[body.provider](env);
+  const tokenRes = await fetch(config.tokenUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: body.refresh_token,
+      client_id: config.clientId,
+      client_secret: config.clientSecret,
+    }),
+  });
+
+  const tokens = (await tokenRes.json().catch(() => ({}))) as Record<string, unknown>;
+
+  if (!tokenRes.ok) {
+    return Response.json(
+      { error: "token_refresh_failed", status: tokenRes.status, body: tokens },
+      { status: tokenRes.status },
+    );
+  }
+
+  return Response.json({
+    access_token: tokens.access_token,
+    refresh_token: tokens.refresh_token,
+    expires_at: typeof tokens.expires_in === "number"
+      ? Math.floor(Date.now() / 1000) + tokens.expires_in
+      : undefined,
+    scope: tokens.scope,
+  });
 }
 
 /**

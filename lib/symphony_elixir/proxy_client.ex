@@ -175,6 +175,34 @@ defmodule SymphonyElixir.ProxyClient do
     do_await(state, code_verifier, interval, deadline)
   end
 
+  @spec refresh_token(provider(), String.t()) :: {:ok, tokens()} | {:error, term()}
+  def refresh_token(provider, refresh_token) when provider in [:linear, :github] and is_binary(refresh_token) do
+    url = "#{proxy_base_url()}/refresh"
+
+    with {:ok, secret} <- fetch_registration_secret() do
+      case req_post(url,
+             json: %{
+               "provider" => Atom.to_string(provider),
+               "refresh_token" => refresh_token
+             },
+             headers: [{"authorization", "Bearer #{secret}"}],
+             receive_timeout: 30_000
+           ) do
+        {:ok, %{status: 200, body: body}} ->
+          {:ok, normalize_tokens(body)}
+
+        {:ok, %{status: status, body: %{"body" => body}}} ->
+          {:error, {:token_refresh_failed, status, body}}
+
+        {:ok, %{status: status, body: body}} ->
+          {:error, {:token_refresh_failed, status, body}}
+
+        {:error, reason} ->
+          {:error, {:request_failed, reason}}
+      end
+    end
+  end
+
   defp do_await(state, code_verifier, interval, deadline) do
     case poll_token(state, code_verifier) do
       {:ok, tokens} ->
@@ -262,5 +290,12 @@ defmodule SymphonyElixir.ProxyClient do
     Store.get_setting("proxy.registration_secret") ||
       System.get_env("SYMPHONY_PROXY_REGISTRATION_SECRET") ||
       raise "No proxy registration secret configured. Set proxy.registration_secret or SYMPHONY_PROXY_REGISTRATION_SECRET."
+  end
+
+  defp fetch_registration_secret do
+    case Store.get_setting("proxy.registration_secret") || System.get_env("SYMPHONY_PROXY_REGISTRATION_SECRET") do
+      secret when is_binary(secret) and secret != "" -> {:ok, secret}
+      _ -> {:error, :missing_proxy_registration_secret}
+    end
   end
 end

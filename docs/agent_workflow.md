@@ -192,7 +192,7 @@ Used for issue management via the `SymphonyElixir.Tracker` behaviour and its
 - `add_issue_label/1` — add labels (e.g., pickup marker).
 - `ensure_issue_resource_link/3` — attach PR links to issues.
 
-**Auth:** Uses `LINEAR_API_KEY` or `LINEAR_OAUTH_TOKEN` with retry logic for rate limits.
+**Auth:** Uses `LINEAR_API_KEY` or Linear OAuth. Stored OAuth tokens are refreshed centrally before expiry; proxy-issued tokens refresh through the OAuth proxy, while direct OAuth tokens refresh with local Linear OAuth credentials. Linear API calls retry once after a 401 by forcing a refresh.
 
 ### Agent API
 
@@ -206,8 +206,7 @@ Used for streaming session activities to the Linear Agent UI via
 - `update_session/2` — sync plan and external URLs.
 - `complete_session/2` — finalize with outcome (`completed`, `failed`, `stopped`).
 
-**Auth:** Uses `LINEAR_OAUTH_TOKEN` (app token). Rate limited with max 3 retries and exponential
-backoff.
+**Auth:** Uses the centrally managed Linear OAuth app token. The token is refreshed before expiry and retried once on 401; rate limits use max 3 retries with exponential backoff.
 
 ### Tracker Abstraction
 

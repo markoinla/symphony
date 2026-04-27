@@ -12,6 +12,7 @@ defmodule SymphonyElixirWeb.OAuthController do
 
   alias Plug.Conn
   alias SymphonyElixir.Linear.{Client, OAuth}
+  alias SymphonyElixir.Linear.OAuth.Refresher
   alias SymphonyElixir.{ProxyClient, Store}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -55,6 +56,7 @@ defmodule SymphonyElixirWeb.OAuthController do
          {:ok, state} <- fetch_param(params, "state"),
          :ok <- OAuth.validate_state(state),
          {:ok, _token_data} <- OAuth.exchange_code(code, redirect_uri) do
+      Refresher.reschedule()
       sync_linear_org_id()
       maybe_register_instance()
       ObservabilityPubSub.broadcast_settings_changed()
@@ -81,7 +83,9 @@ defmodule SymphonyElixirWeb.OAuthController do
       status: Atom.to_string(status),
       expires_at: expires_at,
       credentials_source: Atom.to_string(OAuth.credentials_source()),
-      proxy_available: ProxyClient.proxy_enabled?()
+      proxy_available: ProxyClient.proxy_enabled?(),
+      last_refresh_error: OAuth.last_refresh_error(),
+      last_refresh_at: Store.get_setting("linear_oauth.last_refresh_at")
     })
   end
 
@@ -93,6 +97,7 @@ defmodule SymphonyElixirWeb.OAuthController do
           {:ok, tokens} ->
             ProxyClient.clear_pending_flow(:linear)
             store_proxy_tokens(tokens)
+            Refresher.reschedule()
             sync_linear_org_id()
             maybe_register_instance()
             ObservabilityPubSub.broadcast_settings_changed()
@@ -117,6 +122,7 @@ defmodule SymphonyElixirWeb.OAuthController do
   defp store_proxy_tokens(%{access_token: access_token} = tokens) do
     token_data =
       %{"access_token" => access_token}
+      |> Map.put("source", "proxy")
       |> then(fn m -> if tokens.refresh_token, do: Map.put(m, "refresh_token", tokens.refresh_token), else: m end)
       |> then(fn m ->
         if tokens.expires_at do

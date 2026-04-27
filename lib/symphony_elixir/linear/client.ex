@@ -5,6 +5,7 @@ defmodule SymphonyElixir.Linear.Client do
 
   require Logger
   alias SymphonyElixir.{Config, Linear.Auth, Linear.Comment, Linear.Issue}
+  alias SymphonyElixir.Linear.OAuth.Refresher
 
   @issue_page_size 50
   @max_error_body_log_bytes 1_000
@@ -428,14 +429,17 @@ defmodule SymphonyElixir.Linear.Client do
       when is_binary(query) and is_map(variables) and is_list(opts) do
     payload = build_graphql_payload(query, variables, Keyword.get(opts, :operation_name))
     request_fun = Keyword.get(opts, :request_fun, &post_graphql_request/2)
-    graphql_with_retry(payload, request_fun, 0)
+    graphql_with_retry(payload, request_fun, 0, _auth_retry? = false)
   end
 
-  defp graphql_with_retry(payload, request_fun, attempt) do
+  defp graphql_with_retry(payload, request_fun, attempt, auth_retry?) do
     with {:ok, headers} <- graphql_headers(),
          {:ok, %{status: 200, body: body}} <- request_fun.(payload, headers) do
       {:ok, body}
     else
+      {:ok, %{status: 401} = response} ->
+        handle_unauthorized(payload, request_fun, attempt, auth_retry?, response)
+
       {:ok, %{status: 400, body: body} = response} when is_map(body) ->
         if rate_limited_response?(body) and attempt < @rate_limit_max_retries do
           delay = rate_limit_retry_delay(response, attempt)
@@ -446,7 +450,7 @@ defmodule SymphonyElixir.Linear.Client do
           )
 
           Process.sleep(delay)
-          graphql_with_retry(payload, request_fun, attempt + 1)
+          graphql_with_retry(payload, request_fun, attempt + 1, auth_retry?)
         else
           Logger.error(
             "Linear GraphQL request failed status=400" <>
@@ -468,6 +472,23 @@ defmodule SymphonyElixir.Linear.Client do
         Logger.error("Linear GraphQL request failed: #{inspect(reason)}")
         {:error, {:linear_api_request, reason}}
     end
+  end
+
+  defp handle_unauthorized(payload, request_fun, attempt, false = _auth_retry?, _response) do
+    case Refresher.force_refresh() do
+      {:ok, _token_data} ->
+        Logger.info("Linear API 401 — refreshed token, retrying request")
+        graphql_with_retry(payload, request_fun, attempt, true)
+
+      {:error, reason} ->
+        Logger.error("Linear API 401 and refresh failed: #{inspect(reason)}")
+        {:error, {:linear_api_status, 401}}
+    end
+  end
+
+  defp handle_unauthorized(_payload, _request_fun, _attempt, true = _auth_retry?, _response) do
+    Logger.error("Linear API 401 persisted after refresh — reconnect required")
+    {:error, {:linear_api_status, 401}}
   end
 
   defp rate_limited_response?(%{"errors" => errors}) when is_list(errors) do

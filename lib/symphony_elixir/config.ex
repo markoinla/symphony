@@ -218,8 +218,8 @@ defmodule SymphonyElixir.Config do
   end
 
   defp has_oauth_token? do
-    case Linear.OAuth.current_access_token() do
-      token when is_binary(token) and token != "" -> true
+    case Linear.OAuth.fetch_access_token() do
+      {:ok, token} when is_binary(token) and token != "" -> true
       _ -> false
     end
   end

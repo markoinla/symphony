@@ -11,8 +11,8 @@ defmodule SymphonyElixir.Linear.Auth do
 
   @spec resolve_auth_header() :: {:ok, {String.t(), String.t()}} | {:error, :missing_linear_auth}
   def resolve_auth_header do
-    case OAuth.current_access_token() do
-      token when is_binary(token) and token != "" ->
+    case OAuth.fetch_access_token() do
+      {:ok, token} ->
         {:ok, {"Authorization", "Bearer #{token}"}}
 
       _ ->
@@ -33,8 +33,8 @@ defmodule SymphonyElixir.Linear.Auth do
 
   @spec has_oauth_token?() :: boolean()
   def has_oauth_token? do
-    case OAuth.current_access_token() do
-      token when is_binary(token) and token != "" -> true
+    case OAuth.fetch_access_token() do
+      {:ok, token} when is_binary(token) and token != "" -> true
       _ -> false
     end
   end

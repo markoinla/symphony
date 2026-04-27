@@ -189,7 +189,13 @@ defmodule SymphonyElixir.Claude.AppServer do
   defp write_mcp_config(workspace) do
     settings = Config.settings!()
     api_key = settings.tracker.api_key
-    oauth_token = OAuth.current_access_token()
+
+    oauth_token =
+      case OAuth.fetch_access_token() do
+        {:ok, token} -> token
+        {:error, _reason} -> nil
+      end
+
     endpoint = settings.tracker.endpoint
 
     ConfigWriter.write(workspace, api_key: api_key, oauth_token: oauth_token, endpoint: endpoint)

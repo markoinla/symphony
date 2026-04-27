@@ -387,9 +387,12 @@ function LinearOAuthSection() {
     onError: (error: unknown) => setFeedback(formatQueryError(error)),
   })
 
+  const lastRefreshError = statusQuery.data?.last_refresh_error ?? null
   const statusBadge =
     oauthStatus === 'connected' ? (
       <Badge tone="running">Connected</Badge>
+    ) : oauthStatus === 'reconnect_required' ? (
+      <Badge tone="danger">Reconnect required</Badge>
     ) : oauthStatus === 'expired' ? (
       <Badge tone="retrying">Token expired</Badge>
     ) : (
@@ -417,7 +420,7 @@ function LinearOAuthSection() {
         </div>
       ) : null}
 
-      {oauthStatus === 'connected' || oauthStatus === 'expired' ? (
+      {oauthStatus === 'connected' || oauthStatus === 'expired' || oauthStatus === 'reconnect_required' ? (
         <div className="rounded-lg border border-th-border bg-th-inset p-4">
           <div className="flex items-center justify-between gap-4">
             <div className="space-y-1 text-sm text-th-text-2">
@@ -431,9 +434,12 @@ function LinearOAuthSection() {
               ) : (
                 <div className="text-xs text-th-text-4">Token: via environment variable</div>
               )}
+              {oauthStatus === 'reconnect_required' && lastRefreshError ? (
+                <div className="text-xs text-th-danger">Refresh failed: {lastRefreshError}</div>
+              ) : null}
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              {oauthStatus === 'expired' ? (
+              {oauthStatus === 'expired' || oauthStatus === 'reconnect_required' ? (
                 <Button
                   disabled={connectMutation.isPending}
                   onClick={() => { setFeedback(null); void connectMutation.mutateAsync() }}

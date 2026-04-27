@@ -6,9 +6,7 @@ defmodule SymphonyElixirWeb.LinearApiController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.Linear.OAuth
-
-  @linear_graphql_url "https://api.linear.app/graphql"
+  alias SymphonyElixir.Linear.Client
 
   @projects_query """
   query SearchProjects($filter: ProjectFilter, $first: Int!) {
@@ -34,21 +32,11 @@ defmodule SymphonyElixirWeb.LinearApiController do
 
   @spec search_projects(Conn.t(), map()) :: Conn.t()
   def search_projects(conn, params) do
-    case OAuth.current_access_token() do
-      nil ->
-        error_response(conn, 401, "oauth_not_connected", "Linear OAuth is not connected")
-
-      token ->
-        do_search_projects(conn, token, params)
-    end
-  end
-
-  defp do_search_projects(conn, token, params) do
     query = (params["q"] || "") |> String.trim()
     filter = project_filter(query)
     variables = %{filter: filter, first: 20}
 
-    case linear_graphql(token, @projects_query, variables) do
+    case Client.graphql(@projects_query, variables, operation_name: "SearchProjects") do
       {:ok, %{"data" => %{"projects" => %{"nodes" => nodes}}}} ->
         json(conn, %{projects: Enum.map(nodes, &format_project/1)})
 
@@ -102,28 +90,6 @@ defmodule SymphonyElixirWeb.LinearApiController do
   end
 
   defp build_project_slug(_name, slug_id), do: slug_id
-
-  defp linear_graphql(token, query, variables) do
-    payload = %{"query" => query, "variables" => variables}
-
-    case Req.post(@linear_graphql_url,
-           headers: [
-             {"Authorization", "Bearer #{token}"},
-             {"Content-Type", "application/json"}
-           ],
-           json: payload,
-           receive_timeout: 15_000
-         ) do
-      {:ok, %{status: 200, body: body}} ->
-        {:ok, body}
-
-      {:ok, %{status: status}} ->
-        {:error, {:linear_api_status, status}}
-
-      {:error, reason} ->
-        {:error, reason}
-    end
-  end
 
   defp error_response(conn, status, code, message) do
     conn

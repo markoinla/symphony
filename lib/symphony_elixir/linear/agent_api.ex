@@ -10,6 +10,7 @@ defmodule SymphonyElixir.Linear.AgentAPI do
 
   alias SymphonyElixir.Config
   alias SymphonyElixir.Linear.OAuth
+  alias SymphonyElixir.Linear.OAuth.Refresher
 
   @create_session_mutation """
   mutation SymphonyCreateAgentSession($input: AgentSessionCreateOnIssue!) {
@@ -130,16 +131,16 @@ defmodule SymphonyElixir.Linear.AgentAPI do
 
   defp agent_graphql(query, variables) do
     case oauth_token() do
-      nil ->
+      {:error, reason} ->
         Logger.warning("LINEAR_OAUTH_TOKEN not set, agent API calls will fail")
-        {:error, :missing_oauth_token}
+        {:error, reason}
 
-      token ->
-        agent_graphql_with_retry(query, variables, token, 0)
+      {:ok, token} ->
+        agent_graphql_with_retry(query, variables, token, 0, false)
     end
   end
 
-  defp agent_graphql_with_retry(query, variables, token, attempt) do
+  defp agent_graphql_with_retry(query, variables, token, attempt, auth_retry?) do
     payload = %{"query" => query, "variables" => variables}
 
     headers = [
@@ -158,18 +159,15 @@ defmodule SymphonyElixir.Linear.AgentAPI do
       {:ok, %{status: 200, body: body}} ->
         {:ok, body}
 
+      {:ok, %{status: 401}} when not auth_retry? ->
+        handle_unauthorized(query, variables, attempt)
+
+      {:ok, %{status: 401}} ->
+        Logger.error("Linear Agent API 401 persisted after refresh — reconnect required")
+        {:error, {:linear_api_status, 401}}
+
       {:ok, %{status: 400, body: body} = response} when is_map(body) ->
-        if rate_limited_response?(body) and attempt < @rate_limit_max_retries do
-          delay = @rate_limit_base_delay_ms * Integer.pow(2, attempt)
-
-          Logger.warning("Linear Agent API rate limited, retrying in #{delay}ms (attempt #{attempt + 1}/#{@rate_limit_max_retries})")
-
-          Process.sleep(delay)
-          agent_graphql_with_retry(query, variables, token, attempt + 1)
-        else
-          Logger.error("Linear Agent API request failed status=400 body=#{inspect(response.body)}")
-          {:error, {:linear_api_status, 400}}
-        end
+        handle_bad_request(body, response, query, variables, token, attempt, auth_retry?)
 
       {:ok, response} ->
         Logger.error("Linear Agent API request failed status=#{response.status} body=#{inspect(response.body)}")
@@ -179,6 +177,47 @@ defmodule SymphonyElixir.Linear.AgentAPI do
         Logger.error("Linear Agent API request failed: #{inspect(reason)}")
         {:error, {:linear_api_request, reason}}
     end
+  end
+
+  defp handle_unauthorized(query, variables, attempt) do
+    case Refresher.force_refresh() do
+      {:ok, _} -> retry_after_refresh(query, variables, attempt)
+      {:error, reason} -> refresh_failed(reason)
+    end
+  end
+
+  defp retry_after_refresh(query, variables, attempt) do
+    case oauth_token() do
+      {:ok, new_token} ->
+        Logger.info("Linear Agent API 401 — refreshed token, retrying request")
+        agent_graphql_with_retry(query, variables, new_token, attempt, true)
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp refresh_failed(reason) do
+    Logger.error("Linear Agent API 401 and refresh failed: #{inspect(reason)}")
+    {:error, {:linear_api_status, 401}}
+  end
+
+  defp handle_bad_request(body, response, query, variables, token, attempt, auth_retry?) do
+    if rate_limited_response?(body) and attempt < @rate_limit_max_retries do
+      retry_rate_limited(query, variables, token, attempt, auth_retry?)
+    else
+      Logger.error("Linear Agent API request failed status=400 body=#{inspect(response.body)}")
+      {:error, {:linear_api_status, 400}}
+    end
+  end
+
+  defp retry_rate_limited(query, variables, token, attempt, auth_retry?) do
+    delay = @rate_limit_base_delay_ms * Integer.pow(2, attempt)
+
+    Logger.warning("Linear Agent API rate limited, retrying in #{delay}ms (attempt #{attempt + 1}/#{@rate_limit_max_retries})")
+
+    Process.sleep(delay)
+    agent_graphql_with_retry(query, variables, token, attempt + 1, auth_retry?)
   end
 
   defp rate_limited_response?(%{"errors" => errors}) when is_list(errors) do
@@ -191,6 +230,6 @@ defmodule SymphonyElixir.Linear.AgentAPI do
   defp rate_limited_response?(_body), do: false
 
   defp oauth_token do
-    OAuth.current_access_token()
+    OAuth.fetch_access_token()
   end
 end

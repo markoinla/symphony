@@ -178,6 +178,31 @@ defmodule SymphonyElixir.Store do
     :ok
   end
 
+  @spec put_settings_atomic(map() | [{String.t(), term()}]) ::
+          {:ok, map()} | {:error, term()}
+  def put_settings_atomic(kvs) when is_list(kvs) or is_map(kvs) do
+    multi =
+      kvs
+      |> Enum.reduce(Ecto.Multi.new(), fn {key, value}, acc ->
+        key = to_string(key)
+        changeset = Setting.changeset(%Setting{key: key}, %{key: key, value: to_string(value)})
+        Ecto.Multi.insert(acc, key, changeset, on_conflict: :replace_all, conflict_target: :key)
+      end)
+
+    Repo.transaction(multi)
+  end
+
+  @spec delete_settings([String.t()]) :: :ok
+  def delete_settings(keys) when is_list(keys) do
+    keys = Enum.map(keys, &to_string/1)
+
+    Repo.transaction(fn ->
+      from(s in Setting, where: s.key in ^keys) |> Repo.delete_all()
+    end)
+
+    :ok
+  end
+
   @spec delete_setting(String.t()) :: {:ok, Ecto.Schema.t()} | {:error, :not_found}
   def delete_setting(key) do
     case Repo.get(Setting, key) do

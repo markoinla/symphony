@@ -340,10 +340,12 @@ export function updateAgent(name: string, attrs: { enabled: boolean }) {
 }
 
 export type OAuthStatus = {
-  status: 'connected' | 'expired' | 'disconnected'
+  status: 'connected' | 'expired' | 'disconnected' | 'reconnect_required'
   expires_at: string | null
   credentials_source: 'env' | 'store' | 'none'
   proxy_available: boolean
+  last_refresh_error?: string | null
+  last_refresh_at?: string | null
 }
 
 export function getOAuthStatus() {

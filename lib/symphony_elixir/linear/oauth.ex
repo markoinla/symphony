@@ -5,19 +5,23 @@ defmodule SymphonyElixir.Linear.OAuth do
   Handles building authorize URLs, exchanging authorization codes for tokens,
   refreshing expired tokens, and revoking access. Tokens are stored in the
   settings database with `linear_oauth.*` keys.
+
+  Token refresh lifecycle is owned by `SymphonyElixir.Linear.OAuth.Refresher`
+  — this module exposes the raw HTTP exchange, but the GenServer schedules
+  proactive refreshes, serializes refresh attempts, and classifies failures
+  (`invalid_grant` → `:reconnect_required` surfaced via `connection_status/0`).
   """
 
   require Logger
 
-  alias SymphonyElixir.Store
+  alias SymphonyElixir.Linear.OAuth.Refresher
+  alias SymphonyElixir.{ProxyClient, Store}
 
   @authorize_url "https://linear.app/oauth/authorize"
   @token_url "https://api.linear.app/oauth/token"
   @revoke_url "https://api.linear.app/oauth/revoke"
 
-  @refresh_buffer_seconds 300
-
-  @type status :: :connected | :expired | :disconnected
+  @type status :: :connected | :expired | :disconnected | :reconnect_required
   @type credentials_source :: :env | :store | :none
 
   @spec authorize_url(String.t(), String.t()) :: {:ok, String.t()} | {:error, :missing_client_id}
@@ -73,36 +77,152 @@ defmodule SymphonyElixir.Linear.OAuth do
     end
   end
 
-  @spec refresh_token() :: {:ok, map()} | {:error, term()}
+  @doc """
+  Exchange a stored refresh_token for a fresh access_token. Generally
+  callers should go through `SymphonyElixir.Linear.OAuth.Refresher`,
+  which serializes refresh attempts so concurrent callers do not race
+  Linear's rotating refresh tokens.
+  """
+  @spec refresh_token() ::
+          {:ok, map()}
+          | {:error, :missing_refresh_token}
+          | {:error, {:token_refresh_failed, pos_integer(), term()}}
+          | {:error, {:token_refresh_request, term()}}
   def refresh_token do
     refresh_token = Store.get_setting("linear_oauth.refresh_token")
     client_id = get_client_id()
     client_secret = get_client_secret()
 
-    if is_nil(refresh_token) or is_nil(client_id) do
-      {:error, :missing_refresh_token}
-    else
-      body =
-        %{
-          "grant_type" => "refresh_token",
-          "refresh_token" => refresh_token,
-          "client_id" => client_id
-        }
-        |> maybe_put_secret(client_secret)
+    cond do
+      is_nil(refresh_token) ->
+        {:error, :missing_refresh_token}
 
-      case Req.post(@token_url, form: body, receive_timeout: 30_000) do
-        {:ok, %{status: 200, body: token_data}} ->
-          store_tokens(token_data)
-          {:ok, token_data}
+      is_binary(client_id) and client_id != "" ->
+        refresh_token_direct(refresh_token, client_id, client_secret)
 
-        {:ok, %{status: status, body: body}} ->
-          Logger.error("Linear OAuth token refresh failed status=#{status} body=#{inspect(body)}")
-          {:error, {:token_refresh_failed, status}}
+      proxy_refresh_available?() ->
+        refresh_token_via_proxy(refresh_token)
 
-        {:error, reason} ->
-          Logger.error("Linear OAuth token refresh request failed: #{inspect(reason)}")
-          {:error, {:token_refresh_request, reason}}
+      true ->
+        {:error, :missing_refresh_token}
+    end
+  end
+
+  defp refresh_token_direct(refresh_token, client_id, client_secret) do
+    body =
+      %{
+        "grant_type" => "refresh_token",
+        "refresh_token" => refresh_token,
+        "client_id" => client_id
+      }
+      |> maybe_put_secret(client_secret)
+
+    case Req.post(@token_url, form: body, receive_timeout: 30_000) do
+      {:ok, %{status: 200, body: token_data}} ->
+        token_data
+        |> Map.put_new("source", "direct")
+        |> store_tokens()
+
+        {:ok, token_data}
+
+      {:ok, %{status: status, body: body}} ->
+        Logger.error("Linear OAuth token refresh failed status=#{status} body=#{inspect(body)}")
+        {:error, {:token_refresh_failed, status, body}}
+
+      {:error, reason} ->
+        Logger.error("Linear OAuth token refresh request failed: #{inspect(reason)}")
+        {:error, {:token_refresh_request, reason}}
+    end
+  end
+
+  defp refresh_token_via_proxy(refresh_token) do
+    case ProxyClient.refresh_token(:linear, refresh_token) do
+      {:ok, tokens} ->
+        token_data =
+          tokens
+          |> proxy_tokens_to_token_data()
+          |> Map.put("source", "proxy")
+
+        store_tokens(token_data)
+        {:ok, token_data}
+
+      {:error, {:token_refresh_failed, status, body}} ->
+        Logger.error("Linear proxy OAuth token refresh failed status=#{status} body=#{inspect(body)}")
+        {:error, {:token_refresh_failed, status, body}}
+
+      {:error, reason} ->
+        Logger.error("Linear proxy OAuth token refresh request failed: #{inspect(reason)}")
+        {:error, {:token_refresh_request, reason}}
+    end
+  end
+
+  defp proxy_refresh_available? do
+    Store.get_setting("linear_oauth.token_source") == "proxy" or
+      (ProxyClient.proxy_enabled?() and Store.get_setting("linear_oauth.refresh_token") != nil)
+  end
+
+  defp proxy_tokens_to_token_data(%{access_token: access_token} = tokens) do
+    %{"access_token" => access_token}
+    |> then(fn m -> if tokens.refresh_token, do: Map.put(m, "refresh_token", tokens.refresh_token), else: m end)
+    |> then(fn m ->
+      if tokens.expires_at do
+        now = DateTime.utc_now() |> DateTime.to_unix()
+        Map.put(m, "expires_in", max(tokens.expires_at - now, 0))
+      else
+        m
       end
+    end)
+  end
+
+  @spec fetch_access_token() :: {:ok, String.t()} | {:error, term()}
+  def fetch_access_token do
+    case Store.get_setting("linear_oauth.access_token") do
+      nil -> env_access_token()
+      token -> fetch_stored_access_token(token)
+    end
+  end
+
+  defp env_access_token do
+    case System.get_env("LINEAR_OAUTH_TOKEN") do
+      token when is_binary(token) and token != "" -> {:ok, token}
+      _ -> {:error, :missing_oauth_token}
+    end
+  end
+
+  defp fetch_stored_access_token(token) do
+    if token_needs_refresh?() do
+      refreshed_access_token()
+    else
+      {:ok, token}
+    end
+  end
+
+  defp refreshed_access_token do
+    with {:ok, _token_data} <- Refresher.refresh_if_needed(),
+         refreshed when is_binary(refreshed) <- Store.get_setting("linear_oauth.access_token") do
+      {:ok, refreshed}
+    else
+      nil -> {:error, :missing_oauth_token}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :missing_oauth_token}
+    end
+  end
+
+  @spec token_needs_refresh?() :: boolean()
+  def token_needs_refresh? do
+    case Store.get_setting("linear_oauth.expires_at") do
+      nil -> false
+      expires_at_str -> within_refresh_buffer?(expires_at_str)
+    end
+  end
+
+  defp within_refresh_buffer?(expires_at_str) do
+    case DateTime.from_iso8601(expires_at_str) do
+      {:ok, expires_at, _} ->
+        DateTime.diff(expires_at, DateTime.utc_now(), :second) < Refresher.refresh_buffer_seconds()
+
+      _ ->
+        false
     end
   end
 
@@ -134,32 +254,24 @@ defmodule SymphonyElixir.Linear.OAuth do
   def current_access_token do
     case Store.get_setting("linear_oauth.access_token") do
       nil -> System.get_env("LINEAR_OAUTH_TOKEN")
-      token -> maybe_refresh(token)
-    end
-  end
-
-  defp maybe_refresh(token) do
-    if token_needs_refresh?() do
-      case refresh_token() do
-        {:ok, %{"access_token" => refreshed}} -> refreshed
-        {:error, _reason} -> token
-      end
-    else
-      token
+      token -> token
     end
   end
 
   @spec connection_status() :: {status(), String.t() | nil}
   def connection_status do
-    case Store.get_setting("linear_oauth.access_token") do
-      nil ->
+    cond do
+      Store.get_setting("linear_oauth.refresh_status") == "reconnect_required" ->
+        {:reconnect_required, Store.get_setting("linear_oauth.expires_at")}
+
+      is_nil(Store.get_setting("linear_oauth.access_token")) ->
         if System.get_env("LINEAR_OAUTH_TOKEN") do
           {:connected, nil}
         else
           {:disconnected, nil}
         end
 
-      _token ->
+      true ->
         expires_at = Store.get_setting("linear_oauth.expires_at")
 
         if token_expired?(expires_at) do
@@ -168,6 +280,11 @@ defmodule SymphonyElixir.Linear.OAuth do
           {:connected, expires_at}
         end
     end
+  end
+
+  @spec last_refresh_error() :: String.t() | nil
+  def last_refresh_error do
+    Store.get_setting("linear_oauth.last_refresh_error")
   end
 
   @spec store_state(String.t()) :: :ok
@@ -190,40 +307,40 @@ defmodule SymphonyElixir.Linear.OAuth do
 
   @spec store_tokens(map()) :: :ok
   def store_tokens(%{"access_token" => access_token} = token_data) do
-    {:ok, _} = Store.put_setting("linear_oauth.access_token", access_token)
+    kvs = [{"linear_oauth.access_token", access_token}]
 
-    if refresh = token_data["refresh_token"] do
-      {:ok, _} = Store.put_setting("linear_oauth.refresh_token", refresh)
-    end
+    kvs =
+      case token_data["refresh_token"] do
+        refresh when is_binary(refresh) -> [{"linear_oauth.refresh_token", refresh} | kvs]
+        _ -> kvs
+      end
 
-    if expires_in = token_data["expires_in"] do
-      expires_at =
-        DateTime.utc_now()
-        |> DateTime.add(expires_in, :second)
-        |> DateTime.truncate(:second)
-        |> DateTime.to_iso8601()
+    kvs =
+      case token_data["expires_in"] do
+        expires_in when is_integer(expires_in) ->
+          expires_at =
+            DateTime.utc_now()
+            |> DateTime.add(expires_in, :second)
+            |> DateTime.truncate(:second)
+            |> DateTime.to_iso8601()
 
-      {:ok, _} = Store.put_setting("linear_oauth.expires_at", expires_at)
-    end
+          [{"linear_oauth.expires_at", expires_at} | kvs]
 
+        _ ->
+          kvs
+      end
+
+    kvs =
+      case Map.get(token_data, "source", "direct") do
+        source when source in ["direct", "proxy"] -> [{"linear_oauth.token_source", source} | kvs]
+        _ -> kvs
+      end
+
+    # Clear any prior refresh-failure state since this is a fresh, successful token write.
+    Store.delete_settings(["linear_oauth.last_refresh_error", "linear_oauth.refresh_status"])
+
+    {:ok, _} = Store.put_settings_atomic(kvs)
     :ok
-  end
-
-  defp token_needs_refresh? do
-    case Store.get_setting("linear_oauth.expires_at") do
-      nil -> false
-      expires_at_str -> within_refresh_buffer?(expires_at_str)
-    end
-  end
-
-  defp within_refresh_buffer?(expires_at_str) do
-    case DateTime.from_iso8601(expires_at_str) do
-      {:ok, expires_at, _} ->
-        DateTime.diff(expires_at, DateTime.utc_now(), :second) < @refresh_buffer_seconds
-
-      _ ->
-        false
-    end
   end
 
   defp token_expired?(nil), do: false
@@ -236,13 +353,16 @@ defmodule SymphonyElixir.Linear.OAuth do
   end
 
   defp delete_all_oauth_settings do
-    ~w(
+    Store.delete_settings(~w(
       linear_oauth.access_token
       linear_oauth.refresh_token
       linear_oauth.expires_at
       linear_oauth.state
-    )
-    |> Enum.each(&Store.delete_setting/1)
+      linear_oauth.last_refresh_error
+      linear_oauth.refresh_status
+      linear_oauth.last_refresh_at
+      linear_oauth.token_source
+    ))
   end
 
   defp has_env_credentials? do

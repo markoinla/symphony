@@ -115,6 +115,7 @@ defmodule SymphonyElixir.Application do
         SymphonyElixir.Repo,
         {Task.Supervisor, name: SymphonyElixir.TaskSupervisor},
         SymphonyElixir.WorkflowStore,
+        SymphonyElixir.Linear.OAuth.Refresher,
         {DynamicSupervisor, name: SymphonyElixir.OrchestratorSupervisor, strategy: :one_for_one}
       ] ++ runtime_children()
 
