@@ -100,6 +100,21 @@ defmodule SymphonyElixir.AgentSession do
     end
   end
 
+  @spec find_issue_id_by_agent_session_id(String.t()) :: String.t() | nil
+  def find_issue_id_by_agent_session_id(agent_session_id) when is_binary(agent_session_id) do
+    @registry
+    |> Registry.select([{{:"$1", :"$2", :_}, [], [{{:"$1", :"$2"}}]}])
+    |> Enum.find_value(fn {issue_id, pid} ->
+      try do
+        if GenServer.call(pid, :get_agent_session_id) == agent_session_id do
+          issue_id
+        end
+      catch
+        :exit, _ -> nil
+      end
+    end)
+  end
+
   @spec set_runner_pid(String.t(), pid()) :: :ok
   def set_runner_pid(issue_id, pid) when is_binary(issue_id) and is_pid(pid) do
     safe_cast(issue_id, {:set_runner_pid, pid})

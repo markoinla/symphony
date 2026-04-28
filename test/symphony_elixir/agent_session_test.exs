@@ -94,6 +94,24 @@ defmodule SymphonyElixir.AgentSessionTest do
     end
   end
 
+  describe "find_issue_id_by_agent_session_id/1" do
+    test "finds the active issue id by Linear agent session id" do
+      issue_id = "test-issue-#{System.unique_integer([:positive])}"
+      Application.put_env(:symphony_elixir, :linear_client_module, __MODULE__.StubClient)
+
+      {:ok, pid} =
+        AgentSession.start_link(
+          issue_id: issue_id,
+          agent_session_id: "agent-sess-find"
+        )
+
+      assert AgentSession.find_issue_id_by_agent_session_id("agent-sess-find") == issue_id
+      assert AgentSession.find_issue_id_by_agent_session_id("missing-agent-session") == nil
+
+      GenServer.stop(pid)
+    end
+  end
+
   describe "stop/1" do
     test "stops the GenServer" do
       issue_id = "test-issue-#{System.unique_integer([:positive])}"

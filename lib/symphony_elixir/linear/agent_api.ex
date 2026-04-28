@@ -86,11 +86,9 @@ defmodule SymphonyElixir.Linear.AgentAPI do
   @spec complete_session(String.t(), :completed | :failed | :stopped) :: :ok | {:error, term()}
   def complete_session(agent_session_id, outcome)
       when is_binary(agent_session_id) and outcome in [:completed, :failed, :stopped] do
-    # Successful completions don't need a final message — Linear auto-transitions
-    # the session to "complete" after inactivity.
     case outcome do
       :completed ->
-        :ok
+        create_activity(agent_session_id, %{type: "response", body: "Agent session completed."})
 
       :failed ->
         create_activity(agent_session_id, %{type: "error", body: "Agent session ended with errors."})

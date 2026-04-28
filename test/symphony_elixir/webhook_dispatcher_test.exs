@@ -144,6 +144,66 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
       assert {:error, :session_not_found} = WebhookDispatcher.dispatch_prompted(payload)
     end
 
+    test "prompted message resolves active AgentSession when DB mapping is absent" do
+      issue_id = "test-issue-#{System.unique_integer([:positive])}"
+      agent_session_id = "agent-sess-prompt-#{System.unique_integer([:positive])}"
+
+      {:ok, pid} =
+        SymphonyElixir.AgentSession.start_link(
+          issue_id: issue_id,
+          agent_session_id: agent_session_id,
+          dispatch_source: :webhook
+        )
+
+      payload = %{
+        "agentSession" => %{
+          "id" => agent_session_id
+        },
+        "agentActivity" => %{
+          "body" => "Please also update the tests."
+        }
+      }
+
+      assert :ok = WebhookDispatcher.dispatch_prompted(payload)
+      :timer.sleep(10)
+
+      assert SymphonyElixir.AgentSession.drain_pending_prompts(issue_id) == [
+               "Please also update the tests."
+             ]
+
+      GenServer.stop(pid)
+    end
+
+    test "prompted message can fall back to issue id from payload" do
+      issue_id = "test-issue-#{System.unique_integer([:positive])}"
+
+      {:ok, pid} =
+        SymphonyElixir.AgentSession.start_link(
+          issue_id: issue_id,
+          agent_session_id: "agent-sess-existing",
+          dispatch_source: :webhook
+        )
+
+      payload = %{
+        "agentSession" => %{
+          "id" => "agent-sess-payload-fallback",
+          "issueId" => issue_id
+        },
+        "agentActivity" => %{
+          "body" => "Use the issue id in this payload."
+        }
+      }
+
+      assert :ok = WebhookDispatcher.dispatch_prompted(payload)
+      :timer.sleep(10)
+
+      assert SymphonyElixir.AgentSession.drain_pending_prompts(issue_id) == [
+               "Use the issue id in this payload."
+             ]
+
+      GenServer.stop(pid)
+    end
+
     test "stop signal dispatches stop instead of prompt injection" do
       issue_id = "test-issue-#{System.unique_integer([:positive])}"
       agent_session_id = "agent-sess-stop-#{System.unique_integer([:positive])}"
@@ -183,6 +243,32 @@ defmodule SymphonyElixir.WebhookDispatcherTest do
       :timer.sleep(50)
 
       # AgentSession should be stopped
+      refute SymphonyElixir.AgentSession.active?(issue_id)
+    end
+
+    test "stop signal resolves active AgentSession when DB mapping is absent" do
+      issue_id = "test-issue-#{System.unique_integer([:positive])}"
+      agent_session_id = "agent-sess-stop-live-#{System.unique_integer([:positive])}"
+
+      {:ok, _pid} =
+        SymphonyElixir.AgentSession.start_link(
+          issue_id: issue_id,
+          agent_session_id: agent_session_id,
+          dispatch_source: :webhook
+        )
+
+      payload = %{
+        "agentSession" => %{
+          "id" => agent_session_id
+        },
+        "agentActivity" => %{
+          "signal" => "stop"
+        }
+      }
+
+      assert :ok = WebhookDispatcher.dispatch_prompted(payload)
+      :timer.sleep(50)
+
       refute SymphonyElixir.AgentSession.active?(issue_id)
     end
 

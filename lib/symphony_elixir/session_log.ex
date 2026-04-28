@@ -34,6 +34,7 @@ defmodule SymphonyElixir.SessionLog do
     issue_title = Keyword.get(opts, :issue_title)
     project_id = Keyword.get(opts, :project_id)
     organization_id = Keyword.get(opts, :organization_id)
+    agent_session_id = Keyword.get(opts, :agent_session_id)
     config_snapshot = Keyword.get(opts, :config_snapshot)
     workflow_name = Keyword.get(opts, :workflow_name)
     github_branch = Keyword.get(opts, :github_branch)
@@ -46,6 +47,7 @@ defmodule SymphonyElixir.SessionLog do
       issue_title: issue_title,
       project_id: project_id,
       organization_id: organization_id,
+      agent_session_id: agent_session_id,
       config_snapshot: config_snapshot,
       workflow_name: workflow_name,
       github_branch: github_branch
@@ -132,6 +134,7 @@ defmodule SymphonyElixir.SessionLog do
       issue_title: issue_title,
       project_id: project_id,
       organization_id: organization_id,
+      agent_session_id: agent_session_id,
       config_snapshot: config_snapshot,
       workflow_name: workflow_name,
       github_branch: github_branch
@@ -147,6 +150,7 @@ defmodule SymphonyElixir.SessionLog do
              started_at: DateTime.utc_now(),
              project_id: project_id,
              organization_id: organization_id,
+             agent_session_id: agent_session_id,
              config_snapshot: config_snapshot,
              workflow_name: workflow_name,
              workflow: workflow_name,

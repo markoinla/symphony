@@ -54,7 +54,7 @@ defmodule SymphonyElixir.WebhookDispatcher do
       Logger.info("Webhook dispatch_prompted agent_session_id=#{agent_session_id}")
 
       # Find the issue_id for this agent session
-      case find_issue_id_for_session(agent_session_id) do
+      case find_issue_id_for_session(agent_session_id, payload) do
         {:ok, issue_id} ->
           AgentSession.inject_prompt(issue_id, message)
 
@@ -82,7 +82,7 @@ defmodule SymphonyElixir.WebhookDispatcher do
       {:ok, agent_session_id} ->
         Logger.info("Webhook dispatch_stop agent_session_id=#{agent_session_id}")
 
-        case find_issue_id_for_session(agent_session_id) do
+        case find_issue_id_for_session(agent_session_id, payload) do
           {:ok, issue_id} ->
             terminate_agent_for_issue(issue_id)
             :ok
@@ -275,15 +275,35 @@ defmodule SymphonyElixir.WebhookDispatcher do
     end
   end
 
-  defp find_issue_id_for_session(agent_session_id) do
-    # Check in-memory registry first via Store
+  defp find_issue_id_for_session(agent_session_id, payload) do
     case Store.find_session_by_agent_session_id(agent_session_id) do
       %{issue_id: issue_id} when is_binary(issue_id) ->
         {:ok, issue_id}
 
       _ ->
-        {:error, :session_not_found}
+        find_issue_id_for_live_or_payload_session(agent_session_id, payload)
     end
+  end
+
+  defp find_issue_id_for_live_or_payload_session(agent_session_id, payload) do
+    case AgentSession.find_issue_id_by_agent_session_id(agent_session_id) do
+      issue_id when is_binary(issue_id) ->
+        {:ok, issue_id}
+
+      _ ->
+        find_active_payload_issue_id(payload)
+    end
+  end
+
+  defp find_active_payload_issue_id(payload) do
+    case maybe_extract_issue_id(payload) do
+      issue_id when is_binary(issue_id) -> maybe_active_issue_id(issue_id)
+      _ -> {:error, :session_not_found}
+    end
+  end
+
+  defp maybe_active_issue_id(issue_id) do
+    if AgentSession.active?(issue_id), do: {:ok, issue_id}, else: {:error, :session_not_found}
   end
 
   defp resolve_and_set_project(%Issue{project_slug_id: slug_id})
@@ -316,12 +336,16 @@ defmodule SymphonyElixir.WebhookDispatcher do
   end
 
   defp extract_issue_id(payload) do
-    case get_in(payload, ["agentSession", "issueId"]) ||
-           get_in(payload, ["data", "issueId"]) ||
-           get_in(payload, ["issueId"]) do
+    case maybe_extract_issue_id(payload) do
       id when is_binary(id) -> {:ok, id}
       _ -> {:error, :missing_issue_id}
     end
+  end
+
+  defp maybe_extract_issue_id(payload) do
+    get_in(payload, ["agentSession", "issueId"]) ||
+      get_in(payload, ["data", "issueId"]) ||
+      get_in(payload, ["issueId"])
   end
 
   defp extract_agent_session_id(payload) do

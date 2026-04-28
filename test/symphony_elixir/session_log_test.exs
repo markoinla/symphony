@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.SessionLogTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.SessionLog
+  alias SymphonyElixir.{SessionLog, Store}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   test "keeps distinct streamed agent items separated by item identity" do
@@ -40,6 +40,18 @@ defmodule SymphonyElixir.SessionLogTest do
       %{id: 1, type: :response, content: "First step."},
       %{id: 2, type: :response, content: "Second step."}
     ])
+  end
+
+  test "persists the Linear agent session id on the DB session" do
+    issue_id = unique_id("issue")
+    session_id = unique_id("session")
+    agent_session_id = unique_id("agent-session")
+
+    start_session_log!(issue_id, session_id, agent_session_id: agent_session_id)
+
+    db_session_id = SessionLog.get_db_session_id(issue_id, session_id)
+
+    assert %{agent_session_id: ^agent_session_id} = Store.get_session(db_session_id)
   end
 
   test "starts a new streamed message after item completion boundaries" do
@@ -501,6 +513,7 @@ defmodule SymphonyElixir.SessionLogTest do
 
   defp start_session_log!(issue_id, session_id, opts \\ []) do
     workflow_name = Keyword.get(opts, :workflow_name)
+    agent_session_id = Keyword.get(opts, :agent_session_id)
 
     {:ok, _pid} =
       SessionLog.start_link(
@@ -510,7 +523,8 @@ defmodule SymphonyElixir.SessionLogTest do
           issue_identifier: unique_id("SYM-26"),
           issue_title: "Session log test",
           project_id: nil,
-          organization_id: test_org_id()
+          organization_id: test_org_id(),
+          agent_session_id: agent_session_id
         ] ++ if(workflow_name, do: [workflow_name: workflow_name], else: [])
       )
 

@@ -305,6 +305,7 @@ defmodule SymphonyElixir.AgentRunner do
   defp start_session_log(%Issue{id: issue_id} = issue, session_id, project_id, organization_id, engine_update_recipient) when is_binary(issue_id) and is_binary(session_id) do
     config_snapshot = build_config_snapshot()
     workflow_name = SymphonyElixir.Workflow.current_workflow_name()
+    agent_session_id = AgentSession.get_agent_session_id(issue_id)
 
     github_branch =
       case SymphonyElixir.Settings.current_project() do
@@ -319,6 +320,7 @@ defmodule SymphonyElixir.AgentRunner do
            issue_title: issue.title,
            project_id: project_id,
            organization_id: organization_id,
+           agent_session_id: agent_session_id,
            config_snapshot: config_snapshot,
            workflow_name: workflow_name,
            github_branch: github_branch
@@ -727,7 +729,7 @@ defmodule SymphonyElixir.AgentRunner do
     case Regex.run(@pr_url_regex, content) do
       [pr_url | _] ->
         Logger.info("Detected PR URL for issue_id=#{issue_id} pr_url=#{pr_url}")
-        AgentSession.set_external_urls(issue_id, [%{url: pr_url}])
+        AgentSession.set_external_urls(issue_id, [%{label: "GitHub Pull Request", url: pr_url}])
 
       nil ->
         :ok

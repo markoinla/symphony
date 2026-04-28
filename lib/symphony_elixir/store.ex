@@ -506,6 +506,7 @@ defmodule SymphonyElixir.Store do
   def find_session_by_agent_session_id(agent_session_id) when is_binary(agent_session_id) do
     Session
     |> where([s], s.agent_session_id == ^agent_session_id)
+    |> order_by([s], desc: s.started_at)
     |> limit(1)
     |> Repo.one()
   end

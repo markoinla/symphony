@@ -33,6 +33,7 @@ defmodule SymphonyElixir.TestSupport do
         ]
 
       setup do
+        {:ok, _} = Application.ensure_all_started(:symphony_elixir)
         :ok = SQLSandbox.checkout(SymphonyElixir.Repo)
         SQLSandbox.mode(SymphonyElixir.Repo, {:shared, self()})
 
