@@ -35,6 +35,7 @@ import {
 import { cn } from './lib/utils'
 import { useTheme } from './hooks/use-theme'
 import { Button } from './components/ui'
+import { ChangelogButton } from './components/changelog-button'
 
 import {
   router,
@@ -230,6 +231,7 @@ function RootLayout() {
                   <LogOut className="h-4 w-4" />
                 </Button>
               )}
+              <ChangelogButton />
               <Button
                 aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
                 onClick={toggle}
