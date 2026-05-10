@@ -16,7 +16,7 @@ that aren't already in the original build plan.
 | ----- | -------- | ----- |
 | 1. Pluggable `Worker.Backend` behaviour (Elixir)             | ✅ shipped | `1a76c32`, `230c023` (review fixes) |
 | 2. `sandbox-dispatcher` Worker scaffold + `/health` + HMAC   | ✅ shipped | `9f79a7e` |
-| 3. `/auth/bootstrap` + `/auth/snapshot` routes + Mix tasks   | ✅ shipped | `592d963` |
+| 3. `/auth/bootstrap` + `/auth/snapshot` routes + Mix tasks   | ✅ shipped + validated end-to-end on `sandbox.marko.la` (2026-05-10) | `592d963`, this branch |
 | 4. `/run` route (engine: `pi`)                               | ✅ scaffolded — pending smoke test | this branch |
 | 4b. `workers/linear-agent` (Linear OAuth + webhook + Activity SDK) | ✅ scaffolded | this branch |
 | 5. `Worker.Backend.CloudflareSandbox` Elixir impl            | pending — may be skipped if we go fully Worker-driven | — |
@@ -37,45 +37,67 @@ All commits are on PR #136 against `main`.
 | HTTP client (HMAC signer)           | `lib/symphony_elixir/cloudflare/dispatcher_client.ex` |
 | Mix tasks                           | `lib/mix/tasks/symphony.auth.{bootstrap,snapshot}.ex` |
 | D1 schema                           | `workers/sandbox-dispatcher/migrations/0001_init.sql` |
-| Dockerfile (sandbox image)          | `workers/sandbox-dispatcher/Dockerfile` |
+| Container image                     | `docker.io/cloudflare/sandbox:0.10.0` (referenced directly in `wrangler.jsonc`; **no local Dockerfile** — see gotcha "Direct Docker Hub image" below) |
 | Wrangler config                     | `workers/sandbox-dispatcher/wrangler.jsonc` |
 | Spec doc (workflow config schema)   | `docs/SPEC.md` (`worker.backend` field documented) |
 
 ## Pre-flight before any deploy works
 
-The Phase 2/3 scaffold ships with placeholder D1 ids that wrangler will
-reject. Once per environment:
+Once per environment. **Five steps**: R2 bucket, D1 database, secrets,
+custom domain + ACM cert, deploy. The first three are wrangler. The
+fourth is dashboard / Cloudflare API — `.workers.dev` cannot host the
+sandbox preview URLs at all (see "Custom domain + ACM" gotcha below).
 
 ```bash
-# Production
-wrangler r2 bucket create symphony-sandbox-backups
-wrangler d1 create symphony-dispatcher
-# → paste the printed database_id into wrangler.jsonc
-#   (top-level `d1_databases[0].database_id`)
-wrangler d1 migrations apply symphony-dispatcher
+# 1. R2 bucket + D1 database (production)
+cd workers/sandbox-dispatcher
+npx wrangler r2 bucket create symphony-sandbox-backups
+npx wrangler d1 create symphony-dispatcher
+# → paste the printed database_id into wrangler.jsonc top-level
+#   d1_databases[0].database_id
+npx wrangler d1 migrations apply symphony-dispatcher --remote
 
-wrangler secret put DISPATCH_HMAC_SECRET
-wrangler secret put R2_ACCESS_KEY_ID
-wrangler secret put R2_SECRET_ACCESS_KEY
-wrangler secret put CLOUDFLARE_ACCOUNT_ID
-wrangler secret put BACKUP_BUCKET_NAME
+# 2. Five secrets (use --env="" if you've defined env.dev — without it,
+#    wrangler warns and you may target the wrong env. Verify with
+#    `wrangler secret list`.)
+HMAC=$(openssl rand -hex 32)
+echo "$HMAC" | npx wrangler secret put DISPATCH_HMAC_SECRET
+echo "$HMAC"  # ← stash this; Symphony's SYMPHONY_DISPATCHER_HMAC_SECRET must match exactly
+echo "<account-id>"   | npx wrangler secret put CLOUDFLARE_ACCOUNT_ID
+echo "symphony-sandbox-backups" | npx wrangler secret put BACKUP_BUCKET_NAME
+# R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY: create in dashboard at
+#   R2 → Manage R2 API Tokens → Create API Token → Object Read & Write
+# (only shown once)
+npx wrangler secret put R2_ACCESS_KEY_ID
+npx wrangler secret put R2_SECRET_ACCESS_KEY
 
-wrangler deploy
-curl https://sandbox-dispatcher.<account>.workers.dev/health   # should return ok
+# 3. Custom domain + wildcard DNS (REQUIRED — sandbox preview URLs do not
+#    work on .workers.dev). Pick a subdomain you own on a Cloudflare zone.
+#    Add two AAAA records pointing at the placeholder 100:: with proxy
+#    enabled (orange cloud):
+#      <subdomain>.<zone>           AAAA  100::  proxied
+#      *.<subdomain>.<zone>         AAAA  100::  proxied
+#    Then add `routes` to wrangler.jsonc (already wired for sandbox.marko.la):
+#      { "pattern": "<subdomain>.<zone>/*",   "zone_name": "<zone>" },
+#      { "pattern": "*.<subdomain>.<zone>/*", "zone_name": "<zone>" }
 
-# Dev (mirror, with --env dev appended)
-wrangler r2 bucket create symphony-sandbox-backups-dev
-wrangler d1 create symphony-dispatcher-dev
-# → paste into env.dev.d1_databases[0].database_id
-wrangler d1 migrations apply symphony-dispatcher-dev --env dev
-# (set the same five secrets with --env dev)
+# 4. Advanced Certificate Manager (REQUIRED for the wildcard cert —
+#    Universal SSL only covers <zone> + *.<zone>, not *.<subdomain>.<zone>).
+#    Subscribe to ACM in dashboard ($10/mo) under SSL/TLS → Edge
+#    Certificates → Advanced Certificate Manager. Then order an advanced
+#    certificate covering both <subdomain>.<zone> and *.<subdomain>.<zone>.
+#    Issuance via Google Trust Services takes ~5 min.
+
+# 5. Deploy + smoke test
+npx wrangler deploy
+curl https://<subdomain>.<zone>/health   # → {"ok":true,"sandbox_class":"standard-2"}
 ```
 
-After deploying, confirm the container image built:
-
-```bash
-wrangler containers list
-```
+**Note on container image**: `wrangler.jsonc` references
+`docker.io/cloudflare/sandbox:0.10.0` directly — Cloudflare pulls from
+Docker Hub during deploy. There's no local Dockerfile build/push step.
+See "Direct Docker Hub image" gotcha. `wrangler containers list` shows
+the registered application; image isn't a separate artifact.
 
 ## Open notes (decide before Phase 4)
 
@@ -252,18 +274,229 @@ If you see ~195 baseline failures, this is probably it — not a
 regression. Validate by running a `TestSupport`-using subset
 (`core_test`, `orchestrator_status_test`, `worker/`) and CI.
 
-### Wrangler dry-run requires Docker
+### Wrangler dry-run requires Docker (legacy — not relevant since the Direct Docker Hub image switch)
 
-`wrangler deploy --dry-run` builds the container image as part of
-validation. Without a running Docker daemon it fails with
-"The Docker CLI could not be launched". The TypeScript bundling step
-runs first and prints `Total Upload: ... KiB` — if you see that line,
-the JS-side validation passed and only the container build is missing.
+This used to be a problem when the dispatcher built a custom image
+locally. We now reference `docker.io/cloudflare/sandbox:0.10.0` directly
+in `wrangler.jsonc` (see gotcha below) so deploys are pure config edits
+— no Docker daemon, no build, no registry push. **A deploy is now
+~3 seconds instead of ~10 minutes.**
 
 CI doesn't currently have a Worker job. If you want one, copy the
 existing `dashboard` job in `.github/workflows/pr-check.yml` and run
-`npm test` + `npm run typecheck` (skip the build step until CI has
-Docker available).
+`npm test` + `npm run typecheck` — no `npm run build` needed.
+
+## Gotchas discovered during Phase 3 deploy + end-to-end test (2026-05-09 → 2026-05-10)
+
+These are *additional* surprises that came out of actually deploying
+the Phase 3 scaffold to a real Cloudflare account, end-to-end-testing
+the bootstrap → snapshot → restore loop, and watching `wrangler tail`
+during failures. Many cost real time; the mitigation column tells you
+how to avoid them.
+
+### Custom domain + ACM cert is required (you cannot use `.workers.dev`)
+
+`sandbox.exposePort()` returns URLs like
+`https://<port>-<sandbox-id>-<token>.<hostname>` — that's a
+**second-level wildcard**. Cloudflare's free Universal SSL covers a
+zone and its first-level wildcard (`marko.la` + `*.marko.la`) but **not
+deeper** (`*.sandbox.marko.la`). And `.workers.dev` doesn't support
+wildcard subdomains at all — the SDK explicitly throws
+`CustomDomainRequiredError` if `hostname.endsWith(".workers.dev")`.
+
+There is no free path. You need:
+
+1. A domain on a Cloudflare zone.
+2. Two proxied AAAA DNS records (`<subdomain>` + `*.<subdomain>`,
+   both pointing at `100::`).
+3. **Advanced Certificate Manager subscription** (`$10/mo` per zone)
+   covering `<subdomain>.<zone>` + `*.<subdomain>.<zone>`. Order via
+   dashboard or `POST /zones/{zone}/ssl/certificate_packs/order` with
+   `{"type":"advanced","hosts":[...],"validation_method":"txt",
+   "certificate_authority":"google"}`. Issuance ~5 min.
+4. Worker `routes` in `wrangler.jsonc`:
+   ```jsonc
+   "routes": [
+     { "pattern": "<subdomain>.<zone>/*",   "zone_name": "<zone>" },
+     { "pattern": "*.<subdomain>.<zone>/*", "zone_name": "<zone>" }
+   ]
+   ```
+
+Do **not** add `*.<zone>/*` (top-level wildcard) — it captures every
+proxied subdomain on the zone (including unrelated apps you host).
+Stay under the dedicated subdomain.
+
+### `SNAPSHOT_DIR` must be under `/workspace`, `/home`, `/tmp`, `/var/tmp`, or `/app`
+
+The SDK's `validateBackupDir` rejects anything else with
+`InvalidBackupConfigError: BackupOptions.dir must be inside one of the
+supported backup roots`. Notably **`/root` is not allowed** — even
+though that's the default `HOME` for root inside `cloudflare/sandbox`'s
+Ubuntu base.
+
+We use `SNAPSHOT_DIR = "/home/symphony"` and route the bootstrap PTY's
+`HOME` there via:
+
+```ts
+await sandbox.startProcess(
+  `env HOME=${SANDBOX_HOME} ${TTYD_PATH} -p 7681 -W bash -l`,
+  ...
+);
+```
+
+…plus a `.bashrc`/`.bash_profile` written into `/home/symphony` that
+sets `HOME`, `PATH`, and `NPM_CONFIG_PREFIX` so npm globals also land
+in the snapshot.
+
+### `process.waitForPort()` is required after `startProcess()` for exposePort to work
+
+If you call `sandbox.exposePort(port, ...)` immediately after
+`sandbox.startProcess(...)`, the bootstrap call returns a `pty_url`
+that returns 503 the moment a browser hits it: the SDK probes
+`10.0.0.1:7681` from the worker side, can't see the port (because
+`startProcess` returns before the bound socket is registered against
+the SDK's external probe path), times out at 90s, and 503s.
+
+The SDK docs say this clearly:
+
+```ts
+const proc = await sandbox.startProcess('npm run dev');
+await proc.waitForPort(3000);   // ← required
+```
+
+Our `auth.ts` now does:
+
+```ts
+const ttydProc = await sandbox.startProcess(`... ttyd ... bash -l`);
+await ttydProc.waitForPort(7681, {
+  mode: "http", path: "/", status: { min: 200, max: 399 }, timeout: 30_000,
+});
+const exposed = await sandbox.exposePort(7681, { hostname });
+```
+
+Without the `waitForPort`, the failure surfaces 30+ seconds later as a
+proxy 503 instead of immediately as a bootstrap error.
+
+### Sandbox IDs go into DNS hostnames — colons silently break the URL
+
+`sandboxId = "bootstrap:marko"` *passes* the SDK's `sanitizeSandboxId`
+checks (length, hyphens, reserved names). But when the SDK builds the
+preview URL via `baseUrl.hostname = "${port}-${sandboxId}-${token}.${hostname}"`,
+the JS `URL.hostname` setter silently rejects strings containing `:`
+(or `@`, `.` mid-label, etc) — leaving the hostname at its prior value.
+Result: `exposePort` returns `https://sandbox.marko.la/` instead of
+`https://7681-bootstrap-marko-…sandbox.marko.la/`. Browsers then 401 or
+404.
+
+Fix in our `bootstrapSandboxId()`:
+
+```ts
+return `bootstrap-${scope.replace(/[^a-zA-Z0-9-]/g, "-").toLowerCase()}`;
+```
+
+Anywhere you derive a sandbox ID, sanitize down to `[a-zA-Z0-9-]+`.
+
+### Bash login shells read `.bash_profile`, not `.bashrc`
+
+ttyd is launched as `bash -l` (login shell). Login shells skip
+`.bashrc` and read `.bash_profile`/`.bash_login`/`.profile` in that
+order. The first time this bit us we wrote env exports to `.bashrc` and
+the operator's PTY had no `PATH=/home/symphony/.local/bin:...`, so
+`gh`, `claude`, `codex` all looked uninstalled even though they were
+on disk.
+
+`auth.ts` now writes both:
+
+```bash
+.bashrc          # exports + cd /home/symphony
+.bash_profile    # [ -f ~/.bashrc ] && . ~/.bashrc
+```
+
+…idempotently so user customizations to `.bashrc` (extra `export FOO=…`
+lines etc) are not clobbered by the next bootstrap. This mirrors how
+upstream Linux distros usually wire the two files.
+
+### Direct Docker Hub image — no Dockerfile, no build, no push
+
+`wrangler.jsonc`'s `containers[].image` accepts a fully-qualified
+registry image, not just a Dockerfile path. Cloudflare pulls
+`docker.io/cloudflare/sandbox:0.10.0` directly during deploy. **No
+local Docker daemon needed; no registry push; deploy is ~3 seconds
+instead of ~10 minutes.**
+
+This works because the entire toolchain (gh, claude-code, codex, ttyd,
+mise, etc.) lives **inside the snapshot at `/home/symphony`** rather
+than baked into the image. ttyd is the only chicken-and-egg piece,
+and we install it idempotently from `BOOTSTRAP_PREP_CMD` on the very
+first bootstrap (`mkdir -p ~/.local/bin && curl ... -o ~/.local/bin/ttyd`).
+After the first snapshot, every bootstrap restores ttyd for free.
+
+If you ever do need a custom image (e.g. for Phase 4 to bake a fixed
+git/jq version), the slim pattern is:
+
+```dockerfile
+FROM docker.io/cloudflare/sandbox:0.10.0
+RUN curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64" \
+        -o /usr/local/bin/ttyd && chmod +x /usr/local/bin/ttyd
+```
+
+But don't add one prematurely. We deleted the original Dockerfile
+because it was unused and confusing.
+
+### `wrangler secret put` may target wrong env without `--env=""`
+
+When `wrangler.jsonc` defines an `env.dev` block, `wrangler secret put
+NAME` (no `--env`) prints a warning and falls back to top-level. The
+warning is easy to miss in noisy output and the silent fallback is the
+*right* behaviour — but at one point in our session the production
+worker's `DISPATCH_HMAC_SECRET` no longer matched the value we'd set
+(every signed request 401'd). Verify with `wrangler secret list` and
+re-set with explicit `--env=""` if you ever see surprise 401s.
+
+### `safeDestroy(sandbox)` on `createBackup` failure deletes the operator's auth state
+
+Our original `/auth/snapshot` flow had a `try { createBackup() } catch
+{ safeDestroy() }` shape. When the backup raised
+`InvalidBackupConfigError` (because we'd configured `SNAPSHOT_DIR =
+"/root"` — illegal), the catch ran, destroyed the sandbox, and **wiped
+the operator's `claude login` / `codex auth login` / `gh auth login`
+state** — forcing them to redo every device-flow auth.
+
+Mitigations going forward:
+
+- Validate `dir` upfront against the allow-list before calling
+  `createBackup`; return 400 immediately rather than discovering it
+  inside the SDK.
+- Keep `safeDestroy` only in code paths where teardown is unambiguously
+  the right action (success, explicit user request).
+
+### `/auth/exec` debug endpoint
+
+We added `POST /auth/exec` (HMAC-signed, body `{ scope, cmd }`) that
+runs an arbitrary command inside the bootstrap sandbox and returns
+`{exit_code, stdout, stderr}`. Saved us an enormous amount of debug
+time once we hit the "ttyd not listening on 7681" failure — we could
+poke `/proc/net/tcp`, `ldd`, `ttyd --version`, `ls /home/symphony` etc
+without needing a working PTY.
+
+Treat it as an operator/debug endpoint. Phase 4 should consider whether
+it belongs in production at all (probably yes for ops, but maybe gate
+it behind an additional auth check).
+
+### Setting persistent env vars for CLIs (e.g. `CLOUDFLARE_ACCOUNT_ID` for pi)
+
+For env vars that should persist across bootstraps + Phase 4 sandbox
+restores, append to `/home/symphony/.bashrc` (which is sourced by
+`/home/symphony/.bash_profile` for ttyd's login shell) and re-snapshot:
+
+```bash
+# inside the bootstrap PTY:
+echo 'export CLOUDFLARE_ACCOUNT_ID=…' >> ~/.bashrc
+# or via /auth/exec from outside the PTY.
+```
+
+Then `mix symphony.auth.snapshot --scope <scope>` to capture. Future
+restores from this snapshot will have the export ready.
 
 ## Backend abstraction recap (Phase 1)
 
@@ -381,32 +614,37 @@ When you start Phase 4 (`/run` route):
 Phase 4 added `engine: "pi"` to `/run`. The dispatcher just exec's
 `pi --print --mode json --model <model> '<prompt>'` inside the per-issue
 sandbox after restoring the operator's snapshot — so pi (the binary +
-its auth) must be present in `/root` before the snapshot is taken.
+its auth) must be present in `/home/symphony` before the snapshot is
+taken.
 
 Pi follows the same convention as `gh`/`claude`/`codex`: install
-*inside* the bootstrap PTY, snapshot, restore on each `/run`. Do **not**
-add pi to the Dockerfile — global npm installs land outside `/root` and
-won't be captured.
+*inside* the bootstrap PTY, snapshot, restore on each `/run`. There is
+no Dockerfile to bake into anymore (we use the upstream cloudflare/sandbox
+image directly), and even if there were, npm globals there would land
+outside `/home/symphony` and not be captured.
 
-In the bootstrap PTY:
+In the bootstrap PTY (the `auth.ts` `BOOTSTRAP_PREP_CMD` already wires
+`HOME=/home/symphony`, `NPM_CONFIG_PREFIX=/home/symphony/.npm-global`,
+and `PATH=/home/symphony/.local/bin:/home/symphony/.npm-global/bin:...`
+in `.bashrc` + `.bash_profile`):
 
 ```bash
-# Persist npm globals under /root so they make it into the snapshot.
-mkdir -p /root/.npm-global
-npm config set prefix /root/.npm-global
-echo 'export PATH=/root/.npm-global/bin:$PATH' >> /root/.bashrc
-export PATH=/root/.npm-global/bin:$PATH
+# Sanity check: PATH/HOME should be wired up via .bash_profile → .bashrc.
+echo $HOME           # /home/symphony
+which npm            # /usr/local/bin/npm (system) is fine — npm-prefix routes -g installs
+npm config get prefix  # /home/symphony/.npm-global
 
 # Install pi.
 npm install -g @mariozechner/pi-coding-agent
 pi --version
 
 # Authenticate provider(s). `/login` opens a browser-style flow inside
-# the PTY; pi stores credentials under /root/.pi/ (in the snapshot).
+# the PTY; pi stores credentials under /home/symphony/.pi/ (in the snapshot).
 pi /login                # interactive Anthropic login (Claude Pro/Max)
 # or set provider keys for non-subscription routes:
 #   export ANTHROPIC_API_KEY=...        ; pi /login api-key
-#   export CLOUDFLARE_AI_GATEWAY=...    ; pi config provider cloudflare-workers-ai
+#   pi config provider cloudflare-workers-ai
+#   export CLOUDFLARE_ACCOUNT_ID=...    # required for cf-workers-ai; persist via .bashrc
 ```
 
 After exiting the PTY, run `mix symphony.auth.snapshot --scope <scope>`

@@ -37,11 +37,45 @@ const BOOTSTRAP_TTL_MS = 30 * 60 * 1000;
 // createBackup again to extend the TTL.
 const SNAPSHOT_TTL_SECONDS = 7 * 24 * 60 * 60;
 
-const SNAPSHOT_DIR = "/home/node";
+// Cloudflare Sandbox SDK only allows createBackup({dir}) under one of these
+// roots: /workspace, /home, /tmp, /var/tmp, /app. /root is *not* allowed.
+// We park the operator's HOME at /home/symphony and route ttyd, npm prefix,
+// and CLI auth files there so the snapshot captures everything in one shot.
+const SNAPSHOT_DIR = "/home/symphony";
+const SANDBOX_HOME = SNAPSHOT_DIR;
 
-// Port the Dockerfile installs ttyd on. The bootstrap PTY exposes this
-// port via Cloudflare Sandbox's preview-URL mechanism.
+// Port ttyd listens on. The bootstrap PTY exposes this port via Cloudflare
+// Sandbox's preview-URL mechanism.
 const TTYD_PORT = 7681;
+
+// ttyd lives inside the snapshot at <SANDBOX_HOME>/.local/bin/ttyd so
+// subsequent bootstraps (and Phase 4 /run sandboxes that restoreBackup)
+// get it for free. First-ever bootstrap downloads it (~5MB).
+const TTYD_PATH = `${SANDBOX_HOME}/.local/bin/ttyd`;
+const TTYD_VERSION = "1.7.7";
+// Idempotent: only initializes ttyd, .bashrc, and .bash_profile if absent.
+// Once snapshotted these are restored on subsequent bootstraps, so the
+// operator's customizations (extra exports, aliases, etc.) are preserved.
+//   - .bashrc: base PATH/HOME/NPM_CONFIG_PREFIX
+//   - .bash_profile: sources .bashrc so ttyd's `bash -l` (login shell)
+//     picks up env. Without this, login shells skip .bashrc and PATH is
+//     missing /home/symphony/.local/bin entries.
+const BOOTSTRAP_PREP_CMD =
+  `mkdir -p ${SANDBOX_HOME}/.local/bin ${SANDBOX_HOME}/.npm-global && ` +
+  `(test -x ${TTYD_PATH} || ` +
+  `(curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64" ` +
+  `-o ${TTYD_PATH} && chmod +x ${TTYD_PATH})) && ` +
+  `(test -f ${SANDBOX_HOME}/.bashrc || cat > ${SANDBOX_HOME}/.bashrc <<'EOF'\n` +
+  `export HOME=${SANDBOX_HOME}\n` +
+  `export PATH=${SANDBOX_HOME}/.local/bin:${SANDBOX_HOME}/.npm-global/bin:/usr/local/bin:/usr/bin:/bin\n` +
+  `export NPM_CONFIG_PREFIX=${SANDBOX_HOME}/.npm-global\n` +
+  `cd ${SANDBOX_HOME}\n` +
+  `EOF\n` +
+  `) && ` +
+  `(test -f ${SANDBOX_HOME}/.bash_profile || cat > ${SANDBOX_HOME}/.bash_profile <<'EOF'\n` +
+  `[ -f ~/.bashrc ] && . ~/.bashrc\n` +
+  `EOF\n` +
+  `)`;
 
 interface BootstrapBody {
   scope?: unknown;
@@ -62,7 +96,13 @@ export function buildAuthRouter() {
     }
 
     const sandboxId = bootstrapSandboxId(scope);
-    const sandbox = getSandbox(c.env.Sandbox, sandboxId);
+    let sandbox = getSandbox(c.env.Sandbox, sandboxId);
+
+    // Tear down any previous bootstrap sandbox for this scope so port
+    // state (already-exposed errors) and stale processes don't leak in.
+    // The DO is recreated on the next getSandbox() call.
+    await safeDestroy(sandbox);
+    sandbox = getSandbox(c.env.Sandbox, sandboxId);
 
     // If there's a prior snapshot for this scope, restore it first so the
     // operator picks up where they left off (e.g. extending one CLI's
@@ -73,16 +113,35 @@ export function buildAuthRouter() {
       await sandbox.restoreBackup(prior.handle);
     }
 
-    // Start ttyd as a background process so it survives this request.
-    // `-W` enables write access from the browser (required for typing).
-    // `-t titleFixed` makes the page title deterministic so the operator
-    // can recognize multiple bootstrap tabs.
-    await sandbox.startProcess(
-      `ttyd -p ${TTYD_PORT} -W -t titleFixed=symphony-bootstrap-${scope} bash -l`,
+    // Ensure ttyd + bashrc are in place under SANDBOX_HOME (no-op if a
+    // prior snapshot already restored them).
+    await sandbox.exec(BOOTSTRAP_PREP_CMD);
+
+    // Start ttyd. We run bash with HOME pointed at SANDBOX_HOME so every
+    // CLI's auth files (~/.claude, ~/.codex, ~/.config/gh) and every
+    // `npm install -g` land inside the snapshot. `-W` enables write
+    // access; `-t titleFixed` keeps the browser tab title deterministic.
+    const ttydProc = await sandbox.startProcess(
+      `env HOME=${SANDBOX_HOME} ${TTYD_PATH} -p ${TTYD_PORT} -W ` +
+        `-t titleFixed=symphony-bootstrap-${scope} bash -l`,
       {
         autoCleanup: false,
       },
     );
+
+    // SDK best practice: wait for the port to be reachable from the SDK's
+    // probe vantage point BEFORE exposing it. exposePort doesn't validate
+    // reachability — without this, the browser hits proxyToSandbox first
+    // and the SDK then runs its 90s port-availability probe, yielding a
+    // 503 if the port isn't actually visible. Waiting here surfaces any
+    // binding/namespace issues immediately as a clear bootstrap error
+    // instead of a delayed proxy timeout.
+    await ttydProc.waitForPort(TTYD_PORT, {
+      mode: "http",
+      path: "/",
+      status: { min: 200, max: 399 },
+      timeout: 30_000,
+    });
 
     const hostname = new URL(c.req.url).host;
     const exposed = await sandbox.exposePort(TTYD_PORT, { hostname });
@@ -156,6 +215,30 @@ export function buildAuthRouter() {
     });
   });
 
+  // Debug helper: run an arbitrary command inside the bootstrap sandbox for
+  // a scope and return stdout/stderr/exit. Intended for ops/debug only —
+  // HMAC-gated like the rest, but still treat it as "trusted operator".
+  app.post("/auth/exec", async (c) => {
+    const body = await readJsonBody<{ scope?: unknown; cmd?: unknown }>(
+      c.req.raw,
+    );
+    const scope = parseScope(body.scope);
+    if (!scope) {
+      return c.json({ error: "invalid_scope" }, 400);
+    }
+    if (typeof body.cmd !== "string" || body.cmd.length === 0) {
+      return c.json({ error: "missing_cmd" }, 400);
+    }
+    const sandboxId = bootstrapSandboxId(scope);
+    const sandbox = getSandbox(c.env.Sandbox, sandboxId);
+    const result = await sandbox.exec(body.cmd);
+    return c.json({
+      exit_code: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+    });
+  });
+
   app.delete("/auth/snapshot", async (c) => {
     const body = await readJsonBody<SnapshotBody>(c.req.raw);
     const scope = parseScope(body.scope);
@@ -172,7 +255,13 @@ export function buildAuthRouter() {
 }
 
 export function bootstrapSandboxId(scope: string): string {
-  return `bootstrap:${scope}`;
+  // Sandbox IDs end up inside DNS hostnames in preview URLs
+  // (https://<port>-<sandbox-id>-<token>.<hostname>). Colons, dots, and @
+  // are valid in our scope regex but illegal in DNS labels — JS's
+  // URL.hostname setter silently rejects them and the SDK falls back to
+  // returning the bare hostname, which is undebuggable. Convert to hyphens.
+  const safe = scope.replace(/[^a-zA-Z0-9-]/g, "-").toLowerCase();
+  return `bootstrap-${safe}`;
 }
 
 function parseScope(value: unknown): string | null {

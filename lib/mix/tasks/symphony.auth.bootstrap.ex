@@ -74,7 +74,7 @@ defmodule Mix.Tasks.Symphony.Auth.Bootstrap do
 
   defp bootstrap(opts) do
     scope = opts[:scope]
-    client_opts = [base_url: opts[:dispatcher_url], secret: opts[:secret]]
+    client_opts = [base_url: opts[:dispatcher_url], secret: opts[:secret], receive_timeout: 600_000]
 
     case DispatcherClient.post("/auth/bootstrap", %{scope: scope}, client_opts) do
       {:ok, %{status: 200, body: %{"pty_url" => pty_url} = body}} ->

@@ -58,7 +58,7 @@ defmodule Mix.Tasks.Symphony.Auth.Snapshot do
       is_nil(opts[:scope]) ->
         Mix.raise("Missing required --scope")
 
-      opts[:check] and opts[:delete] ->
+      opts[:check] && opts[:delete] ->
         Mix.raise("--check and --delete are mutually exclusive")
 
       true ->

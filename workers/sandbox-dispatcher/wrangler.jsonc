@@ -5,12 +5,27 @@
   "compatibility_date": "2025-03-24",
   "compatibility_flags": ["nodejs_compat"],
 
-  // Per-issue ephemeral container that runs codex / claude / gh inside the sandbox.
-  // The Dockerfile snapshot target is /home/node (auth + tool state).
+  // Custom domain + wildcard subdomain are required for Cloudflare Sandbox
+  // preview URLs (sandbox.exposePort returns https://<port>-<id>.sandbox.marko.la).
+  // .workers.dev does NOT support wildcard subdomains, so the bootstrap PTY
+  // and Phase 4 port-exposure features cannot work on a workers.dev URL.
+  // DNS: AAAA `sandbox.marko.la` → 100:: (proxied) and AAAA `*.sandbox.marko.la`
+  // → 100:: (proxied) must exist on the marko.la zone before deploy.
+  "routes": [
+    { "pattern": "sandbox.marko.la/*", "zone_name": "marko.la" },
+    { "pattern": "*.sandbox.marko.la/*", "zone_name": "marko.la" }
+  ],
+
+  // Per-issue ephemeral container. We pull the upstream cloudflare/sandbox
+  // image directly from Docker Hub — no local build, no registry push. The
+  // image only ships node/bun/git/jq/curl + the SDK control plane; ttyd
+  // and every CLI/auth artefact live in the snapshot at /root and are
+  // installed interactively during /auth/bootstrap. Tag must match
+  // @cloudflare/sandbox in package.json.
   "containers": [
     {
       "class_name": "Sandbox",
-      "image": "./Dockerfile",
+      "image": "docker.io/cloudflare/sandbox:0.10.0",
       "instance_type": "standard-2",
       "max_instances": 100
     }
@@ -51,7 +66,7 @@
     {
       "binding": "DB",
       "database_name": "symphony-dispatcher",
-      "database_id": "REPLACE_WITH_DATABASE_ID",
+      "database_id": "45d629e9-1281-4960-ac69-1086e0ef64b3",
       "migrations_dir": "migrations"
     }
   ],
@@ -69,7 +84,7 @@
       "containers": [
         {
           "class_name": "Sandbox",
-          "image": "./Dockerfile",
+          "image": "docker.io/cloudflare/sandbox:0.10.0",
           "instance_type": "standard-2",
           "max_instances": 10
         }
