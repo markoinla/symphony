@@ -1,9 +1,16 @@
 /**
- * Thin wrappers around `linearClient.createAgentActivity` for each of the
- * five activity types Linear exposes on an Agent Session.
+ * Thin wrappers around the Linear `agentActivityCreate` GraphQL mutation
+ * for each of the five activity types Linear exposes on an Agent Session.
  *
  * Activities are how the agent communicates progress back to the user
  * inside the Linear UI — Linear's session timeline renders them in order.
+ *
+ * Implementation note: we POST GraphQL directly rather than going
+ * through `@linear/sdk`'s `linearClient.createAgentActivity(...)`. The
+ * SDK's compiled bundle calls fetch in a way that triggers Workers'
+ * "Illegal invocation: function called with incorrect this reference"
+ * error. A direct fetch with a stable closure avoids that entirely and
+ * doesn't require pinning to a specific SDK version.
  *
  * The shape of each `content` payload comes from the Agent Interaction
  * SDK docs (https://linear.app/developers/agent-interaction).
@@ -11,14 +18,60 @@
 
 import type { AgentActivityContent } from "../types/agent-session";
 
-// We intentionally do NOT import LinearClient as a hard type — keeping
-// this surface minimal (just the one method we call) makes it easy to
-// pass a fake in tests without dragging in the whole SDK.
 export interface ActivityClient {
   createAgentActivity(input: {
     agentSessionId: string;
     content: AgentActivityContent;
   }): Promise<{ success: boolean }>;
+}
+
+const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
+
+const AGENT_ACTIVITY_CREATE_MUTATION = `
+  mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
+    agentActivityCreate(input: $input) {
+      success
+    }
+  }
+`;
+
+/**
+ * Build an ActivityClient that posts directly via fetch + GraphQL.
+ * `accessToken` is the agent's `actor=app` install token from KV.
+ */
+export function buildActivityClient(accessToken: string): ActivityClient {
+  return {
+    async createAgentActivity(input) {
+      const res = await fetch(LINEAR_GRAPHQL_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: accessToken.startsWith("Bearer ")
+            ? accessToken
+            : `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          query: AGENT_ACTIVITY_CREATE_MUTATION,
+          variables: { input },
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(
+          `agentActivityCreate http ${res.status}: ${(await res.text()).slice(0, 500)}`,
+        );
+      }
+      const json = (await res.json()) as {
+        data?: { agentActivityCreate?: { success?: boolean } };
+        errors?: Array<{ message: string }>;
+      };
+      if (json.errors && json.errors.length > 0) {
+        throw new Error(
+          `agentActivityCreate graphql: ${json.errors.map((e) => e.message).join("; ")}`,
+        );
+      }
+      return { success: json.data?.agentActivityCreate?.success ?? false };
+    },
+  };
 }
 
 export async function postThought(

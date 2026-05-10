@@ -29,6 +29,16 @@ export interface AgentSessionEventWebhook {
   organizationId?: string;
   appUserId?: string;
   agentSession: AgentSession;
+  // Pre-rendered markdown the agent should treat as the user's prompt —
+  // issue title, description, and any kickoff comment. Top-level on the
+  // webhook (NOT nested under agentSession), confirmed by the
+  // `parsed_keys` diagnostic we shipped to figure out the real shape.
+  promptContext?: string;
+  // Optional guidance (e.g. project-level instructions) Linear surfaces
+  // for the agent to consider alongside the user prompt.
+  guidance?: string;
+  // Comments on the issue prior to this session, in chronological order.
+  previousComments?: Array<{ id: string; body: string; userId?: string }>;
 }
 
 export interface AgentSession {

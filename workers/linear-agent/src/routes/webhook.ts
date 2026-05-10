@@ -1,14 +1,13 @@
 import { Hono } from "hono";
-import { LinearClient } from "@linear/sdk";
 
 import type { Env } from "../index";
 import { verifyLinearSignature } from "../lib/signature";
 import { DispatcherClient, DispatcherError } from "../lib/dispatcher";
 import {
+  buildActivityClient,
   postError,
   postResponse,
   postThought,
-  type ActivityClient,
 } from "../lib/activities";
 import type {
   AgentSession,
@@ -49,48 +48,88 @@ export function buildWebhookRouter() {
   const app = new Hono<{ Bindings: Env }>();
 
   app.post("/webhook", async (c) => {
-    const raw = await c.req.raw.clone().text();
-
-    const ok = await verifyLinearSignature(
-      c.env.LINEAR_WEBHOOK_SECRET,
-      raw,
-      c.req.header("linear-signature"),
-    );
-    if (!ok) {
-      return c.json({ error: "invalid_signature" }, 401);
-    }
-
-    let parsed: unknown;
+    console.log("webhook_enter");
     try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return c.json({ error: "invalid_json" }, 400);
-    }
+      const raw = await c.req.raw.clone().text();
+      console.log("webhook_body_read", raw.length);
 
-    if (!isAgentSessionEvent(parsed)) {
-      // Other webhook categories (issue events, comment events) — ignore
-      // for now. We only care about Agent Session events.
-      return c.json({ ok: true, ignored: true });
-    }
+      const sigHeader = c.req.header("linear-signature");
+      console.log("got_sig_header", typeof sigHeader, sigHeader?.slice(0, 16));
+      const secret = c.env.LINEAR_WEBHOOK_SECRET;
+      console.log("got_secret", typeof secret, secret ? secret.length : 0);
+      const ok = await verifyLinearSignature(secret, raw, sigHeader);
+      console.log("signature_verified", ok);
+      if (!ok) {
+        return c.json({ error: "invalid_signature" }, 401);
+      }
 
-    const event = parsed;
-    const dedupeKey = `webhook:${event.webhookId}:${event.agentSession.id}`;
-    const seen = await c.env.LINEAR_TOKENS.get(dedupeKey);
-    if (seen) {
-      return c.json({ ok: true, deduped: true });
-    }
-    await c.env.LINEAR_TOKENS.put(dedupeKey, "1", {
-      expirationTtl: WEBHOOK_DEDUPE_TTL_S,
-    });
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        return c.json({ error: "invalid_json" }, 400);
+      }
+      console.log("json_parsed", typeof parsed);
+      // One-time diagnostic: dump the top-level keys + type field so we
+      // can see what envelope Linear is actually sending.
+      try {
+        const p = parsed as Record<string, unknown>;
+        console.log(
+          "parsed_keys",
+          Object.keys(p).join(","),
+          "type=",
+          String(p.type),
+          "action=",
+          String(p.action),
+          "hasAgentSession=",
+          !!p.agentSession,
+        );
+      } catch {}
 
-    if (event.action !== "created" && event.action !== "prompted") {
-      return c.json({ ok: true, ignored: true, action: event.action });
-    }
+      if (!isAgentSessionEvent(parsed)) {
+        console.log("ignored_not_agent_session_event");
+        // Other webhook categories (issue events, comment events) — ignore
+        // for now. We only care about Agent Session events.
+        return c.json({ ok: true, ignored: true });
+      }
 
-    // Hand off the long-running work; respond immediately so we stay
-    // inside Linear's 5s ack budget regardless of dispatcher latency.
-    c.executionCtx.waitUntil(runSession(c.env, event));
-    return c.json({ ok: true, scheduled: true });
+      const event = parsed;
+      console.log("agent_session_event", event.action, event.agentSession.id);
+      const dedupeKey = `webhook:${event.webhookId}:${event.agentSession.id}`;
+      const seen = await c.env.LINEAR_TOKENS.get(dedupeKey);
+      console.log("dedupe_check", seen ? "seen" : "fresh");
+      if (seen) {
+        return c.json({ ok: true, deduped: true });
+      }
+      await c.env.LINEAR_TOKENS.put(dedupeKey, "1", {
+        expirationTtl: WEBHOOK_DEDUPE_TTL_S,
+      });
+      console.log("dedupe_marked");
+
+      if (event.action !== "created" && event.action !== "prompted") {
+        return c.json({ ok: true, ignored: true, action: event.action });
+      }
+
+      // Hand off the long-running work; respond immediately so we stay
+      // inside Linear's 5s ack budget regardless of dispatcher latency.
+      // Explicit `.bind()` belt-and-suspenders: even though calling
+      // `.waitUntil` directly off `c.executionCtx` should preserve `this`,
+      // some Hono/Workers combinations have surfaced "Illegal invocation"
+      // here. Binding eliminates the possibility entirely.
+      console.log("getting_exec_ctx");
+      const ctx = c.executionCtx;
+      console.log("scheduling_run_session");
+      ctx.waitUntil.bind(ctx)(runSession(c.env, event));
+      console.log("returning_200");
+      return c.json({ ok: true, scheduled: true });
+    } catch (e) {
+      // Surface the real error to Linear's webhook delivery log instead of
+      // letting Workers turn it into an opaque "Illegal invocation".
+      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      const stack = e instanceof Error ? e.stack ?? "" : "";
+      console.error("webhook_handler_error", msg, "\n", stack);
+      return c.json({ error: "webhook_handler_error", message: msg, stack }, 500);
+    }
   });
 
   return app;
@@ -110,18 +149,16 @@ export async function runSession(
     return;
   }
 
-  const linear = new LinearClient({ accessToken });
+  const linear = buildActivityClient(accessToken);
   const sessionId = event.agentSession.id;
 
-  await safe(() =>
-    postThought(linear as unknown as ActivityClient, sessionId, "Picked this up — working on it."),
-  );
+  await safe(() => postThought(linear, sessionId, "Picked this up — working on it."));
 
   const repoUrl = resolveRepoUrl(env, event.agentSession);
   if (!repoUrl) {
     await safe(() =>
       postError(
-        linear as unknown as ActivityClient,
+        linear,
         sessionId,
         "No repository is configured for this team. Add one in `PROJECT_MAPPINGS_JSON` or the project config.",
       ),
@@ -129,13 +166,13 @@ export async function runSession(
     return;
   }
 
-  const prompt = event.agentSession.promptContext?.trim();
+  const prompt = resolvePrompt(event);
   if (!prompt) {
     await safe(() =>
       postError(
-        linear as unknown as ActivityClient,
+        linear,
         sessionId,
-        "No prompt context in the session payload — nothing to act on.",
+        "Couldn't find a prompt in the session payload (no promptContext, comment body, or issue description).",
       ),
     );
     return;
@@ -158,7 +195,7 @@ export async function runSession(
     if (result.exit_code === 0) {
       await safe(() =>
         postResponse(
-          linear as unknown as ActivityClient,
+          linear,
           sessionId,
           summarizeStdout(result.stdout) ||
             `Run finished in ${(result.duration_ms / 1000).toFixed(1)}s.`,
@@ -167,7 +204,7 @@ export async function runSession(
     } else {
       await safe(() =>
         postError(
-          linear as unknown as ActivityClient,
+          linear,
           sessionId,
           `Engine exited with code ${result.exit_code}.\n\n` +
             "```\n" +
@@ -184,7 +221,7 @@ export async function runSession(
           ? e.message
           : "unknown_dispatcher_error";
     await safe(() =>
-      postError(linear as unknown as ActivityClient, sessionId, msg),
+      postError(linear, sessionId, msg),
     );
   }
 }
@@ -201,6 +238,57 @@ function isAgentSessionEvent(value: unknown): value is AgentSessionEventWebhook 
   return true;
 }
 
+/**
+ * Pull the user's actual question out of the webhook payload.
+ *
+ * Linear's AgentSessionEvent webhook envelopes are NOT what older docs
+ * suggest — the rich context lives at the top level of the event, not
+ * inside `agentSession`. Fields we draw from, in priority order:
+ *
+ *   - `event.promptContext` — pre-rendered markdown with the issue
+ *     title, description, and any kickoff comment. This is the
+ *     primary source for assignment-style sessions.
+ *   - `event.agentSession.comment.body` — the actual comment body when
+ *     the session is started by an @-mention.
+ *   - `event.agentSession.issue.title` — last-resort fallback so we
+ *     never error out for "no prompt" if Linear sent a session-start
+ *     event with only the issue header.
+ *
+ * `event.guidance`, when present, is appended as a "Guidance:" section
+ * so workspace-level instructions (e.g. "always run lint before
+ * proposing edits") reach the model.
+ *
+ * Strips literal `@<bot-name>` tokens so the model doesn't waste
+ * attention parsing them.
+ */
+function resolvePrompt(event: AgentSessionEventWebhook): string | null {
+  const session = event.agentSession;
+  const candidates = [
+    event.promptContext,
+    session.comment?.body,
+    session.issue?.title && session.issue?.title.trim().length > 0
+      ? `Issue ${session.issue.identifier ?? ""}: ${session.issue.title}`.trim()
+      : null,
+  ];
+
+  let base: string | null = null;
+  for (const c of candidates) {
+    if (typeof c !== "string") continue;
+    const stripped = c.replace(/@[A-Za-z0-9_-]+/g, "").trim();
+    if (stripped.length > 0) {
+      base = stripped;
+      break;
+    }
+  }
+  if (!base) return null;
+
+  const guidance =
+    typeof event.guidance === "string" && event.guidance.trim().length > 0
+      ? event.guidance.trim()
+      : null;
+  return guidance ? `${base}\n\n---\nGuidance:\n${guidance}` : base;
+}
+
 function resolveRepoUrl(env: Env, session: AgentSession): string | null {
   const teamId = session.issue?.teamId ?? session.issue?.team?.id;
   if (!teamId) return null;
@@ -213,23 +301,65 @@ function resolveRepoUrl(env: Env, session: AgentSession): string | null {
   return mapping[teamId] ?? null;
 }
 
-function summarizeStdout(stdout: string): string {
-  // Pi's `--mode json` emits one event per line. The terminal `response`
-  // event is what we want to surface as the Linear `response` activity.
-  // If we can't find one, fall back to the trailing chunk of stdout.
+interface PiMessageContent {
+  type?: string;
+  text?: string;
+}
+
+interface PiMessageEnd {
+  type?: string;
+  message?: {
+    role?: string;
+    content?: PiMessageContent[];
+  };
+  assistantMessageEvent?: { type?: string; delta?: string };
+}
+
+/**
+ * Extract a human-readable answer from pi's `--mode json` event stream.
+ *
+ * Pi emits one JSON event per line. Lifecycle events (`session`,
+ * `agent_start`, etc.) are noise; the answer lives in `message_end`
+ * events whose `message.role === "assistant"` and contain a
+ * `content[].type === "text"` chunk. A single run may produce several
+ * assistant messages (after thinking, after each tool call, then the
+ * final answer) — we want the LAST one with text content.
+ *
+ * Fallback chain: last assistant text → reconstructed from
+ * `text_delta` events → truncated raw stdout.
+ */
+export function summarizeStdout(stdout: string): string {
   const lines = stdout.split(/\r?\n/).filter((l) => l.length > 0);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i];
-    if (!line) continue;
+
+  let lastAssistantText: string | null = null;
+  const deltaChunks: string[] = [];
+
+  for (const line of lines) {
+    let ev: PiMessageEnd;
     try {
-      const parsed = JSON.parse(line) as { type?: string; body?: string };
-      if (parsed.type === "response" && typeof parsed.body === "string") {
-        return parsed.body;
-      }
+      ev = JSON.parse(line) as PiMessageEnd;
     } catch {
-      // Not JSON — pi may emit interleaved plain output. Skip.
+      continue;
+    }
+    if (ev.type === "message_end" && ev.message?.role === "assistant") {
+      const text = (ev.message.content ?? [])
+        .filter((c) => c.type === "text" && typeof c.text === "string")
+        .map((c) => c.text as string)
+        .join("");
+      if (text.length > 0) lastAssistantText = text;
+    }
+    if (
+      ev.type === "message_update" &&
+      ev.assistantMessageEvent?.type === "text_delta" &&
+      typeof ev.assistantMessageEvent.delta === "string"
+    ) {
+      deltaChunks.push(ev.assistantMessageEvent.delta);
     }
   }
+
+  if (lastAssistantText) return lastAssistantText;
+  const reconstructed = deltaChunks.join("");
+  if (reconstructed.length > 0) return reconstructed;
   return truncate(stdout, 2000);
 }
 

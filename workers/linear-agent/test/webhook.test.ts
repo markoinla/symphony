@@ -1,31 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Stub the @linear/sdk LinearClient before importing the route — the
-// activity helpers go through it. We only assert that
-// `createAgentActivity` is called with the right shape.
+import { buildApp, type Env } from "../src/index";
+import { computeLinearSignature } from "../src/lib/signature";
+import { runSession, summarizeStdout } from "../src/routes/webhook";
+import type { AgentSessionEventWebhook } from "../src/types/agent-session";
+
+/**
+ * Captured Linear `agentActivityCreate` mutations for the current test.
+ * Populated by the `installFetchMock` helper, which routes:
+ *   - https://api.linear.app/graphql  → push to linearCalls, return success
+ *   - <DISPATCHER_URL>/run            → return canned dispatcher result
+ */
 const linearCalls: Array<{
   agentSessionId: string;
   content: { type: string; body?: string; action?: string };
 }> = [];
-
-vi.mock("@linear/sdk", () => {
-  return {
-    LinearClient: vi.fn().mockImplementation(() => ({
-      createAgentActivity: vi.fn(async (input: {
-        agentSessionId: string;
-        content: { type: string; body?: string; action?: string };
-      }) => {
-        linearCalls.push(input);
-        return { success: true };
-      }),
-    })),
-  };
-});
-
-import { buildApp, type Env } from "../src/index";
-import { computeLinearSignature } from "../src/lib/signature";
-import { runSession } from "../src/routes/webhook";
-import type { AgentSessionEventWebhook } from "../src/types/agent-session";
 
 const LINEAR_SECRET = "linear-webhook-secret";
 const HMAC_SECRET = "dispatch-hmac-secret";
@@ -103,8 +92,49 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.clearAllMocks();
+  vi.restoreAllMocks();
 });
+
+/**
+ * Install a fetch spy that recognizes Linear's GraphQL endpoint and the
+ * dispatcher /run endpoint, routing each to the right canned response.
+ *
+ * `dispatcherResponse` is the JSON body the dispatcher should return for
+ * /run. Linear GraphQL calls always return success and are pushed into
+ * `linearCalls` so tests can assert on them.
+ */
+function installFetchMock(dispatcherResponse: {
+  status?: number;
+  body: unknown;
+}): void {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = typeof input === "string" ? input : (input as Request).url;
+    const body = init?.body as string | undefined;
+
+    if (url === "https://api.linear.app/graphql") {
+      if (body) {
+        const parsed = JSON.parse(body) as {
+          variables?: { input?: { agentSessionId: string; content: { type: string; body?: string; action?: string } } };
+        };
+        const input = parsed.variables?.input;
+        if (input) linearCalls.push(input);
+      }
+      return new Response(
+        JSON.stringify({ data: { agentActivityCreate: { success: true } } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    if (url.endsWith("/run")) {
+      return new Response(JSON.stringify(dispatcherResponse.body), {
+        status: dispatcherResponse.status ?? 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    throw new Error(`unexpected fetch in test: ${url}`);
+  });
+}
 
 describe("POST /webhook signature verification", () => {
   it("rejects requests with no linear-signature header", async () => {
@@ -214,39 +244,42 @@ describe("runSession", () => {
     const kv = new FakeKV();
     await kv.put("access_token", "fake-token");
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          engine: "pi",
-          exit_code: 0,
-          stdout:
-            '{"type":"thought","body":"thinking"}\n{"type":"response","body":"Done — opened PR #123."}\n',
-          stderr: "",
-          duration_ms: 4567,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
-    );
+    installFetchMock({
+      body: {
+        engine: "pi",
+        exit_code: 0,
+        stdout: [
+          // Real pi `--mode json` event shape: lifecycle + message_end
+          // with message.role=assistant + content[].text. Lifted from
+          // the smoke-test stdout.
+          '{"type":"session","id":"x"}',
+          '{"type":"agent_start"}',
+          '{"type":"turn_start"}',
+          '{"type":"message_start","message":{"role":"user","content":[]}}',
+          '{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Add the date to README"}]}}',
+          '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Done — opened PR #123."}]}}',
+          '{"type":"agent_end"}',
+        ].join("\n"),
+        stderr: "",
+        duration_ms: 4567,
+      },
+    });
 
-    try {
-      await runSession(makeEnv(kv), {
-        type: "AgentSessionEvent",
-        action: "created",
-        webhookId: "wh-2",
-        agentSession: {
-          id: "session-2",
-          issue: {
-            id: "issue-2",
-            identifier: "SYM-200",
-            title: "Add date to README",
-            teamId: "team-abc",
-          },
-          promptContext: "Please add today's date to README.md",
+    await runSession(makeEnv(kv), {
+      type: "AgentSessionEvent",
+      action: "created",
+      webhookId: "wh-2",
+      agentSession: {
+        id: "session-2",
+        issue: {
+          id: "issue-2",
+          identifier: "SYM-200",
+          title: "Add date to README",
+          teamId: "team-abc",
         },
-      });
-    } finally {
-      fetchSpy.mockRestore();
-    }
+        promptContext: "Please add today's date to README.md",
+      },
+    });
 
     expect(linearCalls).toHaveLength(2);
     expect(linearCalls[0]).toEqual({
@@ -263,6 +296,11 @@ describe("runSession", () => {
     const kv = new FakeKV();
     await kv.put("access_token", "fake-token");
     const env = makeEnv(kv, { PROJECT_MAPPINGS_JSON: "{}" });
+
+    // Even the initial `thought` post hits Linear's GraphQL now that we
+    // bypassed the SDK; install a mock so the post resolves and the
+    // subsequent error flow proceeds.
+    installFetchMock({ body: { error: "should-not-be-called" } });
 
     await runSession(env, {
       type: "AgentSessionEvent",
@@ -288,32 +326,26 @@ describe("runSession", () => {
     const kv = new FakeKV();
     await kv.put("access_token", "fake-token");
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({ error: "missing_auth_backup", scope: "default" }),
-        { status: 412, headers: { "Content-Type": "application/json" } },
-      ),
-    );
+    installFetchMock({
+      status: 412,
+      body: { error: "missing_auth_backup", scope: "default" },
+    });
 
-    try {
-      await runSession(makeEnv(kv), {
-        type: "AgentSessionEvent",
-        action: "created",
-        webhookId: "wh-4",
-        agentSession: {
-          id: "session-4",
-          issue: {
-            id: "i",
-            identifier: "SYM-4",
-            title: "x",
-            teamId: "team-abc",
-          },
-          promptContext: "hi",
+    await runSession(makeEnv(kv), {
+      type: "AgentSessionEvent",
+      action: "created",
+      webhookId: "wh-4",
+      agentSession: {
+        id: "session-4",
+        issue: {
+          id: "i",
+          identifier: "SYM-4",
+          title: "x",
+          teamId: "team-abc",
         },
-      });
-    } finally {
-      fetchSpy.mockRestore();
-    }
+        promptContext: "hi",
+      },
+    });
 
     expect(linearCalls.map((c) => c.content.type)).toEqual(["thought", "error"]);
     expect(linearCalls[1]?.content.body).toContain("Dispatcher error (412)");
@@ -324,38 +356,31 @@ describe("runSession", () => {
     const kv = new FakeKV();
     await kv.put("access_token", "fake-token");
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          engine: "pi",
-          exit_code: 2,
-          stdout: "",
-          stderr: "ENOENT: codex auth missing",
-          duration_ms: 100,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
-    );
+    installFetchMock({
+      body: {
+        engine: "pi",
+        exit_code: 2,
+        stdout: "",
+        stderr: "ENOENT: codex auth missing",
+        duration_ms: 100,
+      },
+    });
 
-    try {
-      await runSession(makeEnv(kv), {
-        type: "AgentSessionEvent",
-        action: "created",
-        webhookId: "wh-5",
-        agentSession: {
-          id: "session-5",
-          issue: {
-            id: "i",
-            identifier: "SYM-5",
-            title: "x",
-            teamId: "team-abc",
-          },
-          promptContext: "hi",
+    await runSession(makeEnv(kv), {
+      type: "AgentSessionEvent",
+      action: "created",
+      webhookId: "wh-5",
+      agentSession: {
+        id: "session-5",
+        issue: {
+          id: "i",
+          identifier: "SYM-5",
+          title: "x",
+          teamId: "team-abc",
         },
-      });
-    } finally {
-      fetchSpy.mockRestore();
-    }
+        promptContext: "hi",
+      },
+    });
 
     expect(linearCalls.map((c) => c.content.type)).toEqual(["thought", "error"]);
     expect(linearCalls[1]?.content.body).toContain("Engine exited with code 2");
@@ -379,3 +404,46 @@ describe("runSession", () => {
     expect(linearCalls).toHaveLength(0);
   });
 });
+
+describe("summarizeStdout", () => {
+  it("returns the last assistant message_end text", () => {
+    const stdout = [
+      '{"type":"session","id":"x"}',
+      '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"first answer"}]}}',
+      '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"final answer"}]}}',
+    ].join("\n");
+    expect(summarizeStdout(stdout)).toBe("final answer");
+  });
+
+  it("ignores user-role message_end events", () => {
+    const stdout = [
+      '{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"prompt"}]}}',
+      '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"reply"}]}}',
+    ].join("\n");
+    expect(summarizeStdout(stdout)).toBe("reply");
+  });
+
+  it("falls back to text_delta reconstruction when no message_end has text", () => {
+    const stdout = [
+      '{"type":"message_update","assistantMessageEvent":{"type":"text_start"}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Hello "}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"world."}}',
+      '{"type":"message_update","assistantMessageEvent":{"type":"text_end"}}',
+    ].join("\n");
+    expect(summarizeStdout(stdout)).toBe("Hello world.");
+  });
+
+  it("falls back to truncated stdout when nothing parses", () => {
+    expect(summarizeStdout("not json at all")).toBe("not json at all");
+  });
+
+  it("skips invalid JSON lines without crashing", () => {
+    const stdout = [
+      "garbage line",
+      '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+      "more garbage",
+    ].join("\n");
+    expect(summarizeStdout(stdout)).toBe("ok");
+  });
+});
+

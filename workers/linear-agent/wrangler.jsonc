@@ -17,7 +17,7 @@
   "kv_namespaces": [
     {
       "binding": "LINEAR_TOKENS",
-      "id": "<replace-with-kv-namespace-id>"
+      "id": "a3703d4854224640baa2946e6b9a7ae8"
     }
   ],
 
@@ -26,12 +26,12 @@
   // PROJECT_MAPPINGS_JSON is a temporary stand-in for D1 project rows:
   //   {"<linear-team-id>": "https://github.com/<owner>/<repo>.git"}
   "vars": {
-    "URL": "https://linear-agent.<your-subdomain>.workers.dev",
-    "DISPATCHER_URL": "https://sandbox-dispatcher.<your-subdomain>.workers.dev",
-    "DEFAULT_SCOPE": "default",
-    "DEFAULT_MODEL": "anthropic/claude-sonnet-4-6",
+    "URL": "https://linear-agent.m-6bb.workers.dev",
+    "DISPATCHER_URL": "https://sandbox.marko.la",
+    "DEFAULT_SCOPE": "marko",
+    "DEFAULT_MODEL": "cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6",
     "DEFAULT_ENGINE": "pi",
-    "PROJECT_MAPPINGS_JSON": "{}"
+    "PROJECT_MAPPINGS_JSON": "{\"e6ff2862-1971-4b10-88a8-4aa16137fff0\":\"https://github.com/markoinla/symphony.git\"}"
   },
 
   // Secrets — set with `wrangler secret put <NAME>`:
@@ -55,7 +55,7 @@
         "URL": "http://localhost:8788",
         "DISPATCHER_URL": "http://localhost:8787",
         "DEFAULT_SCOPE": "default",
-        "DEFAULT_MODEL": "anthropic/claude-sonnet-4-6",
+        "DEFAULT_MODEL": "cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6",
         "DEFAULT_ENGINE": "pi",
         "PROJECT_MAPPINGS_JSON": "{}"
       }

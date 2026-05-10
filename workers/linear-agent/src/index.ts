@@ -49,5 +49,22 @@ export function buildApp() {
 const app = buildApp();
 
 export default {
-  fetch: app.fetch,
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    try {
+      return await app.fetch(request, env, ctx);
+    } catch (e) {
+      // Outer net for any uncaught exception that escapes Hono's own error
+      // handler (the "Illegal invocation" we kept seeing was masking the
+      // real cause). Surface name+message+stack as a 500 body so Linear's
+      // webhook delivery log shows the actual fault, not Workers' canned
+      // error page.
+      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      const stack = e instanceof Error ? e.stack ?? "" : "";
+      console.error("outer_fetch_error", msg, "\n", stack);
+      return new Response(
+        JSON.stringify({ error: "outer_fetch_error", message: msg, stack }),
+        { status: 500, headers: { "Content-Type": "application/json" } },
+      );
+    }
+  },
 } satisfies ExportedHandler<Env>;

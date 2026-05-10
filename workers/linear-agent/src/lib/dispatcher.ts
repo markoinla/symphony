@@ -54,12 +54,21 @@ export class DispatcherError extends Error {
 }
 
 export class DispatcherClient {
+  // Stored as a plain field, not `private readonly` on a class method
+  // call site: invoking `this.fetchImpl(...)` binds `this` to the class
+  // instance, but Workers' global `fetch` requires `this` to be either
+  // `undefined`/the global, and throws "Illegal invocation" otherwise.
+  // We hold the fn here and dereference into a local before calling so
+  // the call site is a bareword function invocation.
+  private readonly fetchImpl: typeof fetch;
+
   constructor(
     private readonly url: string,
     private readonly secret: string,
-    // Allow tests to inject a fetch implementation. Prod uses globalThis.fetch.
-    private readonly fetchImpl: typeof fetch = fetch,
-  ) {}
+    fetchImpl: typeof fetch = fetch,
+  ) {
+    this.fetchImpl = fetchImpl;
+  }
 
   async run(args: RunArgs): Promise<RunResult> {
     const body = JSON.stringify({
@@ -74,7 +83,8 @@ export class DispatcherClient {
 
     const sig = await computeSignature(this.secret, body);
 
-    const res = await this.fetchImpl(`${stripTrailingSlash(this.url)}/run`, {
+    const fetchFn = this.fetchImpl;
+    const res = await fetchFn(`${stripTrailingSlash(this.url)}/run`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

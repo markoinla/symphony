@@ -12,7 +12,6 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@linear/sdk": "^39.2.1",
     "hono": "^4.7.0"
   },
   "devDependencies": {
