@@ -33,9 +33,29 @@ class FakeKV {
   }
 }
 
-function makeEnv(kv: FakeKV, overrides: Partial<Env> = {}): Env {
+/**
+ * Stub Workflow binding shaped like Cloudflare's `Workflow` type. Tests
+ * that exercise the webhook handler should pass `sessionRunner` from
+ * `makeWorkflowStub()` so they can assert on `.create` invocations.
+ */
+interface WorkflowStub {
+  create: ReturnType<typeof vi.fn>;
+}
+
+function makeWorkflowStub(): WorkflowStub {
+  return {
+    create: vi.fn().mockResolvedValue({ id: "stub-instance" }),
+  };
+}
+
+function makeEnv(
+  kv: FakeKV,
+  overrides: Partial<Env> = {},
+  sessionRunner: WorkflowStub = makeWorkflowStub(),
+): Env {
   return {
     LINEAR_TOKENS: kv as unknown as KVNamespace,
+    SESSION_RUNNER: sessionRunner as unknown as Workflow,
     LINEAR_CLIENT_ID: "client",
     LINEAR_CLIENT_SECRET: "secret",
     LINEAR_WEBHOOK_SECRET: LINEAR_SECRET,
@@ -193,6 +213,7 @@ describe("POST /webhook routing", () => {
   it("dedupes repeated deliveries on (webhookId, agentSession.id)", async () => {
     const app = buildApp();
     const kv = new FakeKV();
+    const sessionRunner = makeWorkflowStub();
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
@@ -201,17 +222,46 @@ describe("POST /webhook routing", () => {
       agentSession: { id: "session-1", promptContext: "do it" },
     };
 
-    const ctx1 = makeExecCtx();
-    const res1 = await app.fetch(await signedWebhookRequest(event), makeEnv(kv), ctx1);
+    const env = makeEnv(kv, {}, sessionRunner);
+
+    const res1 = await app.fetch(await signedWebhookRequest(event), env, makeExecCtx());
     expect(res1.status).toBe(200);
     expect(await res1.json()).toEqual({ ok: true, scheduled: true });
-    expect(ctx1.pending).toHaveLength(1);
+    expect(sessionRunner.create).toHaveBeenCalledTimes(1);
+    expect(sessionRunner.create).toHaveBeenCalledWith({
+      id: "session-1",
+      params: { event },
+    });
 
-    const ctx2 = makeExecCtx();
-    const res2 = await app.fetch(await signedWebhookRequest(event), makeEnv(kv), ctx2);
+    const res2 = await app.fetch(await signedWebhookRequest(event), env, makeExecCtx());
     expect(res2.status).toBe(200);
     expect(await res2.json()).toEqual({ ok: true, deduped: true });
-    expect(ctx2.pending).toHaveLength(0);
+    expect(sessionRunner.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats workflow 'instance already exists' as success", async () => {
+    const app = buildApp();
+    const kv = new FakeKV();
+    const sessionRunner: WorkflowStub = {
+      create: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("instance with id 'session-x' already exists")),
+    };
+
+    const event: AgentSessionEventWebhook = {
+      type: "AgentSessionEvent",
+      action: "prompted",
+      webhookId: "wh-2",
+      agentSession: { id: "session-x", promptContext: "again" },
+    };
+
+    const res = await app.fetch(
+      await signedWebhookRequest(event),
+      makeEnv(kv, {}, sessionRunner),
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, scheduled: true });
   });
 
   it("ignores actions other than created/prompted", async () => {

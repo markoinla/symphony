@@ -9,10 +9,17 @@ import {
   postResponse,
   postThought,
 } from "../lib/activities";
-import type {
-  AgentSession,
-  AgentSessionEventWebhook,
-} from "../types/agent-session";
+import {
+  resolvePrompt,
+  resolveRepoUrl,
+  summarizeStdout,
+  truncate,
+} from "../lib/session-helpers";
+import type { AgentSessionEventWebhook } from "../types/agent-session";
+
+// Re-exported so existing call sites (and tests) that imported these
+// from `routes/webhook` keep working after the helpers moved.
+export { summarizeStdout } from "../lib/session-helpers";
 
 /**
  * Linear webhook receiver for Agent Session events.
@@ -24,25 +31,21 @@ import type {
  * Implementation strategy to honor both:
  *   1. Verify HMAC and parse — pure synchronous work, < ~50 ms.
  *   2. Acknowledge with 200 immediately.
- *   3. In `executionCtx.waitUntil`, post the initial `thought` activity,
- *      then call the dispatcher's `/run` route, then post the terminal
- *      `response`/`error` activity.
+ *   3. Hand off to the `SESSION_RUNNER` Cloudflare Workflow which posts
+ *      the initial `thought` activity, calls the dispatcher's `/run`
+ *      route, and posts the terminal `response`/`error` activity. Each
+ *      phase is its own durable step — a Worker eviction mid-dispatch
+ *      resumes from the last completed step instead of dropping the
+ *      session silently.
  *
  * Idempotency: Linear retries failed deliveries. We dedupe on
- * `webhookId + agentSession.id` via a short-lived KV entry. If we've
- * already started a run for this delivery we ack and return.
- *
- * Step 4 of the build plan replaces the inline `runSession` body with a
- * Cloudflare Workflow so the dispatcher call survives Worker restarts.
- * The webhook itself stays the same — it always just posts the immediate
- * `thought` and hands off.
+ * `webhookId + agentSession.id` via a short-lived KV entry. As a second
+ * line of defense, the Workflow instance id is the `agentSession.id`,
+ * so a concurrent retry that beats the KV write collides on the
+ * Workflow id and is treated as success.
  */
 
 const WEBHOOK_DEDUPE_TTL_S = 60 * 60;
-
-interface ProjectMapping {
-  [linearTeamId: string]: string;
-}
 
 export function buildWebhookRouter() {
   const app = new Hono<{ Bindings: Env }>();
@@ -110,17 +113,27 @@ export function buildWebhookRouter() {
         return c.json({ ok: true, ignored: true, action: event.action });
       }
 
-      // Hand off the long-running work; respond immediately so we stay
-      // inside Linear's 5s ack budget regardless of dispatcher latency.
-      // Explicit `.bind()` belt-and-suspenders: even though calling
-      // `.waitUntil` directly off `c.executionCtx` should preserve `this`,
-      // some Hono/Workers combinations have surfaced "Illegal invocation"
-      // here. Binding eliminates the possibility entirely.
-      console.log("getting_exec_ctx");
-      const ctx = c.executionCtx;
-      console.log("scheduling_run_session");
-      ctx.waitUntil.bind(ctx)(runSession(c.env, event));
-      console.log("returning_200");
+      // Hand off to the durable Workflow; respond immediately so we
+      // stay inside Linear's 5s ack budget regardless of dispatcher
+      // latency. The Workflow instance id is the agent session id, so
+      // a Linear retry that beats the KV dedupe write still collides
+      // here — we catch the "instance exists" error and treat it as
+      // success. Real new prompts on a running session are handled by
+      // SYM-267 item 7 (mid-run comment ingestion).
+      console.log("scheduling_session_runner", event.agentSession.id);
+      try {
+        await c.env.SESSION_RUNNER.create({
+          id: event.agentSession.id,
+          params: { event },
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (!/instance.*exists|already/i.test(msg)) {
+          console.error("workflow_create_failed", msg);
+          throw e;
+        }
+        console.log("workflow_already_exists", event.agentSession.id);
+      }
       return c.json({ ok: true, scheduled: true });
     } catch (e) {
       // Surface the real error to Linear's webhook delivery log instead of
@@ -236,135 +249,6 @@ function isAgentSessionEvent(value: unknown): value is AgentSessionEventWebhook 
   const session = v.agentSession as Record<string, unknown>;
   if (typeof session.id !== "string") return false;
   return true;
-}
-
-/**
- * Pull the user's actual question out of the webhook payload.
- *
- * Linear's AgentSessionEvent webhook envelopes are NOT what older docs
- * suggest — the rich context lives at the top level of the event, not
- * inside `agentSession`. Fields we draw from, in priority order:
- *
- *   - `event.promptContext` — pre-rendered markdown with the issue
- *     title, description, and any kickoff comment. This is the
- *     primary source for assignment-style sessions.
- *   - `event.agentSession.comment.body` — the actual comment body when
- *     the session is started by an @-mention.
- *   - `event.agentSession.issue.title` — last-resort fallback so we
- *     never error out for "no prompt" if Linear sent a session-start
- *     event with only the issue header.
- *
- * `event.guidance`, when present, is appended as a "Guidance:" section
- * so workspace-level instructions (e.g. "always run lint before
- * proposing edits") reach the model.
- *
- * Strips literal `@<bot-name>` tokens so the model doesn't waste
- * attention parsing them.
- */
-function resolvePrompt(event: AgentSessionEventWebhook): string | null {
-  const session = event.agentSession;
-  const candidates = [
-    event.promptContext,
-    session.comment?.body,
-    session.issue?.title && session.issue?.title.trim().length > 0
-      ? `Issue ${session.issue.identifier ?? ""}: ${session.issue.title}`.trim()
-      : null,
-  ];
-
-  let base: string | null = null;
-  for (const c of candidates) {
-    if (typeof c !== "string") continue;
-    const stripped = c.replace(/@[A-Za-z0-9_-]+/g, "").trim();
-    if (stripped.length > 0) {
-      base = stripped;
-      break;
-    }
-  }
-  if (!base) return null;
-
-  const guidance =
-    typeof event.guidance === "string" && event.guidance.trim().length > 0
-      ? event.guidance.trim()
-      : null;
-  return guidance ? `${base}\n\n---\nGuidance:\n${guidance}` : base;
-}
-
-function resolveRepoUrl(env: Env, session: AgentSession): string | null {
-  const teamId = session.issue?.teamId ?? session.issue?.team?.id;
-  if (!teamId) return null;
-  let mapping: ProjectMapping;
-  try {
-    mapping = JSON.parse(env.PROJECT_MAPPINGS_JSON || "{}") as ProjectMapping;
-  } catch {
-    return null;
-  }
-  return mapping[teamId] ?? null;
-}
-
-interface PiMessageContent {
-  type?: string;
-  text?: string;
-}
-
-interface PiMessageEnd {
-  type?: string;
-  message?: {
-    role?: string;
-    content?: PiMessageContent[];
-  };
-  assistantMessageEvent?: { type?: string; delta?: string };
-}
-
-/**
- * Extract a human-readable answer from pi's `--mode json` event stream.
- *
- * Pi emits one JSON event per line. Lifecycle events (`session`,
- * `agent_start`, etc.) are noise; the answer lives in `message_end`
- * events whose `message.role === "assistant"` and contain a
- * `content[].type === "text"` chunk. A single run may produce several
- * assistant messages (after thinking, after each tool call, then the
- * final answer) — we want the LAST one with text content.
- *
- * Fallback chain: last assistant text → reconstructed from
- * `text_delta` events → truncated raw stdout.
- */
-export function summarizeStdout(stdout: string): string {
-  const lines = stdout.split(/\r?\n/).filter((l) => l.length > 0);
-
-  let lastAssistantText: string | null = null;
-  const deltaChunks: string[] = [];
-
-  for (const line of lines) {
-    let ev: PiMessageEnd;
-    try {
-      ev = JSON.parse(line) as PiMessageEnd;
-    } catch {
-      continue;
-    }
-    if (ev.type === "message_end" && ev.message?.role === "assistant") {
-      const text = (ev.message.content ?? [])
-        .filter((c) => c.type === "text" && typeof c.text === "string")
-        .map((c) => c.text as string)
-        .join("");
-      if (text.length > 0) lastAssistantText = text;
-    }
-    if (
-      ev.type === "message_update" &&
-      ev.assistantMessageEvent?.type === "text_delta" &&
-      typeof ev.assistantMessageEvent.delta === "string"
-    ) {
-      deltaChunks.push(ev.assistantMessageEvent.delta);
-    }
-  }
-
-  if (lastAssistantText) return lastAssistantText;
-  const reconstructed = deltaChunks.join("");
-  if (reconstructed.length > 0) return reconstructed;
-  return truncate(stdout, 2000);
-}
-
-function truncate(s: string, limit: number): string {
-  return s.length <= limit ? s : s.slice(0, limit) + "\n…[truncated]";
 }
 
 async function safe(fn: () => Promise<unknown>): Promise<void> {

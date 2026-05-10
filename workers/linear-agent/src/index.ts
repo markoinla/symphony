@@ -8,6 +8,11 @@ export interface Env {
   // state nonce, and webhook delivery dedupe markers.
   LINEAR_TOKENS: KVNamespace;
 
+  // Cloudflare Workflow binding for SessionRunner — drives a single
+  // Agent Session through load → thought → dispatch → terminal with
+  // per-step durability. See src/workflows/session-runner.ts.
+  SESSION_RUNNER: Workflow;
+
   // Linear OAuth + webhook secrets
   LINEAR_CLIENT_ID: string;
   LINEAR_CLIENT_SECRET: string;
@@ -26,6 +31,10 @@ export interface Env {
   DEFAULT_ENGINE: string;
   PROJECT_MAPPINGS_JSON: string;
 }
+
+// Re-export the Workflow class so wrangler's class_name resolution finds
+// it from this module (the entry pointed at by `main`).
+export { SessionRunner } from "./workflows/session-runner";
 
 export function buildApp() {
   const app = new Hono<{ Bindings: Env }>();

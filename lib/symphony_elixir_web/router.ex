@@ -84,6 +84,7 @@ defmodule SymphonyElixirWeb.Router do
     patch("/agents/:name", AgentApiController, :update)
     get("/linear/projects", LinearApiController, :search_projects)
     get("/github/repos", GithubApiController, :search_repos)
+    get("/github/branches", GithubApiController, :search_branches)
     get("/oauth/linear/authorize", OAuthController, :authorize)
     get("/oauth/linear/status", OAuthController, :status)
     post("/oauth/linear/revoke", OAuthController, :revoke)
