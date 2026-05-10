@@ -3,6 +3,14 @@ import { getSandbox } from "@cloudflare/sandbox";
 
 import type { Env } from "./index";
 import { AuthBackupStore } from "./storage";
+import {
+  SANDBOX_HOME,
+  SNAPSHOT_DIR,
+  SNAPSHOT_TTL_SECONDS,
+  safeDestroy,
+  sanitizeScopeForId,
+  useLocalBackupBucket,
+} from "./sandbox-helpers";
 
 /**
  * Auth bootstrap + snapshot routes.
@@ -31,18 +39,6 @@ import { AuthBackupStore } from "./storage";
 // caller is expected to either snapshot before then or call /auth/snapshot
 // (which destroys the sandbox) explicitly.
 const BOOTSTRAP_TTL_MS = 30 * 60 * 1000;
-
-// Snapshot R2 retention (seconds). 7 days is enough cushion for the cron
-// refresh job in Phase 6 to keep credentials fresh; the cron can also call
-// createBackup again to extend the TTL.
-const SNAPSHOT_TTL_SECONDS = 7 * 24 * 60 * 60;
-
-// Cloudflare Sandbox SDK only allows createBackup({dir}) under one of these
-// roots: /workspace, /home, /tmp, /var/tmp, /app. /root is *not* allowed.
-// We park the operator's HOME at /home/symphony and route ttyd, npm prefix,
-// and CLI auth files there so the snapshot captures everything in one shot.
-const SNAPSHOT_DIR = "/home/symphony";
-const SANDBOX_HOME = SNAPSHOT_DIR;
 
 // Port ttyd listens on. The bootstrap PTY exposes this port via Cloudflare
 // Sandbox's preview-URL mechanism.
@@ -255,13 +251,7 @@ export function buildAuthRouter() {
 }
 
 export function bootstrapSandboxId(scope: string): string {
-  // Sandbox IDs end up inside DNS hostnames in preview URLs
-  // (https://<port>-<sandbox-id>-<token>.<hostname>). Colons, dots, and @
-  // are valid in our scope regex but illegal in DNS labels — JS's
-  // URL.hostname setter silently rejects them and the SDK falls back to
-  // returning the bare hostname, which is undebuggable. Convert to hyphens.
-  const safe = scope.replace(/[^a-zA-Z0-9-]/g, "-").toLowerCase();
-  return `bootstrap-${safe}`;
+  return `bootstrap-${sanitizeScopeForId(scope)}`;
 }
 
 function parseScope(value: unknown): string | null {
@@ -285,17 +275,3 @@ async function readJsonBody<T>(req: Request): Promise<T> {
   }
 }
 
-function useLocalBackupBucket(env: Env): boolean {
-  // Operators opt into local-bucket mode by setting USE_LOCAL_BACKUP_BUCKET
-  // to "true" in the dev env wrangler.jsonc (or via `wrangler secret put`).
-  return env.USE_LOCAL_BACKUP_BUCKET === "true";
-}
-
-async function safeDestroy(sandbox: { destroy(): Promise<void> }): Promise<void> {
-  try {
-    await sandbox.destroy();
-  } catch {
-    // Sandbox may already be torn down or unreachable; we don't want a
-    // cleanup failure to mask the real (or successful) result.
-  }
-}

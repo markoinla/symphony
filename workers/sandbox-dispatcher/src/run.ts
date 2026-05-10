@@ -3,6 +3,7 @@ import { getSandbox } from "@cloudflare/sandbox";
 
 import type { Env } from "./index";
 import { AuthBackupStore } from "./storage";
+import { SANDBOX_HOME, safeDestroy, sanitizeScopeForId } from "./sandbox-helpers";
 
 /**
  * `/run` — execute one agent turn in a fresh per-issue sandbox.
@@ -132,10 +133,7 @@ export function buildRunRouter() {
 }
 
 export function runSandboxId(issueId: string): string {
-  // Same sanitization rule as bootstrapSandboxId — DNS-safe label so preview
-  // URLs (https://<port>-<sandbox-id>-<token>.<host>) don't silently fail.
-  const safe = issueId.replace(/[^a-zA-Z0-9-]/g, "-").toLowerCase();
-  return `run-${safe}`;
+  return `run-${sanitizeScopeForId(issueId)}`;
 }
 
 function parseRun(body: RunBody): ParsedRun | string {
@@ -233,7 +231,14 @@ function buildEngineCommand(parsed: ParsedRun, workspaceDir: string): string {
       if (parsed.model) {
         flags.push("--model", shellQuote(parsed.model));
       }
+      // sandbox.exec runs a non-login shell, so the .bashrc that
+      // /auth/bootstrap writes (which sets HOME, NPM_CONFIG_PREFIX, PATH)
+      // does NOT load. Reproduce its essentials here so pi (and the
+      // co-installed gh / claude / codex CLIs in the snapshot) resolve.
+      // SANDBOX_HOME mirrors auth.ts.
       return [
+        `export HOME=${SANDBOX_HOME}`,
+        `export PATH=${SANDBOX_HOME}/.npm-global/bin:${SANDBOX_HOME}/.local/bin:$PATH`,
         `cd ${shellQuote(workspaceDir)}`,
         `pi ${flags.join(" ")} ${shellQuote(parsed.prompt)}`,
       ].join(" && ");
@@ -261,10 +266,3 @@ async function readJsonBody<T>(req: Request): Promise<T> {
   }
 }
 
-async function safeDestroy(sandbox: { destroy(): Promise<void> }): Promise<void> {
-  try {
-    await sandbox.destroy();
-  } catch {
-    // Mirror auth.ts: cleanup failure shouldn't mask the real result.
-  }
-}

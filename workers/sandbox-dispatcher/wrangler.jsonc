@@ -16,6 +16,18 @@
     { "pattern": "*.sandbox.marko.la/*", "zone_name": "marko.la" }
   ],
 
+  // Phase 6: cron snapshot refresh.
+  // Fires daily at 04:00 UTC. The scheduled() handler in src/index.ts
+  // calls refreshStaleSnapshots(env), which restoreBackup→createBackup
+  // every snapshot whose refreshed_at is older than 5 days. The R2
+  // bucket lifecycle rule (14 days, prefix `backups/`) then GCs the
+  // orphaned old objects. Without this, snapshots silently age out and
+  // every run after day 14 forces the operator to redo CLI logins.
+  // Manual trigger for testing: POST /auth/refresh (HMAC-signed).
+  "triggers": {
+    "crons": ["0 4 * * *"]
+  },
+
   // Per-issue ephemeral container. We pull the upstream cloudflare/sandbox
   // image directly from Docker Hub — no local build, no registry push. The
   // image only ships node/bun/git/jq/curl + the SDK control plane; ttyd

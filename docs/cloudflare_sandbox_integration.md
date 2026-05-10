@@ -20,7 +20,7 @@ that aren't already in the original build plan.
 | 4. `/run` route (engine: `pi`)                               | ✅ scaffolded — pending smoke test | this branch |
 | 4b. `workers/linear-agent` (Linear OAuth + webhook + Activity SDK) | ✅ scaffolded | this branch |
 | 5. `Worker.Backend.CloudflareSandbox` Elixir impl            | pending — may be skipped if we go fully Worker-driven | — |
-| 6. Cron snapshot refresh                                     | pending    | — |
+| 6. Cron snapshot refresh                                     | ✅ shipped — daily cron + `/auth/refresh` admin route, validated on prod | this branch |
 | 7. Cloudflare Workflow per agent session                     | pending — replaces inline `runSession` in linear-agent | — |
 | 8. D1 multi-tenant schema (orgs/projects/workflows)          | pending    | — |
 
@@ -483,7 +483,95 @@ Treat it as an operator/debug endpoint. Phase 4 should consider whether
 it belongs in production at all (probably yes for ops, but maybe gate
 it behind an additional auth check).
 
-### Setting persistent env vars for CLIs (e.g. `CLOUDFLARE_ACCOUNT_ID` for pi)
+### `wrangler secret put` may be reset by deploys that change `triggers`
+
+Empirically observed twice: deploying a change to `wrangler.jsonc`'s
+`triggers` block (e.g. adding `triggers.crons`) is enough to make the
+prod Worker stop matching the previously-set `DISPATCH_HMAC_SECRET`.
+Diagnostic: every signed request 401s with `{"error":"invalid_signature"}`
+even though `wrangler secret list` claims the secret is set.
+
+Mitigation: after every deploy that touches `wrangler.jsonc`, re-run
+the secret put explicitly with `--env=""` and verify with a quick
+`/auth/exec` round-trip:
+
+```bash
+echo "$DISPATCH_HMAC_SECRET" | npx wrangler secret put DISPATCH_HMAC_SECRET --env=""
+# then a smoke curl with X-Symphony-Signature
+```
+
+This may be a wrangler 4.x quirk where named-env semantics confuse
+secret targeting. Either way, the recovery is cheap once you know to
+look for it.
+
+## Phase 6 — cron snapshot refresh (shipped)
+
+The R2 lifecycle rule (14 days, prefix `backups/`) and the SDK's
+`createBackup` TTL (7 days) together leave a window of ~7 days for
+something to refresh active snapshots before they age out. Phase 6 is
+that something.
+
+**How it works.**
+
+- A `triggers.crons` entry in `wrangler.jsonc` fires the dispatcher's
+  `scheduled()` handler at `0 4 * * *` (4 AM UTC daily).
+- `scheduled()` calls `refreshStaleSnapshots(env, now)` which:
+  1. `SELECT *` from `auth_backups`.
+  2. For each row whose `refreshed_at < now - DEFAULT_REFRESH_AGE_SECONDS`
+     (5 days), spin up a `refresh-<sanitized-scope>` sandbox.
+  3. `restoreBackup(handle)` to load the existing state.
+  4. `createBackup({ dir: "/home/symphony", ttl: 7 days })` to write a
+     fresh R2 object with today's timestamp.
+  5. Update the D1 row's handle + `refreshed_at` (atomic via the
+     `INSERT ... ON CONFLICT DO UPDATE` shape in `AuthBackupStore.upsert`).
+  6. `safeDestroy` the sandbox.
+- The 14-day R2 lifecycle rule then GCs the orphaned old object on its
+  normal cadence. The active scope stays "young" indefinitely.
+
+**Manual trigger / recovery / testing.**
+
+`POST /auth/refresh` is the same logic exposed over HTTP, HMAC-signed
+through the standard middleware:
+
+```bash
+# Dry run — refresh anything older than the default 5 days.
+curl -sS -X POST https://sandbox.marko.la/auth/refresh \
+  -H "X-Symphony-Signature: $(sign '{}')" \
+  --data '{}'
+
+# Force-refresh a single scope, regardless of age (useful for testing).
+curl -sS -X POST https://sandbox.marko.la/auth/refresh \
+  -H "X-Symphony-Signature: $(sign '{"scope":"alice","force":true}')" \
+  --data '{"scope":"alice","force":true}'
+```
+
+Body fields (all optional): `{ age_seconds?: number, force?: boolean,
+scope?: string }`. Returns aggregate counts (`checked`, `refreshed`,
+`skipped`, `failed`) plus per-scope outcomes with old/new backup ids
+and per-row `error_message` on failure.
+
+**Failure isolation.** Per-row exceptions are caught and surfaced in
+the result objects rather than bubbled out — one busted scope can't
+poison the whole cron run. Failures end up in the `scheduled()`
+handler's `console.log` so they're visible via `wrangler tail`.
+
+**What this does NOT do.** It does not re-validate that the
+restored auth tokens are still good (Anthropic / OpenAI / GitHub may
+have rotated/revoked them). The bytes get rotated; the tokens inside
+them might still be expired. That's fine for the retention case
+(R2 keeps holding bytes), but `/run` will still fail if the tokens
+themselves have lapsed. A future Phase could add a per-CLI liveness
+probe (e.g. `gh auth status`) inside the refresh sandbox before
+re-snapshotting.
+
+**Tests.** `test/refresh.test.ts` covers the threshold logic, force
+flag, single-scope filter, per-row failure isolation, and HMAC
+enforcement on the HTTP endpoint. The HTTP-handler tests use
+`vi.useFakeTimers()` because the handler reads `Date.now()`
+internally — without that, seed timestamps drift relative to wall
+clock as the suite ages.
+
+## Setting persistent env vars for CLIs (e.g. `CLOUDFLARE_ACCOUNT_ID` for pi)
 
 For env vars that should persist across bootstraps + Phase 4 sandbox
 restores, append to `/home/symphony/.bashrc` (which is sourced by

@@ -31,10 +31,26 @@ class FakeSandbox {
   exposedPorts: Array<{ port: number; hostname: string }> = [];
   createdBackups: Array<{ dir: string; name?: string }> = [];
   restoredBackups: Array<{ id: string; dir: string }> = [];
+  execCalls: string[] = [];
+  waitedForPorts: Array<{ port: number }> = [];
+
+  // The handler now does `await sandbox.exec(BOOTSTRAP_PREP_CMD)` to
+  // ensure ttyd + bashrc are present, then `await ttydProc.waitForPort(...)`
+  // before exposing the port. Both stubs succeed silently here.
+  async exec(command: string) {
+    this.execCalls.push(command);
+    return { exitCode: 0, stdout: "", stderr: "" };
+  }
 
   async startProcess(command: string) {
     this.startedProcesses.push(command);
-    return { id: `proc-${this.startedProcesses.length}` };
+    const sandbox = this;
+    return {
+      id: `proc-${this.startedProcesses.length}`,
+      async waitForPort(port: number, _opts?: unknown) {
+        sandbox.waitedForPorts.push({ port });
+      },
+    };
   }
 
   async exposePort(port: number, opts: { hostname: string }) {
@@ -185,23 +201,39 @@ describe("POST /auth/bootstrap", () => {
     expect(res.status).toBe(200);
     const json = (await res.json()) as Record<string, unknown>;
     expect(json.scope).toBe("alice");
-    expect(json.sandbox_id).toBe("bootstrap:alice");
+    // Sandbox IDs sanitize to DNS-safe labels (colons silently break the
+    // SDK's preview-URL builder); see sanitizeScopeForId.
+    expect(json.sandbox_id).toBe("bootstrap-alice");
     expect(typeof json.pty_url).toBe("string");
     expect((json.pty_url as string).startsWith("https://7681-bootstrap")).toBe(true);
     expect(json.had_prior_snapshot).toBe(false);
 
-    const sandbox = getSandboxForId("bootstrap:alice");
-    expect(sandbox.startedProcesses[0]).toMatch(/^ttyd -p 7681/);
+    const sandbox = getSandboxForId("bootstrap-alice");
+    // ttyd is now launched from the snapshot prefix with HOME pinned to
+    // /home/symphony (so login files land inside the backup root).
+    expect(sandbox.startedProcesses[0]).toMatch(
+      /^env HOME=\/home\/symphony \/home\/symphony\/\.local\/bin\/ttyd -p 7681/,
+    );
     expect(sandbox.exposedPorts).toEqual([{ port: 7681, hostname: "example" }]);
     expect(sandbox.restoredBackups).toEqual([]);
-    expect(sandbox.destroyed).toBe(false);
+    // Bootstrap PREP cmd runs once via sandbox.exec to install ttyd +
+    // initialize bashrc/bash_profile (idempotent).
+    expect(sandbox.execCalls.length).toBeGreaterThan(0);
+    // proc.waitForPort runs after startProcess to make sure ttyd is
+    // reachable before we expose the port to browsers.
+    expect(sandbox.waitedForPorts).toEqual([{ port: 7681 }]);
+    // We don't assert `destroyed` here: the bootstrap handler does a
+    // defensive `safeDestroy` at the start to clear any prior sandbox
+    // state for the same id. With the FakeSandbox's id-based memoization,
+    // the flag stays set; in production the second getSandbox spins a
+    // fresh container, but this test isn't exercising that distinction.
   });
 
   it("restores any prior snapshot before starting ttyd", async () => {
     const app = buildApp();
     const db = new FakeD1();
     db.rows.set("alice", {
-      handle: JSON.stringify({ id: "backup-prior", dir: "/home/node" }),
+      handle: JSON.stringify({ id: "backup-prior", dir: "/home/symphony" }),
       created_at: 1_700_000_000,
       refreshed_at: 1_700_000_000,
     });
@@ -216,8 +248,10 @@ describe("POST /auth/bootstrap", () => {
     const json = (await res.json()) as Record<string, unknown>;
     expect(json.had_prior_snapshot).toBe(true);
 
-    const sandbox = getSandboxForId("bootstrap:alice");
-    expect(sandbox.restoredBackups).toEqual([{ id: "backup-prior", dir: "/home/node" }]);
+    const sandbox = getSandboxForId("bootstrap-alice");
+    expect(sandbox.restoredBackups).toEqual([
+      { id: "backup-prior", dir: "/home/symphony" },
+    ]);
   });
 
   it("rejects requests missing a scope", async () => {
@@ -262,16 +296,16 @@ describe("POST /auth/snapshot", () => {
     expect(json.scope).toBe("alice");
     expect(typeof json.backup_id).toBe("string");
 
-    const sandbox = getSandboxForId("bootstrap:alice");
+    const sandbox = getSandboxForId("bootstrap-alice");
     expect(sandbox.createdBackups).toHaveLength(1);
-    expect(sandbox.createdBackups[0]?.dir).toBe("/home/node");
+    expect(sandbox.createdBackups[0]?.dir).toBe("/home/symphony");
     expect(sandbox.destroyed).toBe(true);
 
     const row = db.rows.get("alice");
     expect(row).toBeDefined();
     const persisted = JSON.parse(row!.handle);
     expect(persisted.id).toBe(json.backup_id);
-    expect(persisted.dir).toBe("/home/node");
+    expect(persisted.dir).toBe("/home/symphony");
   });
 
   it("destroys the sandbox even when createBackup throws", async () => {
@@ -279,11 +313,11 @@ describe("POST /auth/snapshot", () => {
     const db = new FakeD1();
 
     // Pre-populate the sandbox so we can stub its createBackup to throw.
-    const failingSandbox = new FakeSandbox("bootstrap:alice");
+    const failingSandbox = new FakeSandbox("bootstrap-alice");
     failingSandbox.createBackup = async () => {
       throw new Error("backup-failed");
     };
-    sandboxHandles["bootstrap:alice"] = failingSandbox;
+    sandboxHandles["bootstrap-alice"] = failingSandbox;
 
     const body = JSON.stringify({ scope: "alice" });
     const res = await app.fetch(
