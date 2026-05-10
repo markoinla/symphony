@@ -101,7 +101,13 @@
           "database_id": "REPLACE_WITH_DEV_DATABASE_ID",
           "migrations_dir": "migrations"
         }
-      ]
+      ],
+      // Local-bucket mode keeps createBackup off presigned URLs so it works
+      // under wrangler dev (which has no presigned URL infra). Production
+      // leaves this unset (defaults to false).
+      "vars": {
+        "USE_LOCAL_BACKUP_BUCKET": "true"
+      }
       // Dev secrets — set with `wrangler secret put <NAME> --env dev`:
       //   DISPATCH_HMAC_SECRET, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
       //   CLOUDFLARE_ACCOUNT_ID, BACKUP_BUCKET_NAME

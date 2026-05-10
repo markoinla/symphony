@@ -6,9 +6,10 @@ exposes a small HTTPS API (HMAC-signed, JSON) that Symphony's
 to acquire per-issue ephemeral sandboxes, restore the auth snapshot, and
 run agents inside.
 
-> **Status:** Phase 2 scaffold. Today the dispatcher only exposes
-> `GET /health`. Auth bootstrap/snapshot endpoints land in Phase 3,
-> `/run` in Phase 4, and the cron snapshot refresh in Phase 6.
+> **Status:** Phase 3. The dispatcher exposes `/health` plus the
+> `POST /auth/bootstrap`, `POST /auth/snapshot`, `GET /auth/snapshot`,
+> and `DELETE /auth/snapshot` routes. `/run` lands in Phase 4 and the
+> cron snapshot refresh in Phase 6.
 
 ## Architecture
 
@@ -95,6 +96,68 @@ After the first deploy, confirm the container image built:
 ```bash
 wrangler containers list
 ```
+
+## Auth bootstrap flow
+
+To capture an auth snapshot you log into each CLI inside a one-shot sandbox,
+then ask the dispatcher to persist `/home/node` as a `DirectoryBackup` in
+R2 (handle stored in D1).
+
+The easiest way to drive the flow is the Symphony Mix tasks (run from the
+Symphony repo, with `SYMPHONY_DISPATCHER_URL` and
+`SYMPHONY_DISPATCHER_HMAC_SECRET` set in your environment):
+
+```bash
+# 1) Boot a bootstrap sandbox + ttyd PTY for `scope=alice`.
+mix symphony.auth.bootstrap --scope alice
+# Prints a one-time pty_url like:
+#   https://7681-bootstrap-alice-<random>.<dispatcher-host>
+
+# 2) Open the pty_url in a browser, then inside the PTY run:
+#      claude login
+#      codex auth login
+#      gh auth login
+#    The CLIs write tokens into ~/.claude, ~/.codex, ~/.config/gh — all
+#    under /home/node, which is what the snapshot will capture.
+
+# 3) Persist the snapshot and tear the bootstrap sandbox down.
+mix symphony.auth.snapshot --scope alice
+# Prints {"ok":true,"backup_id":"…","scope":"alice","created_at":…}.
+```
+
+Inspect or remove a snapshot:
+
+```bash
+mix symphony.auth.snapshot --scope alice --check     # GET /auth/snapshot
+mix symphony.auth.snapshot --scope alice --delete    # DELETE /auth/snapshot
+```
+
+Without the Mix task, you can also drive the same flow with `curl`:
+
+```bash
+SECRET="$(cat /tmp/dispatcher-secret)"
+URL="https://sandbox-dispatcher.<account>.workers.dev"
+
+# Bootstrap.
+BODY='{"scope":"alice"}'
+SIG="$(printf %s "$BODY" | openssl dgst -sha256 -hmac "$SECRET" -hex | awk '{print $2}')"
+curl -X POST "$URL/auth/bootstrap" \
+  -H "Content-Type: application/json" \
+  -H "X-Symphony-Signature: $SIG" \
+  -d "$BODY"
+
+# (open pty_url in a browser, do the logins, then …)
+
+# Snapshot.
+curl -X POST "$URL/auth/snapshot" \
+  -H "Content-Type: application/json" \
+  -H "X-Symphony-Signature: $SIG" \
+  -d "$BODY"
+```
+
+`scope` is opaque — Symphony chooses the granularity. Use `<user_id>` for
+shared per-user credentials or `<user_id>:<project_id>` if a project needs
+its own isolated snapshot.
 
 ## Local development
 

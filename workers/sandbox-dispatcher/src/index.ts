@@ -1,20 +1,25 @@
 import { Hono } from "hono";
+import { proxyToSandbox, type Sandbox as SandboxType } from "@cloudflare/sandbox";
 
+import { buildAuthRouter } from "./auth";
 import { hmacMiddleware, type HmacEnv } from "./hmac";
 
 // Re-export the Sandbox Durable Object class so the Worker runtime can find
 // it for the binding declared in wrangler.jsonc. `@cloudflare/sandbox`
-// provides the canonical implementation; we don't subclass it in Phase 2.
+// provides the canonical implementation; we don't subclass it.
 export { Sandbox } from "@cloudflare/sandbox";
 
 export interface Env extends HmacEnv {
-  Sandbox: DurableObjectNamespace;
+  Sandbox: DurableObjectNamespace<SandboxType>;
   BACKUP_BUCKET: R2Bucket;
   DB: D1Database;
   CLOUDFLARE_ACCOUNT_ID?: string;
   BACKUP_BUCKET_NAME?: string;
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;
+  // Set to "true" in the dev env so createBackup uses the bound R2
+  // namespace directly (no presigned URLs in local development).
+  USE_LOCAL_BACKUP_BUCKET?: string;
 }
 
 export const SANDBOX_INSTANCE_TYPE = "standard-2" as const;
@@ -33,11 +38,22 @@ export function buildApp() {
     }),
   );
 
+  app.route("/", buildAuthRouter());
+
   return app;
 }
 
 const app = buildApp();
 
 export default {
-  fetch: app.fetch,
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    // Cloudflare Sandbox's preview URLs (returned by `sandbox.exposePort()`)
+    // route back through the worker that owns the DO namespace. proxyToSandbox
+    // handles those subdomain requests transparently — for non-preview URLs
+    // it returns null and we fall through to our own router.
+    const proxyResponse = await proxyToSandbox(request, env);
+    if (proxyResponse) return proxyResponse;
+
+    return app.fetch(request, env, ctx);
+  },
 } satisfies ExportedHandler<Env>;
