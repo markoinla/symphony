@@ -21,18 +21,20 @@ defmodule SymphonyElixir.AgentRunner do
     Workspace
   }
 
+  alias SymphonyElixir.Worker.{Backend, Lease}
+
   @pr_url_regex ~r"https://github\.com/[^/]+/[^/]+/pull/\d+"
 
   @type worker_host :: String.t() | nil
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
   def run(issue, engine_update_recipient \\ nil, opts \\ []) do
-    worker_hosts = candidate_worker_hosts(Keyword.get(opts, :worker_host), Config.settings!().worker.ssh_hosts)
+    leases = candidate_leases(issue, opts)
 
-    Logger.info("Starting agent run for #{issue_context(issue)} worker_hosts=#{inspect(worker_hosts_for_log(worker_hosts))}")
+    Logger.info("Starting agent run for #{issue_context(issue)} leases=#{inspect(leases_for_log(leases))}")
 
     try do
-      case run_on_worker_hosts(issue, engine_update_recipient, opts, worker_hosts) do
+      case run_on_leases(issue, engine_update_recipient, opts, leases) do
         :ok ->
           maybe_finalize_agent_session(issue, :completed)
           :ok
@@ -49,36 +51,37 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp run_on_worker_hosts(issue, engine_update_recipient, opts, [worker_host | rest]) do
-    case run_on_worker_host(issue, engine_update_recipient, opts, worker_host) do
+  defp run_on_leases(issue, engine_update_recipient, opts, [lease | rest]) do
+    case run_on_lease(issue, engine_update_recipient, opts, lease) do
       :ok ->
         :ok
 
       {:error, reason} when rest != [] ->
-        Logger.warning("Agent run failed for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)} reason=#{inspect(reason)}; trying next worker host")
-        run_on_worker_hosts(issue, engine_update_recipient, opts, rest)
+        Logger.warning("Agent run failed for #{issue_context(issue)} lease=#{lease_for_log(lease)} reason=#{inspect(reason)}; trying next lease")
+        run_on_leases(issue, engine_update_recipient, opts, rest)
 
       {:error, reason} ->
-        Logger.error("Workspace creation failed for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)} reason=#{inspect(reason)}")
+        Logger.error("Workspace creation failed for #{issue_context(issue)} lease=#{lease_for_log(lease)} reason=#{inspect(reason)}")
         {:error, reason}
     end
   end
 
-  defp run_on_worker_hosts(_issue, _engine_update_recipient, _opts, []), do: {:error, :no_worker_hosts_available}
+  defp run_on_leases(_issue, _engine_update_recipient, _opts, []), do: {:error, :no_worker_hosts_available}
 
-  defp run_on_worker_host(issue, engine_update_recipient, opts, worker_host) do
-    Logger.info("Starting worker attempt for #{issue_context(issue)} worker_host=#{worker_host_for_log(worker_host)}")
+  defp run_on_lease(issue, engine_update_recipient, opts, %Lease{} = lease) do
+    worker_host = lease_worker_host(lease)
+    Logger.info("Starting worker attempt for #{issue_context(issue)} lease=#{lease_for_log(lease)}")
 
     case Workspace.create_for_issue_with_status(issue, worker_host) do
       {:ok, workspace, created?} ->
-        send_worker_runtime_info(engine_update_recipient, issue, worker_host, workspace)
+        send_worker_runtime_info(engine_update_recipient, issue, lease, worker_host, workspace)
         maybe_notify_workspace_ready(issue, workspace, worker_host, created?)
 
         try do
           case Workspace.run_before_run_hook(workspace, issue, worker_host) do
             {:ok, before_results} ->
               send_hook_results(engine_update_recipient, issue, before_results)
-              run_engine_turns(workspace, issue, engine_update_recipient, opts, worker_host)
+              run_engine_turns(workspace, issue, engine_update_recipient, opts, lease)
 
             {:error, reason, before_results} ->
               send_hook_results(engine_update_recipient, issue, before_results)
@@ -123,12 +126,13 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp send_engine_update(_recipient, _issue, _message), do: :ok
 
-  defp send_worker_runtime_info(recipient, %Issue{id: issue_id}, worker_host, workspace)
+  defp send_worker_runtime_info(recipient, %Issue{id: issue_id}, lease, worker_host, workspace)
        when is_binary(issue_id) and is_pid(recipient) and is_binary(workspace) do
     send(
       recipient,
       {:worker_runtime_info, issue_id,
        %{
+         lease: lease,
          worker_host: worker_host,
          workspace_path: workspace
        }}
@@ -137,7 +141,7 @@ defmodule SymphonyElixir.AgentRunner do
     :ok
   end
 
-  defp send_worker_runtime_info(_recipient, _issue, _worker_host, _workspace), do: :ok
+  defp send_worker_runtime_info(_recipient, _issue, _lease, _worker_host, _workspace), do: :ok
 
   defp send_hook_results(recipient, %Issue{id: issue_id}, results)
        when is_binary(issue_id) and is_pid(recipient) and is_list(results) and results != [] do
@@ -267,14 +271,15 @@ defmodule SymphonyElixir.AgentRunner do
     List.to_string(hostname)
   end
 
-  defp run_engine_turns(workspace, issue, engine_update_recipient, opts, worker_host) do
+  defp run_engine_turns(workspace, issue, engine_update_recipient, opts, %Lease{} = lease) do
     max_turns = Keyword.get(opts, :max_turns, Config.settings!().agent.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
     project_id = Keyword.get(opts, :project_id)
     organization_id = Keyword.get(opts, :organization_id)
     comment_watch_state = opts |> Keyword.get(:comment_watch_state) |> CommentWatch.seed(issue.comments)
+    worker_host = lease_worker_host(lease)
 
-    with {:ok, session} <- Engine.engine_module().start_session(workspace, worker_host: worker_host) do
+    with {:ok, session} <- Engine.engine_module().start_session(workspace, worker_host: worker_host, lease: lease) do
       session_id = session[:session_id] || "session_#{System.unique_integer([:positive])}"
       start_session_log(issue, session_id, project_id, organization_id, engine_update_recipient)
       send_comment_watch_update(engine_update_recipient, issue, comment_watch_state)
@@ -600,6 +605,41 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp active_issue_state?(_state_name), do: false
 
+  defp candidate_leases(issue, opts) do
+    case Keyword.get(opts, :lease) do
+      %Lease{} = lease ->
+        [lease]
+
+      _ ->
+        backend = Backend.current()
+        configured_hosts = Config.settings!().worker.ssh_hosts
+        worker_hosts = candidate_worker_hosts(Keyword.get(opts, :worker_host), configured_hosts)
+
+        Enum.map(worker_hosts, fn host -> acquire_lease!(backend, issue, host) end)
+    end
+  end
+
+  defp acquire_lease!(backend, issue, host) do
+    case backend.acquire(issue, host: host) do
+      {:ok, %Lease{} = lease} ->
+        lease
+
+      {:error, :missing_ssh_host} ->
+        # Configured backend requires an SSH host but none was selected
+        # (e.g. `worker.backend: ssh_static` with empty `worker.ssh_hosts`).
+        # Fall back to a Local lease so the agent can still run.
+        {:ok, lease} = Backend.Local.acquire(issue)
+        lease
+
+      {:error, reason} ->
+        raise RuntimeError, "Backend #{inspect(backend)} failed to acquire lease: #{inspect(reason)}"
+    end
+  end
+
+  defp lease_worker_host(%Lease{} = lease) do
+    if Lease.local?(lease), do: nil, else: lease.host
+  end
+
   defp candidate_worker_hosts(nil, []), do: [nil]
 
   defp candidate_worker_hosts(preferred_host, configured_hosts) when is_list(configured_hosts) do
@@ -621,12 +661,9 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp worker_hosts_for_log(worker_hosts) do
-    Enum.map(worker_hosts, &worker_host_for_log/1)
-  end
+  defp leases_for_log(leases), do: Enum.map(leases, &lease_for_log/1)
 
-  defp worker_host_for_log(nil), do: "local"
-  defp worker_host_for_log(worker_host), do: worker_host
+  defp lease_for_log(%Lease{host: host, id: id}), do: "#{host}##{id}"
 
   defp normalize_issue_state(state_name) when is_binary(state_name) do
     state_name
