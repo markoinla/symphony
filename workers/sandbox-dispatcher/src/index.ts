@@ -3,6 +3,7 @@ import { proxyToSandbox, type Sandbox as SandboxType } from "@cloudflare/sandbox
 
 import { buildAuthRouter } from "./auth";
 import { hmacMiddleware, type HmacEnv } from "./hmac";
+import { buildRunRouter } from "./run";
 
 // Re-export the Sandbox Durable Object class so the Worker runtime can find
 // it for the binding declared in wrangler.jsonc. `@cloudflare/sandbox`
@@ -39,6 +40,7 @@ export function buildApp() {
   );
 
   app.route("/", buildAuthRouter());
+  app.route("/", buildRunRouter());
 
   return app;
 }
