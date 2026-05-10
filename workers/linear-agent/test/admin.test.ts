@@ -200,6 +200,127 @@ describe("/admin/installations", () => {
   });
 });
 
+describe("/admin/smoke", () => {
+  /**
+   * Build a minimal SSE response body of NormalizedEvents — the same
+   * shape the dispatcher emits.
+   */
+  function buildSseResponse(events: unknown[]): Response {
+    const body = events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+    return new Response(body, {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  }
+
+  it("returns sse_wire_ok=true when the dispatcher emits an error + result", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.endsWith("/run")) {
+        return buildSseResponse([
+          { type: "error", message: "missing_auth_backup: smoke-test-no-such-scope" },
+          {
+            type: "result",
+            exit_code: 75,
+            duration_ms: 12,
+            branch: null,
+            pr_url: null,
+          },
+        ]);
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const app = buildApp();
+    const db = new FakeD1();
+    const res = await app.fetch(
+      authed(new Request("https://agent.example/admin/smoke")),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      sse_wire_ok: boolean;
+      events_received: number;
+      event_types: string[];
+      final_event: { type: string; exit_code: number } | null;
+      connect_error: string | null;
+    };
+    expect(json.sse_wire_ok).toBe(true);
+    expect(json.events_received).toBe(2);
+    expect(json.event_types).toEqual(["error", "result"]);
+    expect(json.final_event?.type).toBe("result");
+    expect(json.connect_error).toBeNull();
+  });
+
+  it("returns sse_wire_ok=false and surfaces connect_error when dispatcher returns non-2xx", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.endsWith("/run")) {
+        return new Response(
+          JSON.stringify({ error: "invalid_signature" }),
+          { status: 401, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const app = buildApp();
+    const db = new FakeD1();
+    const res = await app.fetch(
+      authed(new Request("https://agent.example/admin/smoke")),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    const json = (await res.json()) as {
+      sse_wire_ok: boolean;
+      connect_error: string;
+    };
+    expect(json.sse_wire_ok).toBe(false);
+    expect(json.connect_error).toContain("dispatcher_401");
+  });
+
+  it("returns sse_wire_ok=false when stream closes without error+result combo", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.endsWith("/run")) {
+        // Only a result, no error — wire shape is broken.
+        return buildSseResponse([
+          {
+            type: "result",
+            exit_code: 0,
+            duration_ms: 5,
+            branch: null,
+            pr_url: null,
+          },
+        ]);
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+
+    const app = buildApp();
+    const db = new FakeD1();
+    const res = await app.fetch(
+      authed(new Request("https://agent.example/admin/smoke")),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    const json = (await res.json()) as { sse_wire_ok: boolean };
+    expect(json.sse_wire_ok).toBe(false);
+  });
+
+  it("requires the admin bearer", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    const res = await app.fetch(
+      new Request("https://agent.example/admin/smoke"),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(401);
+  });
+});
+
 describe("D1-driven project resolution (integration via workflow path)", () => {
   it("project row's max_turns overrides DEFAULT_MAX_TURNS in resolve-inputs", async () => {
     // Smoke-test by hitting the admin route to seed a project then

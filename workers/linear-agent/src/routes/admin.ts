@@ -22,6 +22,11 @@
 
 import { Hono } from "hono";
 import type { Env } from "../index";
+import {
+  DispatcherClient,
+  DispatcherError,
+  type NormalizedEvent,
+} from "../lib/dispatcher";
 import { InstallationStore, ProjectStore } from "../lib/store";
 
 const AUTH_HEADER = "authorization";
@@ -112,6 +117,71 @@ export function buildAdminRouter() {
       refreshed_at: row.refreshed_at,
     }));
     return c.json({ installations });
+  });
+
+  /**
+   * Smoke-test the worker → dispatcher SSE wire without needing a
+   * real Linear delivery or a seeded auth backup. Signs a /run
+   * request with a deliberately-unknown scope so the dispatcher's
+   * streaming branch hits the `missing_auth_backup` path early —
+   * which is the desired outcome: it exercises every layer of the
+   * wire (HMAC signing/verification, SSE framing, line buffering,
+   * NormalizedEvent parsing) and exits in seconds.
+   *
+   * Expected on a healthy wire: at least one `error` event + a
+   * `result` event with non-zero exit_code, total events ≥ 2.
+   *
+   * Use after deploys to confirm both workers can talk to each
+   * other and the SSE plumbing is intact before triggering a real
+   * Agent Session in Linear.
+   */
+  app.get("/admin/smoke", async (c) => {
+    const startedAt = Date.now();
+    const events: NormalizedEvent[] = [];
+    let connectError: string | null = null;
+
+    try {
+      const dispatcher = new DispatcherClient(
+        c.env.DISPATCHER_URL,
+        c.env.DISPATCH_HMAC_SECRET,
+      );
+      for await (const ev of dispatcher.runStream({
+        scope: "smoke-test-no-such-scope",
+        issueId: "smoke-test",
+        repoUrl: "https://github.com/markoinla/symphony.git",
+        prompt: "smoke test — should never run",
+        engine: "pi",
+        model: null,
+      })) {
+        events.push(ev);
+        // Safety brake: a healthy dispatcher exits in ≤3 events; cap
+        // at 50 so a misbehaving dispatcher can't hold the
+        // connection forever.
+        if (events.length > 50) break;
+      }
+    } catch (e) {
+      connectError =
+        e instanceof DispatcherError
+          ? `dispatcher_${e.status}: ${typeof e.body === "string" ? e.body : e.body.error}`
+          : e instanceof Error
+            ? e.message
+            : "unknown_connect_error";
+    }
+
+    const finalEvent = events[events.length - 1] ?? null;
+    const sseWireOk =
+      connectError === null &&
+      events.some((e) => e.type === "result") &&
+      events.some((e) => e.type === "error");
+
+    return c.json({
+      sse_wire_ok: sseWireOk,
+      duration_ms: Date.now() - startedAt,
+      events_received: events.length,
+      event_types: events.map((e) => e.type),
+      final_event: finalEvent,
+      connect_error: connectError,
+    });
   });
 
   return app;
