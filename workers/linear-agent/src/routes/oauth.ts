@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
 import { OAuthHelper } from "../lib/oauth-helper";
+import { InstallationStore } from "../lib/store";
 
 /**
  * OAuth routes for installing the agent into a Linear workspace.
@@ -58,6 +59,35 @@ export function buildOAuthRouter() {
         c.env.LINEAR_CLIENT_SECRET,
         `${c.env.URL}/oauth/callback`,
       );
+
+      // Look up the organization id so we can key the install by it.
+      // Falls back to the legacy single-tenant KV path if the viewer
+      // query fails (transient Linear API issue) — the next /oauth
+      // run can heal the D1 row.
+      let organizationId: string | null = null;
+      try {
+        organizationId = await OAuthHelper.fetchOrganizationId(
+          token.access_token,
+        );
+      } catch (e) {
+        console.error(
+          "viewer_query_failed",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+
+      if (organizationId) {
+        await new InstallationStore(c.env.DB).upsert(
+          organizationId,
+          token.access_token,
+          token.scope,
+        );
+      }
+
+      // Keep the legacy KV key in sync during the cutover so any code
+      // path that still reads from it (none in production after item
+      // 3, but tests + the legacy `runSession` still rely on it) keeps
+      // working. Drop this once `runSession` is deleted.
       await c.env.LINEAR_TOKENS.put("access_token", token.access_token);
       await c.env.LINEAR_TOKENS.delete("oauth_state");
 
@@ -65,6 +95,7 @@ export function buildOAuthRouter() {
         ok: true,
         message: "Agent installed. Mention or assign issues to it in Linear.",
         scope: token.scope,
+        organization_id: organizationId,
       });
     } catch (e) {
       await c.env.LINEAR_TOKENS.delete("oauth_state");
@@ -79,7 +110,16 @@ export function buildOAuthRouter() {
   });
 
   app.get("/oauth/revoke", async (c) => {
-    const token = await c.env.LINEAR_TOKENS.get("access_token");
+    // Revoke either by query param `organization_id` or, when there's
+    // exactly one install, the implicit only-install.
+    const orgQuery = c.req.query("organization_id");
+    const store = new InstallationStore(c.env.DB);
+    const install = orgQuery
+      ? await store.get(orgQuery)
+      : await store.getOnlyInstallation();
+    const token =
+      install?.access_token ??
+      (await c.env.LINEAR_TOKENS.get("access_token"));
     if (!token) {
       return c.json({ error: "no_token" }, 400);
     }
@@ -92,6 +132,9 @@ export function buildOAuthRouter() {
         { error: "revoke_failed", status: res.status, details: await res.text() },
         500,
       );
+    }
+    if (install) {
+      await store.delete(install.organization_id);
     }
     await c.env.LINEAR_TOKENS.delete("access_token");
     return c.json({ ok: true });

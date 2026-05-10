@@ -22,6 +22,12 @@ export interface Env extends HmacEnv {
   // Set to "true" in the dev env so createBackup uses the bound R2
   // namespace directly (no presigned URLs in local development).
   USE_LOCAL_BACKUP_BUCKET?: string;
+  // GitHub PAT (org-wide for item 4 of SYM-267) used to push the
+  // agent's commits after a successful engine run. Set with
+  // `wrangler secret put DISPATCH_GITHUB_TOKEN`. When unset, /run
+  // skips the push step and the linear-agent worker won't see a
+  // `branch` field in the result event.
+  DISPATCH_GITHUB_TOKEN?: string;
 }
 
 export const SANDBOX_INSTANCE_TYPE = "standard-2" as const;

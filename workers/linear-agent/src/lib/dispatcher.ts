@@ -38,6 +38,44 @@ export interface RunResult {
   duration_ms: number;
 }
 
+/**
+ * Engine-agnostic event envelope received from `/run` when the caller
+ * asks for `Accept: text/event-stream`. The shape is mirrored in
+ * `workers/sandbox-dispatcher/src/engines/types.ts` — keep them in
+ * sync. A change here without a matching change there (or vice versa)
+ * silently drops events on the floor.
+ */
+export type NormalizedEvent =
+  | { type: "thought"; turn?: number; text: string }
+  | {
+      type: "tool_call";
+      turn?: number;
+      tool: string;
+      args?: unknown;
+      tool_id?: string;
+    }
+  | {
+      type: "tool_result";
+      turn?: number;
+      tool_id?: string;
+      ok: boolean;
+      result?: string;
+    }
+  | { type: "assistant_msg"; turn?: number; text: string }
+  | {
+      type: "turn_end";
+      turn: number;
+      reason: "completed" | "needs_continuation" | "error";
+    }
+  | { type: "error"; message: string }
+  | {
+      type: "result";
+      exit_code: number;
+      duration_ms: number;
+      branch: string | null;
+      pr_url: string | null;
+    };
+
 export interface DispatcherErrorBody {
   error: string;
   [key: string]: unknown;
@@ -106,6 +144,118 @@ export class DispatcherClient {
 
     return (await res.json()) as RunResult;
   }
+
+  /**
+   * Stream `/run` with `Accept: text/event-stream`. Yields normalized
+   * events as they arrive. Terminates after a `result` event. The
+   * server always emits exactly one `result` even on internal failure,
+   * so the consumer loop reliably hits a terminal frame.
+   *
+   * Errors raised from this method (non-2xx response, parse failures)
+   * indicate the connection itself failed before any normalized event
+   * was emitted. In-band failures during the run arrive as `error`
+   * events followed by a non-zero `result` and are NOT thrown.
+   */
+  async *runStream(args: RunArgs): AsyncIterable<NormalizedEvent> {
+    const body = JSON.stringify({
+      scope: args.scope,
+      issue_id: args.issueId,
+      repo_url: args.repoUrl,
+      prompt: args.prompt,
+      engine: args.engine,
+      ...(args.model ? { model: args.model } : {}),
+      ...(args.timeoutMs ? { timeout_ms: args.timeoutMs } : {}),
+    });
+
+    const sig = await computeSignature(this.secret, body);
+
+    const fetchFn = this.fetchImpl;
+    const res = await fetchFn(`${stripTrailingSlash(this.url)}/run`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+        "X-Symphony-Signature": sig,
+      },
+      body,
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      let parsed: DispatcherErrorBody | string;
+      try {
+        parsed = JSON.parse(text) as DispatcherErrorBody;
+      } catch {
+        parsed = text;
+      }
+      throw new DispatcherError(res.status, parsed);
+    }
+    if (!res.body) {
+      throw new DispatcherError(0, "empty_stream_body");
+    }
+
+    for await (const event of parseSseEvents(res.body)) {
+      yield event;
+      if (event.type === "result") return;
+    }
+  }
+}
+
+/**
+ * Minimal SSE parser. Reads `data: <json>\n\n` frames from a
+ * ReadableStream of bytes, parses each frame as a NormalizedEvent, and
+ * yields it. Non-data lines (`event:`, `id:`, `:` comments) are
+ * ignored — we don't use them.
+ *
+ * Inlined rather than depending on `@cloudflare/sandbox`'s parser
+ * because (a) the linear-agent worker doesn't pull in that package and
+ * (b) keeping the wire-format reader local makes the cross-worker
+ * boundary easier to test.
+ */
+async function* parseSseEvents(
+  stream: ReadableStream<Uint8Array>,
+): AsyncIterable<NormalizedEvent> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let frameEnd: number;
+      while ((frameEnd = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, frameEnd);
+        buffer = buffer.slice(frameEnd + 2);
+        const parsed = parseSseFrame(frame);
+        if (parsed) yield parsed;
+      }
+    }
+    // Flush any trailing single-line frame (no double-newline).
+    if (buffer.length > 0) {
+      const parsed = parseSseFrame(buffer);
+      if (parsed) yield parsed;
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+}
+
+function parseSseFrame(frame: string): NormalizedEvent | null {
+  for (const line of frame.split("\n")) {
+    if (!line.startsWith("data:")) continue;
+    const json = line.slice(5).trim();
+    if (json.length === 0) continue;
+    try {
+      return JSON.parse(json) as NormalizedEvent;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 export async function computeSignature(

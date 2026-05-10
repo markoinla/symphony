@@ -4,6 +4,7 @@ import { buildApp, type Env } from "../src/index";
 import { computeLinearSignature } from "../src/lib/signature";
 import { runSession, summarizeStdout } from "../src/routes/webhook";
 import type { AgentSessionEventWebhook } from "../src/types/agent-session";
+import { FakeD1 } from "./helpers/fake-d1";
 
 /**
  * Captured Linear `agentActivityCreate` mutations for the current test.
@@ -56,6 +57,7 @@ function makeEnv(
   return {
     LINEAR_TOKENS: kv as unknown as KVNamespace,
     SESSION_RUNNER: sessionRunner as unknown as Workflow,
+    DB: new FakeD1() as unknown as D1Database,
     LINEAR_CLIENT_ID: "client",
     LINEAR_CLIENT_SECRET: "secret",
     LINEAR_WEBHOOK_SECRET: LINEAR_SECRET,

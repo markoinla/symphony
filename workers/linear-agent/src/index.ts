@@ -1,17 +1,23 @@
 import { Hono } from "hono";
 
+import { buildAdminRouter } from "./routes/admin";
 import { buildOAuthRouter } from "./routes/oauth";
 import { buildWebhookRouter } from "./routes/webhook";
 
 export interface Env {
-  // KV namespace storing the agent's `actor=app` access token, OAuth
-  // state nonce, and webhook delivery dedupe markers.
+  // KV namespace storing OAuth state nonces and webhook delivery
+  // dedupe markers. As of item 3, the install access token lives in
+  // D1 (`installations.access_token`), not here.
   LINEAR_TOKENS: KVNamespace;
 
   // Cloudflare Workflow binding for SessionRunner — drives a single
   // Agent Session through load → thought → dispatch → terminal with
   // per-step durability. See src/workflows/session-runner.ts.
   SESSION_RUNNER: Workflow;
+
+  // D1 database with `installations` + `projects` tables. See
+  // migrations/0001_init.sql and src/lib/store.ts.
+  DB: D1Database;
 
   // Linear OAuth + webhook secrets
   LINEAR_CLIENT_ID: string;
@@ -25,11 +31,26 @@ export interface Env {
   // Public origin of this worker (used to build OAuth callback URL)
   URL: string;
 
-  // Run defaults — temporary stand-ins for D1 project rows.
+  // Run defaults — used when no per-project D1 row exists yet.
+  // PROJECT_MAPPINGS_JSON stays as a fallback during the D1 cutover
+  // so deploys without a seeded DB keep working.
   DEFAULT_SCOPE: string;
   DEFAULT_MODEL: string;
   DEFAULT_ENGINE: string;
   PROJECT_MAPPINGS_JSON: string;
+  // Max turns per session. Project rows override this. Defaults to 10
+  // when neither is present.
+  DEFAULT_MAX_TURNS?: string;
+
+  // Shared secret guarding `/admin/*` routes (project CRUD). Set with
+  // `wrangler secret put ADMIN_TOKEN`. When unset, admin routes 403.
+  ADMIN_TOKEN?: string;
+
+  // GitHub PAT used by the post-dispatch step to create the PR and
+  // apply the `symphony` label. Set with
+  // `wrangler secret put GITHUB_TOKEN`. When unset, the workflow
+  // posts the branch info as a thought but skips PR creation.
+  GITHUB_TOKEN?: string;
 }
 
 // Re-export the Workflow class so wrangler's class_name resolution finds
@@ -51,6 +72,7 @@ export function buildApp() {
 
   app.route("/", buildOAuthRouter());
   app.route("/", buildWebhookRouter());
+  app.route("/", buildAdminRouter());
 
   return app;
 }

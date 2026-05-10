@@ -33,6 +33,22 @@
     }
   ],
 
+  // D1 holds multi-tenant config: one `installations` row per Linear
+  // workspace OAuth, one `projects` row per Linear team. Replaces the
+  // single KV `access_token` and the `PROJECT_MAPPINGS_JSON` env var.
+  // Create the DB once with:
+  //   wrangler d1 create symphony-linear-agent
+  // then paste the printed `database_id` below and run:
+  //   wrangler d1 migrations apply symphony-linear-agent --remote
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "symphony-linear-agent",
+      "database_id": "<replace-with-d1-id-after-create>",
+      "migrations_dir": "migrations"
+    }
+  ],
+
   // Public-facing vars. URL must be the deployed origin so the OAuth
   // callback URL Linear redirects to matches what we register.
   // PROJECT_MAPPINGS_JSON is a temporary stand-in for D1 project rows:
@@ -68,6 +84,14 @@
           "name": "linear-agent-session-runner-dev",
           "binding": "SESSION_RUNNER",
           "class_name": "SessionRunner"
+        }
+      ],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "symphony-linear-agent-dev",
+          "database_id": "<replace-with-dev-d1-id>",
+          "migrations_dir": "migrations"
         }
       ],
       "vars": {

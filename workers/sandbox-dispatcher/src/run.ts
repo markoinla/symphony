@@ -1,9 +1,12 @@
 import { Hono } from "hono";
-import { getSandbox } from "@cloudflare/sandbox";
+import { getSandbox, parseSSEStream } from "@cloudflare/sandbox";
 
 import type { Env } from "./index";
 import { AuthBackupStore } from "./storage";
 import { SANDBOX_HOME, safeDestroy, sanitizeScopeForId } from "./sandbox-helpers";
+import { piEngineAdapter } from "./engines/pi";
+import type { EngineAdapter, NormalizedEvent } from "./engines/types";
+import { commitAndPush } from "./git";
 
 /**
  * `/run` — execute one agent turn in a fresh per-issue sandbox.
@@ -63,6 +66,19 @@ export function buildRunRouter() {
       return c.json({ error: parsed }, 400);
     }
 
+    // Streaming branch: the linear-agent Worker sets
+    // `Accept: text/event-stream` to receive normalized events as they
+    // happen (item 2 of SYM-267). Streaming requests are always 200 +
+    // SSE; the snapshot precondition and any other failure surfaces as
+    // an `error` event followed by a non-zero `result`. The legacy
+    // buffered path below keeps the existing 4xx semantics so
+    // non-streaming callers (smoke tests, the Elixir client) don't
+    // break.
+    const accept = c.req.header("accept") ?? "";
+    if (accept.includes("text/event-stream")) {
+      return runStreaming(c.env, parsed);
+    }
+
     const store = new AuthBackupStore(c.env.DB);
     const record = await store.get(parsed.scope);
     if (!record) {
@@ -106,12 +122,35 @@ export function buildRunRouter() {
       const cmd = buildEngineCommand(parsed, workspaceDir);
       const result = await sandbox.exec(cmd, { timeout: parsed.timeoutMs });
 
+      // Item 4: try to push the agent's commits to GitHub if a token
+      // is configured AND the engine exited cleanly. Push failures are
+      // surfaced as a `push_error` field on the response, not as an
+      // HTTP failure — the engine work itself still succeeded.
+      let branch: string | null = null;
+      let commitSha: string | null = null;
+      let pushError: string | null = null;
+      if (result.exitCode === 0 && c.env.DISPATCH_GITHUB_TOKEN) {
+        try {
+          const pushed = await commitAndPush(sandbox, workspaceDir, {
+            issueIdentifier: parsed.issueId,
+            githubToken: c.env.DISPATCH_GITHUB_TOKEN,
+          });
+          branch = pushed?.branch ?? null;
+          commitSha = pushed?.commit_sha ?? null;
+        } catch (e) {
+          pushError = e instanceof Error ? e.message : String(e);
+        }
+      }
+
       return c.json({
         engine: parsed.engine,
         exit_code: result.exitCode,
         stdout: result.stdout,
         stderr: result.stderr,
         duration_ms: Date.now() - startedAt,
+        branch,
+        commit_sha: commitSha,
+        push_error: pushError,
       });
     } finally {
       await safeDestroy(sandbox);
@@ -134,6 +173,203 @@ export function buildRunRouter() {
 
 export function runSandboxId(issueId: string): string {
   return `run-${sanitizeScopeForId(issueId)}`;
+}
+
+/**
+ * Streaming branch of `/run`. Same setup as the buffered branch (snap
+ * restore, clone, build engine command) but executes the engine via
+ * `sandbox.execStream` and pipes normalized engine events back as SSE.
+ *
+ * Wire format mirrors the engine-agnostic envelope in
+ * `src/engines/types.ts`. Each `data:` line is a JSON-encoded
+ * NormalizedEvent. The stream always terminates with exactly one
+ * `result` event (exit_code + duration_ms) followed by stream close,
+ * even on internal error — so the caller's reader loop always reaches
+ * a terminal frame.
+ *
+ * Backpressure / cancellation: if the caller disconnects, the writer's
+ * close() rejects, we catch it, and the `finally` block destroys the
+ * sandbox so a stale pi process doesn't keep burning CPU. (The pi
+ * subprocess inside the container exits when stdin closes; the
+ * container itself is destroyed by `safeDestroy`.)
+ */
+async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
+  const sandbox = getSandbox(env.Sandbox, runSandboxId(parsed.issueId));
+  const adapter = adapterFor(parsed.engine);
+  const startedAt = Date.now();
+
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+
+  async function emit(event: NormalizedEvent): Promise<void> {
+    const frame = `data: ${JSON.stringify(event)}\n\n`;
+    try {
+      await writer.write(encoder.encode(frame));
+    } catch {
+      // Reader has disconnected; swallow so the cleanup path runs.
+    }
+  }
+
+  async function emitTerminal(
+    exitCode: number,
+    options: {
+      message?: string;
+      branch?: string | null;
+    } = {},
+  ): Promise<void> {
+    if (options.message) {
+      await emit({ type: "error", message: options.message });
+    }
+    await emit({
+      type: "result",
+      exit_code: exitCode,
+      duration_ms: Date.now() - startedAt,
+      branch: options.branch ?? null,
+      // pr_url stays null on the dispatcher side — the linear-agent
+      // worker creates the PR after seeing this `result` event and
+      // attaches the URL to Linear directly.
+      pr_url: null,
+    });
+  }
+
+  // Run the dispatch in the background; the response Response object
+  // returns the readable end of the pipe immediately so SSE headers
+  // flush before the engine even starts.
+  void (async () => {
+    const record = await new AuthBackupStore(env.DB).get(parsed.scope);
+    try {
+      if (!record) {
+        // The non-streaming branch returns 412 for this case; in the
+        // streaming branch we've already committed to a 200 SSE
+        // response, so surface the same condition as an `error` event
+        // followed by a non-zero `result`.
+        await emitTerminal(75 /* EX_TEMPFAIL */, {
+          message: `missing_auth_backup: ${parsed.scope}`,
+        });
+        return;
+      }
+
+      await sandbox.restoreBackup(record.handle);
+
+      const workspaceDir = `/workspace/${parsed.issueId}`;
+      await sandbox.exec(`mkdir -p ${shellQuote(workspaceDir)}`);
+      await sandbox.exec(
+        `rm -rf ${shellQuote(workspaceDir)} && mkdir -p ${shellQuote(workspaceDir)}`,
+      );
+      const cloneResult = await sandbox.exec(
+        `cd ${shellQuote(workspaceDir)} && git clone ${shellQuote(parsed.repoUrl)} .`,
+      );
+      if (cloneResult.exitCode !== 0) {
+        await emitTerminal(cloneResult.exitCode, {
+          message: `clone_failed: ${cloneResult.stderr.slice(0, 500)}`,
+        });
+        return;
+      }
+
+      const cmd = buildEngineCommand(parsed, workspaceDir);
+      const execStream = await sandbox.execStream(cmd, {
+        timeout: parsed.timeoutMs,
+      });
+
+      // execStream returns an SSE stream of ExecEvent records. We
+      // line-buffer the `stdout` payloads so partial lines spanning two
+      // ExecEvent chunks parse correctly.
+      let stdoutBuffer = "";
+      let exitCode = 0;
+
+      for await (const ev of parseSSEStream<ExecEvent>(execStream)) {
+        if (ev.type === "stdout" && typeof ev.data === "string") {
+          stdoutBuffer += ev.data;
+          const lines = stdoutBuffer.split(/\r?\n/);
+          stdoutBuffer = lines.pop() ?? "";
+          for (const line of lines) {
+            for (const normalized of adapter.parseEvents(line)) {
+              await emit(normalized);
+            }
+          }
+        } else if (ev.type === "complete") {
+          exitCode = ev.exitCode ?? 0;
+        } else if (ev.type === "error") {
+          await emit({
+            type: "error",
+            message: ev.error ?? "engine_error",
+          });
+        }
+      }
+
+      // Flush any trailing buffered line that didn't end in a newline.
+      if (stdoutBuffer.length > 0) {
+        for (const normalized of adapter.parseEvents(stdoutBuffer)) {
+          await emit(normalized);
+        }
+      }
+
+      // Single-turn engines (pi today) get a synthetic `turn_end` so
+      // the client can attribute the prior activities to a turn.
+      // Multi-turn engines (future codex/claude) will emit this
+      // themselves and we'll skip this block.
+      await emit({ type: "turn_end", turn: 1, reason: "completed" });
+
+      // Item 4: commit and push to GitHub if the engine succeeded and
+      // a token is configured. Push failures don't fail the whole
+      // run — we surface them as an `error` event so users see them
+      // in the timeline, then continue to the result frame.
+      let branch: string | null = null;
+      if (exitCode === 0 && env.DISPATCH_GITHUB_TOKEN) {
+        try {
+          const pushed = await commitAndPush(sandbox, workspaceDir, {
+            issueIdentifier: parsed.issueId,
+            githubToken: env.DISPATCH_GITHUB_TOKEN,
+          });
+          branch = pushed?.branch ?? null;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          await emit({ type: "error", message: `push_failed: ${msg}` });
+        }
+      }
+
+      await emitTerminal(exitCode, { branch });
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      await emitTerminal(1, { message });
+    } finally {
+      try {
+        await writer.close();
+      } catch {}
+      await safeDestroy(sandbox);
+    }
+  })();
+
+  return new Response(readable, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      // Disable proxy buffering so Cloudflare's edge doesn't accumulate
+      // events before flushing to the caller.
+      "X-Accel-Buffering": "no",
+    },
+  });
+}
+
+interface ExecEvent {
+  type: "start" | "stdout" | "stderr" | "complete" | "error";
+  timestamp?: string;
+  data?: string;
+  command?: string;
+  exitCode?: number;
+  error?: string;
+  sessionId?: string;
+  pid?: number;
+}
+
+function adapterFor(engine: Engine): EngineAdapter {
+  switch (engine) {
+    case "pi":
+      return piEngineAdapter;
+  }
 }
 
 function parseRun(body: RunBody): ParsedRun | string {

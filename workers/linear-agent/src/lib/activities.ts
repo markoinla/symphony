@@ -135,3 +135,72 @@ export async function postElicitation(
     content: { type: "elicitation", body },
   });
 }
+
+/**
+ * Create an attachment on a Linear issue. Used by item 4 to surface
+ * the GitHub PR back in the issue's right-rail. Mirrors
+ * `Linear.Client.create_attachment` in
+ * `lib/symphony_elixir/linear/client.ex`.
+ */
+const ATTACHMENT_CREATE_MUTATION = `
+  mutation AttachmentCreate($input: AttachmentCreateInput!) {
+    attachmentCreate(input: $input) {
+      success
+      attachment { id url }
+    }
+  }
+`;
+
+export async function createAttachment(
+  accessToken: string,
+  args: {
+    issueId: string;
+    url: string;
+    title: string;
+    subtitle?: string;
+  },
+): Promise<{ success: boolean; attachmentId: string | null }> {
+  const res = await fetch(LINEAR_GRAPHQL_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: accessToken.startsWith("Bearer ")
+        ? accessToken
+        : `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      query: ATTACHMENT_CREATE_MUTATION,
+      variables: {
+        input: {
+          issueId: args.issueId,
+          url: args.url,
+          title: args.title,
+          ...(args.subtitle ? { subtitle: args.subtitle } : {}),
+        },
+      },
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `attachmentCreate http ${res.status}: ${(await res.text()).slice(0, 500)}`,
+    );
+  }
+  const json = (await res.json()) as {
+    data?: {
+      attachmentCreate?: {
+        success?: boolean;
+        attachment?: { id?: string };
+      };
+    };
+    errors?: Array<{ message: string }>;
+  };
+  if (json.errors && json.errors.length > 0) {
+    throw new Error(
+      `attachmentCreate graphql: ${json.errors.map((e) => e.message).join("; ")}`,
+    );
+  }
+  return {
+    success: json.data?.attachmentCreate?.success ?? false,
+    attachmentId: json.data?.attachmentCreate?.attachment?.id ?? null,
+  };
+}

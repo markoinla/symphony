@@ -78,4 +78,41 @@ export class OAuthHelper {
     }
     return (await res.json()) as OAuthTokenResponse;
   }
+
+  /**
+   * Fetch the organization id of the install by querying Linear's
+   * `viewer.organization.id` with the just-minted access token. The
+   * value is the primary key in our `installations` table.
+   */
+  static async fetchOrganizationId(accessToken: string): Promise<string> {
+    const res = await fetch("https://api.linear.app/graphql", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: accessToken.startsWith("Bearer ")
+          ? accessToken
+          : `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        query: "query { viewer { organization { id } } }",
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`viewer_query_failed: ${res.status} ${await res.text()}`);
+    }
+    const json = (await res.json()) as {
+      data?: { viewer?: { organization?: { id?: string } } };
+      errors?: Array<{ message: string }>;
+    };
+    if (json.errors && json.errors.length > 0) {
+      throw new Error(
+        `viewer_query_errors: ${json.errors.map((e) => e.message).join("; ")}`,
+      );
+    }
+    const orgId = json.data?.viewer?.organization?.id;
+    if (!orgId) {
+      throw new Error("viewer_query_missing_organization_id");
+    }
+    return orgId;
+  }
 }
