@@ -13,6 +13,12 @@ defmodule SymphonyElixir.Worker.Backend.SSHStatic do
   alias SymphonyElixir.SSH
   alias SymphonyElixir.Worker.Lease
 
+  # Lease ids are encoded as `ssh:<host>|<identifier>`. We use `|` instead of
+  # `:` between host and identifier so SSH host:port targets (e.g.
+  # `worker.example:2200`) and bracketed IPv6 literals (e.g. `[::1]:2200`)
+  # round-trip without their port being parsed off as part of the identifier.
+  @host_separator "|"
+
   @impl true
   def acquire(issue, opts \\ []) do
     case Keyword.get(opts, :host) do
@@ -21,7 +27,7 @@ defmodule SymphonyElixir.Worker.Backend.SSHStatic do
 
         {:ok,
          %Lease{
-           id: "ssh:" <> host <> ":" <> identifier,
+           id: "ssh:" <> host <> @host_separator <> identifier,
            backend: __MODULE__,
            host: host,
            meta: %{identifier: identifier, ssh_target: host}
@@ -34,18 +40,17 @@ defmodule SymphonyElixir.Worker.Backend.SSHStatic do
 
   @impl true
   def resolve(lease_id, _opts \\ []) when is_binary(lease_id) do
-    case String.split(lease_id, ":", parts: 3) do
-      ["ssh", host, identifier] when host != "" ->
-        {:ok,
-         %Lease{
-           id: lease_id,
-           backend: __MODULE__,
-           host: host,
-           meta: %{identifier: identifier, ssh_target: host}
-         }}
-
-      _ ->
-        {:error, :invalid_lease_id}
+    with ["ssh", rest] <- String.split(lease_id, ":", parts: 2),
+         [host, identifier] when host != "" <- String.split(rest, @host_separator, parts: 2) do
+      {:ok,
+       %Lease{
+         id: lease_id,
+         backend: __MODULE__,
+         host: host,
+         meta: %{identifier: identifier, ssh_target: host}
+       }}
+    else
+      _ -> {:error, :invalid_lease_id}
     end
   end
 

@@ -523,6 +523,12 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   @doc false
+  @spec candidate_leases_for_test(map(), keyword()) :: [Lease.t()]
+  def candidate_leases_for_test(issue, opts) do
+    candidate_leases(issue, opts)
+  end
+
+  @doc false
   @spec extract_pr_url_for_test(String.t()) :: String.t() | nil
   def extract_pr_url_for_test(content) when is_binary(content) do
     case Regex.run(@pr_url_regex, content) do
@@ -608,15 +614,36 @@ defmodule SymphonyElixir.AgentRunner do
   defp candidate_leases(issue, opts) do
     case Keyword.get(opts, :lease) do
       %Lease{} = lease ->
-        [lease]
+        # When the orchestrator has already chosen a lease, expand it into the
+        # full preferred-then-rest candidate list for SSH-style backends so a
+        # transient failure on the chosen host can fail over to siblings within
+        # the same attempt. Backends with no peer pool (Local, future cloud
+        # sandboxes) just get a single-element list.
+        candidate_leases_from_preferred(issue, lease)
 
       _ ->
-        backend = Backend.current()
-        configured_hosts = Config.settings!().worker.ssh_hosts
-        worker_hosts = candidate_worker_hosts(Keyword.get(opts, :worker_host), configured_hosts)
-
-        Enum.map(worker_hosts, fn host -> acquire_lease!(backend, issue, host) end)
+        build_default_candidate_leases(issue, opts)
     end
+  end
+
+  defp candidate_leases_from_preferred(issue, %Lease{backend: Backend.SSHStatic, host: preferred} = lease) do
+    configured_hosts = Config.settings!().worker.ssh_hosts
+    worker_hosts = candidate_worker_hosts(preferred, configured_hosts)
+
+    Enum.map(worker_hosts, fn
+      ^preferred -> lease
+      host -> acquire_lease!(Backend.SSHStatic, issue, host)
+    end)
+  end
+
+  defp candidate_leases_from_preferred(_issue, %Lease{} = lease), do: [lease]
+
+  defp build_default_candidate_leases(issue, opts) do
+    backend = Backend.current()
+    configured_hosts = Config.settings!().worker.ssh_hosts
+    worker_hosts = candidate_worker_hosts(Keyword.get(opts, :worker_host), configured_hosts)
+
+    Enum.map(worker_hosts, fn host -> acquire_lease!(backend, issue, host) end)
   end
 
   defp acquire_lease!(backend, issue, host) do

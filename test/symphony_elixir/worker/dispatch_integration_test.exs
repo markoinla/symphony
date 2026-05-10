@@ -85,4 +85,37 @@ defmodule SymphonyElixir.Worker.DispatchIntegrationTest do
     lease = Orchestrator.build_dispatch_lease_for_test(issue, nil)
     assert lease.backend == Backend.Local
   end
+
+  describe "AgentRunner.candidate_leases (multi-host fallback)" do
+    test "expands a preferred SSHStatic lease into preferred + remaining ssh_hosts", %{issue: issue} do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        worker_ssh_hosts: ["worker-1.example", "worker-2.example", "worker-3.example"]
+      )
+
+      {:ok, preferred_lease} = Backend.SSHStatic.acquire(issue, host: "worker-2.example")
+
+      candidates = AgentRunner.candidate_leases_for_test(issue, lease: preferred_lease)
+
+      assert Enum.map(candidates, & &1.host) == [
+               "worker-2.example",
+               "worker-1.example",
+               "worker-3.example"
+             ]
+
+      # The preferred lease object itself is reused, not rebuilt.
+      assert hd(candidates) == preferred_lease
+    end
+
+    test "Local lease produces a single-element candidate list (no peer pool)", %{issue: issue} do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        worker_ssh_hosts: ["worker-1.example"]
+      )
+
+      {:ok, local_lease} = Backend.Local.acquire(issue)
+
+      candidates = AgentRunner.candidate_leases_for_test(issue, lease: local_lease)
+
+      assert candidates == [local_lease]
+    end
+  end
 end

@@ -11,7 +11,7 @@ defmodule SymphonyElixir.Worker.Backend.SSHStaticTest do
 
       assert lease.backend == SSHStatic
       assert lease.host == "worker-1.example:2200"
-      assert lease.id == "ssh:worker-1.example:2200:MT-32"
+      assert lease.id == "ssh:worker-1.example:2200|MT-32"
       assert lease.meta.ssh_target == "worker-1.example:2200"
     end
 
@@ -28,8 +28,27 @@ defmodule SymphonyElixir.Worker.Backend.SSHStaticTest do
       assert resolved.meta.ssh_target == "worker-1.example"
     end
 
+    test "round-trips lease ids whose host carries a :port" do
+      {:ok, lease} = SSHStatic.acquire(%{identifier: "MT-32"}, host: "worker.example:2200")
+      assert {:ok, resolved} = SSHStatic.resolve(lease.id)
+      assert resolved.host == "worker.example:2200"
+      assert resolved.meta.ssh_target == "worker.example:2200"
+      assert resolved.meta.identifier == "MT-32"
+    end
+
+    test "round-trips bracketed IPv6 host:port targets" do
+      {:ok, lease} = SSHStatic.acquire(%{identifier: "MT-32"}, host: "root@[::1]:2200")
+      assert {:ok, resolved} = SSHStatic.resolve(lease.id)
+      assert resolved.host == "root@[::1]:2200"
+      assert resolved.meta.identifier == "MT-32"
+    end
+
     test "rejects malformed ids" do
       assert {:error, :invalid_lease_id} = SSHStatic.resolve("not-an-ssh-lease")
+    end
+
+    test "rejects ids missing the host|identifier separator" do
+      assert {:error, :invalid_lease_id} = SSHStatic.resolve("ssh:worker.example")
     end
   end
 
