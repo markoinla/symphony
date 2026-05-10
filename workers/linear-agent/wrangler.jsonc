@@ -44,7 +44,7 @@
     {
       "binding": "DB",
       "database_name": "symphony-linear-agent",
-      "database_id": "<replace-with-d1-id-after-create>",
+      "database_id": "4453771e-e162-4c00-a014-52bf6152319e",
       "migrations_dir": "migrations"
     }
   ],
