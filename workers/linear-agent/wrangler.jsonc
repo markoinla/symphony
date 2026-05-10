@@ -1,0 +1,64 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "linear-agent",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-05-12",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": {
+    "enabled": true
+  },
+
+  // KV holds (a) the per-flow OAuth state nonce and (b) the agent's own
+  // installed `actor=app` access token. Single-org for the walking
+  // skeleton — multi-tenant config lives in D1 in a later phase.
+  // Create with: wrangler kv namespace create LINEAR_TOKENS
+  // Then paste the printed id below.
+  "kv_namespaces": [
+    {
+      "binding": "LINEAR_TOKENS",
+      "id": "<replace-with-kv-namespace-id>"
+    }
+  ],
+
+  // Public-facing vars. URL must be the deployed origin so the OAuth
+  // callback URL Linear redirects to matches what we register.
+  // PROJECT_MAPPINGS_JSON is a temporary stand-in for D1 project rows:
+  //   {"<linear-team-id>": "https://github.com/<owner>/<repo>.git"}
+  "vars": {
+    "URL": "https://linear-agent.<your-subdomain>.workers.dev",
+    "DISPATCHER_URL": "https://sandbox-dispatcher.<your-subdomain>.workers.dev",
+    "DEFAULT_SCOPE": "default",
+    "DEFAULT_MODEL": "anthropic/claude-sonnet-4-6",
+    "DEFAULT_ENGINE": "pi",
+    "PROJECT_MAPPINGS_JSON": "{}"
+  },
+
+  // Secrets — set with `wrangler secret put <NAME>`:
+  //   LINEAR_CLIENT_ID         — OAuth app Client ID
+  //   LINEAR_CLIENT_SECRET     — OAuth app Client Secret
+  //   LINEAR_WEBHOOK_SECRET    — webhook signing secret from the OAuth app
+  //   DISPATCH_HMAC_SECRET     — must match the dispatcher's secret of the
+  //                              same name (this worker calls the dispatcher
+  //                              over HTTP and signs requests itself).
+
+  "env": {
+    "dev": {
+      "name": "linear-agent-dev",
+      "kv_namespaces": [
+        {
+          "binding": "LINEAR_TOKENS",
+          "id": "<replace-with-dev-kv-namespace-id>"
+        }
+      ],
+      "vars": {
+        "URL": "http://localhost:8788",
+        "DISPATCHER_URL": "http://localhost:8787",
+        "DEFAULT_SCOPE": "default",
+        "DEFAULT_MODEL": "anthropic/claude-sonnet-4-6",
+        "DEFAULT_ENGINE": "pi",
+        "PROJECT_MAPPINGS_JSON": "{}"
+      }
+    }
+  }
+}

@@ -17,9 +17,12 @@ that aren't already in the original build plan.
 | 1. Pluggable `Worker.Backend` behaviour (Elixir)             | ✅ shipped | `1a76c32`, `230c023` (review fixes) |
 | 2. `sandbox-dispatcher` Worker scaffold + `/health` + HMAC   | ✅ shipped | `9f79a7e` |
 | 3. `/auth/bootstrap` + `/auth/snapshot` routes + Mix tasks   | ✅ shipped | `592d963` |
-| 4. `/run` route                                              | ⏭ next     | — |
-| 5. `Worker.Backend.CloudflareSandbox` Elixir impl            | pending    | — |
+| 4. `/run` route (engine: `pi`)                               | ✅ scaffolded — pending smoke test | this branch |
+| 4b. `workers/linear-agent` (Linear OAuth + webhook + Activity SDK) | ✅ scaffolded | this branch |
+| 5. `Worker.Backend.CloudflareSandbox` Elixir impl            | pending — may be skipped if we go fully Worker-driven | — |
 | 6. Cron snapshot refresh                                     | pending    | — |
+| 7. Cloudflare Workflow per agent session                     | pending — replaces inline `runSession` in linear-agent | — |
+| 8. D1 multi-tenant schema (orgs/projects/workflows)          | pending    | — |
 
 All commits are on PR #136 against `main`.
 
@@ -373,6 +376,77 @@ When you start Phase 4 (`/run` route):
   `acquire(issue, opts)` → POST `/run` (or split into `/run/prepare`
   + `exec`); `release(lease, opts)` → POST `/run/stop`. Reuse them.
 
+## Pi inside the snapshot
+
+Phase 4 added `engine: "pi"` to `/run`. The dispatcher just exec's
+`pi --print --mode json --model <model> '<prompt>'` inside the per-issue
+sandbox after restoring the operator's snapshot — so pi (the binary +
+its auth) must be present in `/root` before the snapshot is taken.
+
+Pi follows the same convention as `gh`/`claude`/`codex`: install
+*inside* the bootstrap PTY, snapshot, restore on each `/run`. Do **not**
+add pi to the Dockerfile — global npm installs land outside `/root` and
+won't be captured.
+
+In the bootstrap PTY:
+
+```bash
+# Persist npm globals under /root so they make it into the snapshot.
+mkdir -p /root/.npm-global
+npm config set prefix /root/.npm-global
+echo 'export PATH=/root/.npm-global/bin:$PATH' >> /root/.bashrc
+export PATH=/root/.npm-global/bin:$PATH
+
+# Install pi.
+npm install -g @mariozechner/pi-coding-agent
+pi --version
+
+# Authenticate provider(s). `/login` opens a browser-style flow inside
+# the PTY; pi stores credentials under /root/.pi/ (in the snapshot).
+pi /login                # interactive Anthropic login (Claude Pro/Max)
+# or set provider keys for non-subscription routes:
+#   export ANTHROPIC_API_KEY=...        ; pi /login api-key
+#   export CLOUDFLARE_AI_GATEWAY=...    ; pi config provider cloudflare-workers-ai
+```
+
+After exiting the PTY, run `mix symphony.auth.snapshot --scope <scope>`
+(or the equivalent dispatcher request) to capture the new state.
+
+`DEFAULT_MODEL` in `workers/linear-agent/wrangler.jsonc` selects which
+model pi targets at run time. Format is pi's `provider/id` shape:
+
+```
+anthropic/claude-sonnet-4-6                          # via /login or ANTHROPIC_API_KEY
+cloudflare-workers-ai/@cf/qwen/qwq-32b-preview       # via Workers AI
+openai/gpt-5                                         # via OPENAI_API_KEY
+```
+
+If pi reports a missing model/provider, re-bootstrap and configure it
+before re-running.
+
+## linear-agent worker
+
+`workers/linear-agent/` is the Cloudflare-side replacement for the
+Elixir `Orchestrator` + `Tracker` + `Linear.*` modules. It owns:
+
+- Linear OAuth (`actor=app`) at `/oauth/{authorize,callback,revoke}`.
+- Linear webhook receiver at `/webhook` for `AgentSessionEvent`s.
+- HMAC-signed calls to `sandbox-dispatcher` `/run` (same wire format as
+  `SymphonyElixir.Cloudflare.DispatcherClient` — pinned vector tested
+  in three places now).
+- Posting `thought` / `response` / `error` activities back to the
+  session via `linearClient.createAgentActivity`.
+
+For the walking-skeleton phase the worker is single-org, with project
+mappings in a JSON env var (`PROJECT_MAPPINGS_JSON`). D1 multi-tenant
+config is Phase 8.
+
+The webhook handler honors Linear's 5s ack and 10s first-activity SLAs
+by responding 200 immediately and running `runSession` inside
+`executionCtx.waitUntil`. Phase 7 swaps that body for a Cloudflare
+Workflow so the dispatcher call survives Worker restarts. The webhook
+contract itself doesn't change.
+
 ## Tooling quick-reference
 
 ```bash
@@ -388,11 +462,18 @@ mix format --check-formatted
 mix lint
 mix test test/symphony_elixir/worker/ test/symphony_elixir/cloudflare/
 
-# Worker validation
+# Worker validation — sandbox-dispatcher
 cd workers/sandbox-dispatcher
 npm install
-npm test                  # vitest run — 17 cases as of Phase 3
+npm test                  # vitest run (auth + run + hmac suites)
 npm run typecheck         # tsc --noEmit
 npm run build             # wrangler bundle (skip if no Docker)
 npm run dev               # wrangler dev → http://localhost:8787
+
+# Worker validation — linear-agent
+cd ../linear-agent
+npm install
+npm test                  # vitest run (dispatcher + webhook suites)
+npm run typecheck
+npm run dev               # wrangler dev → http://localhost:8788
 ```
