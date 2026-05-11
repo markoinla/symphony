@@ -400,6 +400,253 @@ describe("shellQuote", () => {
   });
 });
 
+describe("POST /run with credentials", () => {
+  it("injects credential env vars into the engine command", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-300"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      { exitCode: 0, stdout: '{"type":"response","body":"done"}', stderr: "" }, // engine
+    ];
+    sandboxHandles[runSandboxId("SYM-300")] = sandbox;
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-300",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "do something",
+      engine: "pi",
+      credentials: {
+        anthropic_api_key: "sk-ant-test123",
+        openai_api_key: "sk-openai-test456",
+      },
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const piCall = sandbox.execCalls.find((c) => c.cmd.includes("pi --print"));
+    expect(piCall?.cmd).toContain("export ANTHROPIC_API_KEY='sk-ant-test123'");
+    expect(piCall?.cmd).toContain("export OPENAI_API_KEY='sk-openai-test456'");
+  });
+
+  it("shell-quotes credential values containing single quotes", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-301"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+    ];
+    sandboxHandles[runSandboxId("SYM-301")] = sandbox;
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-301",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "go",
+      engine: "pi",
+      credentials: {
+        anthropic_api_key: "key'with'quotes",
+      },
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const piCall = sandbox.execCalls.find((c) => c.cmd.includes("pi --print"));
+    expect(piCall?.cmd).toContain("export ANTHROPIC_API_KEY='key'\\''with'\\''quotes'");
+  });
+
+  it("writes MCP config file when mcp_servers are provided", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-302"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      { exitCode: 0, stdout: "", stderr: "" }, // writeMcpConfig
+      { exitCode: 0, stdout: '{"type":"response","body":"ok"}', stderr: "" }, // engine
+    ];
+    sandboxHandles[runSandboxId("SYM-302")] = sandbox;
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-302",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "go",
+      engine: "pi",
+      credentials: {
+        mcp_servers: [
+          { name: "linear", url: "https://mcp.linear.app", token: "lin_tok_123" },
+        ],
+      },
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const mcpCall = sandbox.execCalls.find((c) => c.cmd.includes("mcp.json"));
+    expect(mcpCall).toBeDefined();
+    expect(mcpCall?.cmd).toContain("mkdir -p '/home/symphony/.config/pi'");
+    expect(mcpCall?.cmd).toContain("mcp.json");
+    // Verify the config JSON is written (via printf '%s')
+    expect(mcpCall?.cmd).toContain("linear");
+    expect(mcpCall?.cmd).toContain("Bearer lin_tok_123");
+  });
+
+  it("rejects invalid credential fields with 400", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-303",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "go",
+      engine: "pi",
+      credentials: {
+        anthropic_api_key: 12345, // not a string
+      },
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.error).toBe("invalid_credentials.anthropic_api_key");
+  });
+
+  it("rejects invalid mcp_servers entries with 400", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-304",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "go",
+      engine: "pi",
+      credentials: {
+        mcp_servers: [{ name: "x", url: "" }], // empty url
+      },
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.error).toBe("invalid_credentials.mcp_servers[0].url");
+  });
+
+  it("passes null credentials when field is absent (backward compatible)", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-305"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: '{"type":"response","body":"ok"}', stderr: "" },
+    ];
+    sandboxHandles[runSandboxId("SYM-305")] = sandbox;
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-305",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "go",
+      engine: "pi",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    // Should be exactly 4 exec calls (mkdir, rm, clone, engine) — no MCP config write
+    expect(sandbox.execCalls).toHaveLength(4);
+    const piCall = sandbox.execCalls[3];
+    expect(piCall?.cmd).not.toContain("ANTHROPIC_API_KEY");
+    expect(piCall?.cmd).not.toContain("mcp.json");
+  });
+
+  it("injects all supported credential env vars", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-306"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+    ];
+    sandboxHandles[runSandboxId("SYM-306")] = sandbox;
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-306",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "go",
+      engine: "pi",
+      credentials: {
+        cloudflare_account_id: "cf-acct-123",
+        cloudflare_api_token: "cf-tok-456",
+        anthropic_api_key: "sk-ant-789",
+        openai_api_key: "sk-oai-abc",
+        github_token: "ghp_def",
+      },
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const piCall = sandbox.execCalls.find((c) => c.cmd.includes("pi --print"));
+    expect(piCall?.cmd).toContain("export CLOUDFLARE_ACCOUNT_ID='cf-acct-123'");
+    expect(piCall?.cmd).toContain("export CLOUDFLARE_API_TOKEN='cf-tok-456'");
+    expect(piCall?.cmd).toContain("export ANTHROPIC_API_KEY='sk-ant-789'");
+    expect(piCall?.cmd).toContain("export OPENAI_API_KEY='sk-oai-abc'");
+    expect(piCall?.cmd).toContain("export GITHUB_TOKEN='ghp_def'");
+  });
+});
+
 describe("runSandboxId", () => {
   it("sanitizes Linear-style identifiers and lowercases", () => {
     expect(runSandboxId("SYM-162")).toBe("run-sym-162");
