@@ -1,24 +1,31 @@
 /**
  * D1-backed repository for the linear-agent worker.
  *
- * Two tables:
- *   - `installations` — one row per Linear org OAuth (replaces the
- *     single KV `access_token` from item 1).
- *   - `projects`     — per-team config: repo URL, engine, model,
- *     max_turns (replaces `PROJECT_MAPPINGS_JSON`).
+ * Three main tables (+ supporting tables):
+ *   - `organizations` — one row per Linear workspace install (orgId, name, plan)
+ *   - `installations` — actor=app OAuth token per org (org_id FK, access_token, refresh_token, scopes, status)
+ *   - `projects`      — per-team config: repo URL, engine, model, max_turns
+ *   - `users`         — dashboard logins with actor=user tokens
+ *   - `org_credentials` — per-org encrypted secrets (BYO API keys)
+ *   - `sessions`      — agent session records
+ *   - `usage`         — aggregated billing data per org
  *
- * Migration: see `workers/linear-agent/migrations/0001_init.sql`.
+ * Migration: see `workers/linear-agent/migrations/0002_multi_tenant.sql`.
  *
- * Style note: column names are SQL-flavored (`organization_id`,
+ * Style note: column names are SQL-flavored (`org_id`,
  * `max_turns`); the typed records mirror them via `snake_case` so we
  * don't have to remember which mapping is which. Callers that prefer
  * camelCase wrap the read in their own adapter.
  */
 
 export interface InstallationRecord {
-  organization_id: string;
+  id: number;
+  org_id: string;
   access_token: string;
+  refresh_token: string | null;
   scopes: string;
+  installed_by: string;
+  status: string;
   installed_at: string;
   refreshed_at: string;
 }
@@ -37,48 +44,53 @@ export class InstallationStore {
   constructor(private readonly db: D1Database) {}
 
   /**
-   * Insert or replace the installation token for an organization. The
+   * Insert or create the installation token for an organization. The
    * caller passes the token Linear returned from the OAuth code
-   * exchange. Multiple re-installs of the same org just overwrite the
-   * row.
+   * exchange. Multiple re-installs of the same org update the row.
    */
   async upsert(
-    organizationId: string,
+    orgId: string,
     accessToken: string,
+    refreshToken: string | null,
     scopes: string,
+    installedBy: string,
+    status: string = "active",
   ): Promise<void> {
     await this.db
       .prepare(
-        `INSERT INTO installations (organization_id, access_token, scopes)
-         VALUES (?, ?, ?)
-         ON CONFLICT(organization_id) DO UPDATE SET
-           access_token = excluded.access_token,
-           scopes       = excluded.scopes,
-           refreshed_at = datetime('now')`,
+        `INSERT INTO installations (org_id, access_token, refresh_token, scopes, installed_by, status)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(org_id) DO UPDATE SET
+           access_token  = excluded.access_token,
+           refresh_token = excluded.refresh_token,
+           scopes        = excluded.scopes,
+           installed_by  = excluded.installed_by,
+           status        = excluded.status,
+           refreshed_at  = datetime('now')`,
       )
-      .bind(organizationId, accessToken, scopes)
+      .bind(orgId, accessToken, refreshToken, scopes, installedBy, status)
       .run();
   }
 
-  async get(organizationId: string): Promise<InstallationRecord | null> {
+  async get(orgId: string): Promise<InstallationRecord | null> {
     return await this.db
       .prepare(
-        `SELECT organization_id, access_token, scopes, installed_at, refreshed_at
-         FROM installations WHERE organization_id = ?`,
+        `SELECT id, org_id, access_token, refresh_token, scopes, installed_by, status, installed_at, refreshed_at
+         FROM installations WHERE org_id = ?`,
       )
-      .bind(organizationId)
+      .bind(orgId)
       .first<InstallationRecord>();
   }
 
   /**
    * Single-org fallback for webhook deliveries that don't carry an
-   * `organizationId` field. If there's exactly one install, return it;
+   * `orgId` field. If there's exactly one install, return it;
    * otherwise return null and force the caller to look up by org id.
    */
   async getOnlyInstallation(): Promise<InstallationRecord | null> {
     const result = await this.db
       .prepare(
-        `SELECT organization_id, access_token, scopes, installed_at, refreshed_at
+        `SELECT id, org_id, access_token, refresh_token, scopes, installed_by, status, installed_at, refreshed_at
          FROM installations LIMIT 2`,
       )
       .all<InstallationRecord>();
@@ -86,10 +98,10 @@ export class InstallationStore {
     return result.results[0] ?? null;
   }
 
-  async delete(organizationId: string): Promise<boolean> {
+  async delete(orgId: string): Promise<boolean> {
     const result = await this.db
-      .prepare("DELETE FROM installations WHERE organization_id = ?")
-      .bind(organizationId)
+      .prepare("DELETE FROM installations WHERE org_id = ?")
+      .bind(orgId)
       .run();
     return (result.meta.changes ?? 0) > 0;
   }

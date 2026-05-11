@@ -100,18 +100,18 @@ export function buildAdminRouter() {
     // leak credentials.
     const result = await c.env.DB
       .prepare(
-        `SELECT organization_id, scopes, installed_at, refreshed_at
+        `SELECT org_id, scopes, installed_at, refreshed_at
          FROM installations ORDER BY installed_at DESC`,
       )
       .all<{
-        organization_id: string;
+        org_id: string;
         access_token?: string;
         scopes: string;
         installed_at: string;
         refreshed_at: string;
       }>();
     const installations = result.results.map((row) => ({
-      organization_id: row.organization_id,
+      org_id: row.org_id,
       scopes: row.scopes,
       installed_at: row.installed_at,
       refreshed_at: row.refreshed_at,

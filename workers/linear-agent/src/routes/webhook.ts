@@ -16,6 +16,7 @@ import {
   truncate,
 } from "../lib/session-helpers";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
+import { InstallationStore } from "../lib/store";
 
 // Re-exported so existing call sites (and tests) that imported these
 // from `routes/webhook` keep working after the helpers moved.
@@ -152,12 +153,29 @@ export async function runSession(
   env: Env,
   event: AgentSessionEventWebhook,
 ): Promise<void> {
-  const accessToken = await env.LINEAR_TOKENS.get("access_token");
+  const store = new InstallationStore(env.DB);
+
+  // Try to look up the installation by organizationId (preferred), then
+  // fall back to the single-installation lookup for single-org mode, then
+  // fall back to the legacy KV key for backward compat during cutover.
+  let accessToken: string | null = null;
+  if (event.organizationId) {
+    const install = await store.get(event.organizationId);
+    accessToken = install?.access_token ?? null;
+  }
+  if (!accessToken) {
+    const install = await store.getOnlyInstallation();
+    accessToken = install?.access_token ?? null;
+  }
+  if (!accessToken) {
+    accessToken = await env.LINEAR_TOKENS.get("access_token");
+  }
+
   if (!accessToken) {
     // Nothing we can post back to Linear without the token — log and bail.
     console.error(
       "no_access_token",
-      JSON.stringify({ session_id: event.agentSession.id }),
+      JSON.stringify({ session_id: event.agentSession.id, org_id: event.organizationId }),
     );
     return;
   }

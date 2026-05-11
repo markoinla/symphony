@@ -60,15 +60,12 @@ export function buildOAuthRouter() {
         `${c.env.URL}/oauth/callback`,
       );
 
-      // Look up the organization id so we can key the install by it.
-      // Falls back to the legacy single-tenant KV path if the viewer
-      // query fails (transient Linear API issue) — the next /oauth
-      // run can heal the D1 row.
-      let organizationId: string | null = null;
+      // Look up the organization id and installer user id.
+      // Falls back to legacy KV path if the viewer query fails (transient
+      // Linear API issue) — the next /oauth run can heal the D1 row.
+      let viewerInfo: { organizationId: string; userId: string } | null = null;
       try {
-        organizationId = await OAuthHelper.fetchOrganizationId(
-          token.access_token,
-        );
+        viewerInfo = await OAuthHelper.fetchViewerInfo(token.access_token);
       } catch (e) {
         console.error(
           "viewer_query_failed",
@@ -76,26 +73,27 @@ export function buildOAuthRouter() {
         );
       }
 
-      if (organizationId) {
+      if (viewerInfo) {
         await new InstallationStore(c.env.DB).upsert(
-          organizationId,
+          viewerInfo.organizationId,
           token.access_token,
+          null, // refresh_token not available from actor=app flow
           token.scope,
+          viewerInfo.userId,
+          "active",
         );
       }
 
-      // Keep the legacy KV key in sync during the cutover so any code
-      // path that still reads from it (none in production after item
-      // 3, but tests + the legacy `runSession` still rely on it) keeps
-      // working. Drop this once `runSession` is deleted.
-      await c.env.LINEAR_TOKENS.put("access_token", token.access_token);
+      // Clean up the OAuth state nonce. The legacy KV access_token key is
+      // no longer written here; all readers (webhook, session-runner) have
+      // D1 lookup paths with KV fallbacks for backward compat.
       await c.env.LINEAR_TOKENS.delete("oauth_state");
 
       return c.json({
         ok: true,
         message: "Agent installed. Mention or assign issues to it in Linear.",
         scope: token.scope,
-        organization_id: organizationId,
+        organization_id: viewerInfo?.organizationId ?? null,
       });
     } catch (e) {
       await c.env.LINEAR_TOKENS.delete("oauth_state");
@@ -134,8 +132,9 @@ export function buildOAuthRouter() {
       );
     }
     if (install) {
-      await store.delete(install.organization_id);
+      await store.delete(install.org_id);
     }
+    // Legacy KV cleanup for backward compat (already removed from OAuth callback).
     await c.env.LINEAR_TOKENS.delete("access_token");
     return c.json({ ok: true });
   });

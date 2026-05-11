@@ -80,11 +80,13 @@ export class OAuthHelper {
   }
 
   /**
-   * Fetch the organization id of the install by querying Linear's
-   * `viewer.organization.id` with the just-minted access token. The
-   * value is the primary key in our `installations` table.
+   * Fetch the organization id and installer user id by querying Linear's
+   * `viewer` with the just-minted access token. Returns an object with
+   * organizationId (primary key in `installations`) and userId (who installed).
    */
-  static async fetchOrganizationId(accessToken: string): Promise<string> {
+  static async fetchViewerInfo(
+    accessToken: string,
+  ): Promise<{ organizationId: string; userId: string }> {
     const res = await fetch("https://api.linear.app/graphql", {
       method: "POST",
       headers: {
@@ -94,14 +96,14 @@ export class OAuthHelper {
           : `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
-        query: "query { viewer { organization { id } } }",
+        query: "query { viewer { id organization { id } } }",
       }),
     });
     if (!res.ok) {
       throw new Error(`viewer_query_failed: ${res.status} ${await res.text()}`);
     }
     const json = (await res.json()) as {
-      data?: { viewer?: { organization?: { id?: string } } };
+      data?: { viewer?: { id?: string; organization?: { id?: string } } };
       errors?: Array<{ message: string }>;
     };
     if (json.errors && json.errors.length > 0) {
@@ -110,9 +112,19 @@ export class OAuthHelper {
       );
     }
     const orgId = json.data?.viewer?.organization?.id;
-    if (!orgId) {
-      throw new Error("viewer_query_missing_organization_id");
+    const userId = json.data?.viewer?.id;
+    if (!orgId || !userId) {
+      throw new Error("viewer_query_missing_required_fields");
     }
-    return orgId;
+    return { organizationId: orgId, userId };
+  }
+
+  /**
+   * Backward compat: fetch organization id only.
+   * @deprecated Use fetchViewerInfo instead.
+   */
+  static async fetchOrganizationId(accessToken: string): Promise<string> {
+    const info = await this.fetchViewerInfo(accessToken);
+    return info.organizationId;
   }
 }
