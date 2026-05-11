@@ -9,12 +9,9 @@ import { InstallationStore, UserStore } from "../lib/store";
  * - `GET /oauth/authorize` → redirects to Linear's consent screen with
  *   `actor=app` so the install creates a dedicated agent user.
  * - `GET /oauth/callback` → exchanges the code for an access token and
- *   stores it in KV under `access_token`.
- * - `GET /oauth/revoke` → revokes the token at Linear and clears KV.
- *
- * Single-org for now: there's exactly one `access_token` key. Re-running
- * the authorize flow overwrites it. Multi-org support moves these into
- * D1 keyed by `organizationId` later.
+ *   stores it in D1 `installations` keyed by `organizationId`.
+ * - `GET /oauth/revoke` → revokes the token at Linear and removes the
+ *   D1 installation row.
  */
 
 export function buildOAuthRouter() {
@@ -61,9 +58,8 @@ export function buildOAuthRouter() {
       );
 
       // Look up the organization id so we can key the install by it.
-      // Falls back to the legacy single-tenant KV path if the viewer
-      // query fails (transient Linear API issue) — the next /oauth
-      // run can heal the D1 row.
+      // If the viewer query fails (transient Linear API issue), the
+      // token is not persisted — the next /oauth run can heal the row.
       let organizationId: string | null = null;
       try {
         organizationId = await OAuthHelper.fetchOrganizationId(
@@ -84,7 +80,6 @@ export function buildOAuthRouter() {
         );
       }
 
-      await c.env.LINEAR_TOKENS.put("access_token", token.access_token);
       await c.env.LINEAR_TOKENS.delete("oauth_state");
 
       // After agent install, redirect the installer through the user
@@ -228,22 +223,17 @@ export function buildOAuthRouter() {
   });
 
   app.get("/oauth/revoke", async (c) => {
-    // Revoke either by query param `organization_id` or, when there's
-    // exactly one install, the implicit only-install.
     const orgQuery = c.req.query("organization_id");
     const store = new InstallationStore(c.env.DB);
     const install = orgQuery
       ? await store.get(orgQuery)
       : await store.getOnlyInstallation();
-    const token =
-      install?.access_token ??
-      (await c.env.LINEAR_TOKENS.get("access_token"));
-    if (!token) {
+    if (!install) {
       return c.json({ error: "no_token" }, 400);
     }
     const res = await fetch("https://api.linear.app/oauth/revoke", {
       method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${install.access_token}` },
     });
     if (!res.ok) {
       return c.json(
@@ -251,10 +241,7 @@ export function buildOAuthRouter() {
         500,
       );
     }
-    if (install) {
-      await store.delete(install.organization_id);
-    }
-    await c.env.LINEAR_TOKENS.delete("access_token");
+    await store.delete(install.organization_id);
     return c.json({ ok: true });
   });
 

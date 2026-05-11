@@ -53,12 +53,13 @@ function makeEnv(
   kv: FakeKV,
   overrides: Partial<Env> = {},
   sessionRunner: WorkflowStub = makeWorkflowStub(),
+  db: FakeD1 = new FakeD1(),
 ): Env {
   return {
     ASSETS: { fetch: () => new Response("") } as unknown as Fetcher,
     LINEAR_TOKENS: kv as unknown as KVNamespace,
     SESSION_RUNNER: sessionRunner as unknown as Workflow,
-    DB: new FakeD1() as unknown as D1Database,
+    DB: db as unknown as D1Database,
     LINEAR_CLIENT_ID: "client",
     LINEAR_CLIENT_SECRET: "secret",
     LINEAR_WEBHOOK_SECRET: LINEAR_SECRET,
@@ -292,10 +293,22 @@ describe("POST /webhook routing", () => {
   });
 });
 
+function seededDb(): FakeD1 {
+  const db = new FakeD1();
+  db.installations.set("org-1", {
+    organization_id: "org-1",
+    access_token: "fake-token",
+    scopes: "read,write",
+    installed_at: new Date().toISOString(),
+    refreshed_at: new Date().toISOString(),
+  });
+  return db;
+}
+
 describe("runSession", () => {
   it("posts thought + response on a successful dispatcher run", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
 
     installFetchMock({
       body: {
@@ -318,10 +331,11 @@ describe("runSession", () => {
       },
     });
 
-    await runSession(makeEnv(kv), {
+    await runSession(makeEnv(kv, {}, undefined, db), {
       type: "AgentSessionEvent",
       action: "created",
       webhookId: "wh-2",
+      organizationId: "org-1",
       agentSession: {
         id: "session-2",
         issue: {
@@ -350,8 +364,8 @@ describe("runSession", () => {
 
   it("posts thought + error when no repo is configured for the team", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
-    const env = makeEnv(kv, { PROJECT_MAPPINGS_JSON: "{}" });
+    const db = seededDb();
+    const env = makeEnv(kv, { PROJECT_MAPPINGS_JSON: "{}" }, undefined, db);
 
     // Even the initial `thought` post hits Linear's GraphQL now that we
     // bypassed the SDK; install a mock so the post resolves and the
@@ -362,6 +376,7 @@ describe("runSession", () => {
       type: "AgentSessionEvent",
       action: "created",
       webhookId: "wh-3",
+      organizationId: "org-1",
       agentSession: {
         id: "session-3",
         issue: {
@@ -380,17 +395,18 @@ describe("runSession", () => {
 
   it("posts thought + error when the dispatcher returns 412", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
 
     installFetchMock({
       status: 412,
       body: { error: "missing_auth_backup", scope: "default" },
     });
 
-    await runSession(makeEnv(kv), {
+    await runSession(makeEnv(kv, {}, undefined, db), {
       type: "AgentSessionEvent",
       action: "created",
       webhookId: "wh-4",
+      organizationId: "org-1",
       agentSession: {
         id: "session-4",
         issue: {
@@ -410,7 +426,7 @@ describe("runSession", () => {
 
   it("posts thought + error when the engine exits non-zero", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
 
     installFetchMock({
       body: {
@@ -422,10 +438,11 @@ describe("runSession", () => {
       },
     });
 
-    await runSession(makeEnv(kv), {
+    await runSession(makeEnv(kv, {}, undefined, db), {
       type: "AgentSessionEvent",
       action: "created",
       webhookId: "wh-5",
+      organizationId: "org-1",
       agentSession: {
         id: "session-5",
         issue: {
@@ -443,9 +460,8 @@ describe("runSession", () => {
     expect(linearCalls[1]?.content.body).toContain("ENOENT");
   });
 
-  it("returns silently when no access_token is configured", async () => {
+  it("returns silently when no installation is configured", async () => {
     const kv = new FakeKV();
-    // No access_token put.
 
     await runSession(makeEnv(kv), {
       type: "AgentSessionEvent",
