@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { proxyToSandbox, type Sandbox as SandboxType } from "@cloudflare/sandbox";
 
 import { buildAuthRouter } from "./auth";
+import { buildBaselineRouter } from "./baselines";
 import { hmacMiddleware, type HmacEnv } from "./hmac";
 import { buildRunRouter } from "./run";
 import { buildRefreshRouter, refreshStaleSnapshots } from "./refresh";
@@ -47,6 +48,7 @@ export function buildApp() {
   );
 
   app.route("/", buildAuthRouter());
+  app.route("/", buildBaselineRouter());
   app.route("/", buildRunRouter());
   app.route("/", buildRefreshRouter());
 
