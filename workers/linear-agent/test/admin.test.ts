@@ -18,6 +18,7 @@ class FakeKV {
 
 function makeEnv(db: FakeD1, overrides: Partial<Env> = {}): Env {
   return {
+    ASSETS: { fetch: () => new Response("") } as unknown as Fetcher,
     LINEAR_TOKENS: new FakeKV() as unknown as KVNamespace,
     SESSION_RUNNER: { create: vi.fn() } as unknown as Workflow,
     DB: db as unknown as D1Database,

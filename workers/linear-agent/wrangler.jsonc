@@ -9,6 +9,13 @@
     "enabled": true
   },
 
+  // Static assets for the dashboard SPA. Built from dashboard/ via Vite.
+  // The Worker fetches from the ASSETS binding for /dashboard/* routes.
+  "assets": {
+    "directory": "./dashboard/dist",
+    "binding": "ASSETS"
+  },
+
   // KV holds (a) the per-flow OAuth state nonce and (b) the agent's own
   // installed `actor=app` access token. Single-org for the walking
   // skeleton — multi-tenant config lives in D1 in a later phase.
