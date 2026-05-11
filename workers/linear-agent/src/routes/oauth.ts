@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
 import { OAuthHelper } from "../lib/oauth-helper";
-import { InstallationStore } from "../lib/store";
+import { InstallationStore, UserStore } from "../lib/store";
 
 /**
  * OAuth routes for installing the agent into a Linear workspace.
@@ -84,21 +84,97 @@ export function buildOAuthRouter() {
         );
       }
 
-      // Keep the legacy KV key in sync during the cutover so any code
-      // path that still reads from it (none in production after item
-      // 3, but tests + the legacy `runSession` still rely on it) keeps
-      // working. Drop this once `runSession` is deleted.
       await c.env.LINEAR_TOKENS.put("access_token", token.access_token);
       await c.env.LINEAR_TOKENS.delete("oauth_state");
 
-      return c.json({
-        ok: true,
-        message: "Agent installed. Mention or assign issues to it in Linear.",
-        scope: token.scope,
-        organization_id: organizationId,
-      });
+      // After agent install, redirect the installer through the user
+      // OAuth flow so they also get a personal user token stored.
+      return c.redirect(`${c.env.URL}/oauth/user/authorize`);
     } catch (e) {
       await c.env.LINEAR_TOKENS.delete("oauth_state");
+      return c.json(
+        {
+          error: "token_exchange_failed",
+          message: e instanceof Error ? e.message : "unknown_error",
+        },
+        400,
+      );
+    }
+  });
+
+  // ── User OAuth flow ──────────────────────────────────────────────
+  // Separate from the agent install flow: no `actor=app`, only
+  // `read,write` scopes. Stores per-user tokens in D1 `users` table
+  // for dashboard login.
+
+  app.get("/oauth/user/authorize", async (c) => {
+    const state = OAuthHelper.generateState();
+    await c.env.LINEAR_TOKENS.put("oauth_user_state:" + state, "1", {
+      expirationTtl: 600,
+    });
+
+    const url = OAuthHelper.generateUserAuthorizationUrl(
+      c.env.LINEAR_CLIENT_ID,
+      `${c.env.URL}/oauth/user/callback`,
+      state,
+    );
+    return c.redirect(url);
+  });
+
+  app.get("/oauth/user/callback", async (c) => {
+    const code = c.req.query("code");
+    const state = c.req.query("state");
+    const error = c.req.query("error");
+
+    if (error) {
+      return c.json({ error: "authorization_failed", details: error }, 400);
+    }
+    if (!code || !state) {
+      return c.json({ error: "missing_parameters" }, 400);
+    }
+
+    const stored = await c.env.LINEAR_TOKENS.get("oauth_user_state:" + state);
+    if (!stored) {
+      return c.json({ error: "invalid_state" }, 400);
+    }
+
+    try {
+      const token = await OAuthHelper.exchangeCodeForToken(
+        code,
+        c.env.LINEAR_CLIENT_ID,
+        c.env.LINEAR_CLIENT_SECRET,
+        `${c.env.URL}/oauth/user/callback`,
+      );
+
+      const viewer = await OAuthHelper.fetchViewer(token.access_token);
+
+      const expiresAt = token.expires_in
+        ? new Date(Date.now() + token.expires_in * 1000).toISOString()
+        : null;
+
+      await new UserStore(c.env.DB).upsert({
+        linearUserId: viewer.id,
+        organizationId: viewer.organizationId,
+        accessToken: token.access_token,
+        refreshToken: (token as { refresh_token?: string }).refresh_token,
+        expiresAt,
+        email: viewer.email,
+        name: viewer.name,
+      });
+
+      await c.env.LINEAR_TOKENS.delete("oauth_user_state:" + state);
+
+      return c.json({
+        ok: true,
+        user: {
+          linear_user_id: viewer.id,
+          email: viewer.email,
+          name: viewer.name,
+          organization_id: viewer.organizationId,
+        },
+      });
+    } catch (e) {
+      await c.env.LINEAR_TOKENS.delete("oauth_user_state:" + state);
       return c.json(
         {
           error: "token_exchange_failed",

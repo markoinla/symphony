@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { InstallationStore, ProjectStore } from "../src/lib/store";
+import { InstallationStore, ProjectStore, UserStore } from "../src/lib/store";
 import { FakeD1 } from "./helpers/fake-d1";
 
 describe("InstallationStore", () => {
@@ -52,6 +52,88 @@ describe("InstallationStore", () => {
     await store.upsert("org-1", "tok", "read");
     expect(await store.delete("org-1")).toBe(true);
     expect(await store.delete("org-1")).toBe(false);
+  });
+});
+
+describe("UserStore", () => {
+  it("upserts and reads a user by linear_user_id", async () => {
+    const db = new FakeD1();
+    const store = new UserStore(db as unknown as D1Database);
+
+    await store.upsert({
+      linearUserId: "user-1",
+      organizationId: "org-1",
+      accessToken: "tok-abc",
+      email: "alice@example.com",
+      name: "Alice",
+    });
+
+    const row = await store.getByLinearUserId("user-1");
+    expect(row?.linear_user_id).toBe("user-1");
+    expect(row?.organization_id).toBe("org-1");
+    expect(row?.access_token).toBe("tok-abc");
+    expect(row?.email).toBe("alice@example.com");
+    expect(row?.name).toBe("Alice");
+    expect(row?.refresh_token).toBeNull();
+    expect(row?.expires_at).toBeNull();
+  });
+
+  it("overwrites token on re-auth", async () => {
+    const db = new FakeD1();
+    const store = new UserStore(db as unknown as D1Database);
+
+    await store.upsert({
+      linearUserId: "user-1",
+      organizationId: "org-1",
+      accessToken: "old-tok",
+    });
+    await store.upsert({
+      linearUserId: "user-1",
+      organizationId: "org-1",
+      accessToken: "new-tok",
+      refreshToken: "refresh-1",
+      expiresAt: "2026-06-01T00:00:00Z",
+    });
+
+    const row = await store.getByLinearUserId("user-1");
+    expect(row?.access_token).toBe("new-tok");
+    expect(row?.refresh_token).toBe("refresh-1");
+    expect(row?.expires_at).toBe("2026-06-01T00:00:00Z");
+  });
+
+  it("returns null for unknown user", async () => {
+    const db = new FakeD1();
+    const store = new UserStore(db as unknown as D1Database);
+    expect(await store.getByLinearUserId("nope")).toBeNull();
+  });
+
+  it("lists users scoped by organization_id", async () => {
+    const db = new FakeD1();
+    const store = new UserStore(db as unknown as D1Database);
+
+    await store.upsert({
+      linearUserId: "u-a",
+      organizationId: "org-1",
+      accessToken: "t1",
+    });
+    await store.upsert({
+      linearUserId: "u-b",
+      organizationId: "org-1",
+      accessToken: "t2",
+    });
+    await store.upsert({
+      linearUserId: "u-c",
+      organizationId: "org-2",
+      accessToken: "t3",
+    });
+
+    const org1Users = await store.listByOrg("org-1");
+    expect(org1Users).toHaveLength(2);
+    expect(org1Users.map((u) => u.linear_user_id).sort()).toEqual(["u-a", "u-b"]);
+
+    const org2Users = await store.listByOrg("org-2");
+    expect(org2Users).toHaveLength(1);
+    expect(org2Users[0].linear_user_id).toBe("u-c");
   });
 });
 

@@ -20,11 +20,24 @@ const REQUIRED_SCOPES = [
   "app:mentionable",
 ] as const;
 
+const USER_SCOPES = ["read", "write"] as const;
+
 export interface OAuthTokenResponse {
   access_token: string;
   token_type: string;
   expires_in: number;
   scope: string;
+}
+
+export interface UserOAuthTokenResponse extends OAuthTokenResponse {
+  refresh_token?: string;
+}
+
+export interface ViewerInfo {
+  id: string;
+  email: string;
+  name: string;
+  organizationId: string;
 }
 
 export class OAuthHelper {
@@ -48,6 +61,22 @@ export class OAuthHelper {
       // `actor=app` makes the install a first-class workspace user the
       // agent acts as. This is what enables Agent Session events.
       actor: "app",
+      prompt: "consent",
+    });
+    return `${AUTHORIZE_URL}?${params.toString()}`;
+  }
+
+  static generateUserAuthorizationUrl(
+    clientId: string,
+    redirectUri: string,
+    state: string,
+  ): string {
+    const params = new URLSearchParams({
+      client_id: clientId,
+      redirect_uri: redirectUri,
+      response_type: "code",
+      scope: USER_SCOPES.join(","),
+      state,
       prompt: "consent",
     });
     return `${AUTHORIZE_URL}?${params.toString()}`;
@@ -114,5 +143,50 @@ export class OAuthHelper {
       throw new Error("viewer_query_missing_organization_id");
     }
     return orgId;
+  }
+
+  static async fetchViewer(accessToken: string): Promise<ViewerInfo> {
+    const res = await fetch("https://api.linear.app/graphql", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: accessToken.startsWith("Bearer ")
+          ? accessToken
+          : `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({
+        query:
+          "query { viewer { id email name organization { id } } }",
+      }),
+    });
+    if (!res.ok) {
+      throw new Error(`viewer_query_failed: ${res.status} ${await res.text()}`);
+    }
+    const json = (await res.json()) as {
+      data?: {
+        viewer?: {
+          id?: string;
+          email?: string;
+          name?: string;
+          organization?: { id?: string };
+        };
+      };
+      errors?: Array<{ message: string }>;
+    };
+    if (json.errors && json.errors.length > 0) {
+      throw new Error(
+        `viewer_query_errors: ${json.errors.map((e) => e.message).join("; ")}`,
+      );
+    }
+    const viewer = json.data?.viewer;
+    if (!viewer?.id || !viewer.organization?.id) {
+      throw new Error("viewer_query_missing_fields");
+    }
+    return {
+      id: viewer.id,
+      email: viewer.email ?? "",
+      name: viewer.name ?? "",
+      organizationId: viewer.organization.id,
+    };
   }
 }
