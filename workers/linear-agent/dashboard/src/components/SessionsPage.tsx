@@ -35,6 +35,8 @@ export function SessionsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
 
   const loadSessions = useCallback(async () => {
     try {
@@ -56,14 +58,20 @@ export function SessionsPage() {
   useEffect(() => {
     const disconnect = connectSessionsSSE((event) => {
       if (event.type === "session_update") {
+        const s = event.session;
+        const f = filtersRef.current;
+        if (f.team && s.team !== f.team) return;
+        if (f.repo && !(s.repo ?? "").includes(f.repo)) return;
+        if (f.status && s.status !== f.status) return;
+        if (f.triggered_by && s.triggered_by !== f.triggered_by) return;
         setSessions((prev) => {
-          const idx = prev.findIndex((s) => s.id === event.session.id);
+          const idx = prev.findIndex((x) => x.id === s.id);
           if (idx >= 0) {
             const updated = [...prev];
-            updated[idx] = event.session;
+            updated[idx] = s;
             return updated;
           }
-          return [event.session, ...prev];
+          return [s, ...prev];
         });
       }
     });
