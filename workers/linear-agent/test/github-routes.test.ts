@@ -8,7 +8,7 @@ class FakeKV {
   async get(key: string) {
     return this.store.get(key) ?? null;
   }
-  async put(key: string, value: string) {
+  async put(key: string, value: string, _opts?: unknown) {
     this.store.set(key, value);
   }
   async delete(key: string) {
@@ -26,10 +26,14 @@ async function generateKekBase64(): Promise<string> {
   return btoa(String.fromCharCode(...new Uint8Array(raw)));
 }
 
-function makeEnv(db: FakeD1, overrides: Partial<Env> = {}): Env {
+function makeEnv(
+  db: FakeD1,
+  kv: FakeKV,
+  overrides: Partial<Env> = {},
+): Env {
   return {
     ASSETS: { fetch: () => new Response("") } as unknown as Fetcher,
-    LINEAR_TOKENS: new FakeKV() as unknown as KVNamespace,
+    LINEAR_TOKENS: kv as unknown as KVNamespace,
     SESSION_RUNNER: { create: vi.fn() } as unknown as Workflow,
     DB: db as unknown as D1Database,
     LINEAR_CLIENT_ID: "client",
@@ -67,21 +71,23 @@ describe("GET /github/install", () => {
   it("returns 503 when GITHUB_APP_SLUG is unset", async () => {
     const app = buildApp();
     const db = new FakeD1();
+    const kv = new FakeKV();
     const res = await app.fetch(
       new Request("https://agent.example/github/install"),
-      makeEnv(db),
+      makeEnv(db, kv),
       makeExecCtx(),
     );
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: "github_app_not_configured" });
   });
 
-  it("redirects to GitHub when slug is configured", async () => {
+  it("redirects to GitHub and stores state in KV", async () => {
     const app = buildApp();
     const db = new FakeD1();
+    const kv = new FakeKV();
     const res = await app.fetch(
       new Request("https://agent.example/github/install"),
-      makeEnv(db, { GITHUB_APP_SLUG: "symphony-dev" }),
+      makeEnv(db, kv, { GITHUB_APP_SLUG: "symphony-dev" }),
       makeExecCtx(),
     );
     expect(res.status).toBe(302);
@@ -90,6 +96,9 @@ describe("GET /github/install", () => {
       "https://github.com/apps/symphony-dev/installations/new",
     );
     expect(location).toContain("state=");
+
+    const stateParam = new URL(location).searchParams.get("state")!;
+    expect(kv.store.has(`gh_install_state:${stateParam}`)).toBe(true);
   });
 });
 
@@ -97,36 +106,57 @@ describe("GET /github/install/callback", () => {
   it("returns 400 when installation_id is missing", async () => {
     const app = buildApp();
     const db = new FakeD1();
+    const kv = new FakeKV();
     const res = await app.fetch(
       new Request("https://agent.example/github/install/callback"),
-      makeEnv(db),
+      makeEnv(db, kv),
       makeExecCtx(),
     );
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "missing_installation_id" });
   });
 
+  it("returns 400 for invalid/expired state", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    const kv = new FakeKV();
+    const res = await app.fetch(
+      new Request(
+        "https://agent.example/github/install/callback?installation_id=123&state=bad-state",
+      ),
+      makeEnv(db, kv, {
+        GITHUB_APP_ID: "app-123",
+        GITHUB_APP_PRIVATE_KEY: "fake",
+      }),
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid_or_expired_state" });
+  });
+
   it("returns 503 when GitHub App credentials are missing", async () => {
     const app = buildApp();
     const db = new FakeD1();
+    const kv = new FakeKV();
     const res = await app.fetch(
       new Request(
-        "https://agent.example/github/install/callback?installation_id=12345&org_id=test-org",
+        "https://agent.example/github/install/callback?installation_id=12345",
       ),
-      makeEnv(db),
+      makeEnv(db, kv),
       makeExecCtx(),
     );
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: "github_app_not_configured" });
   });
 
-  it("stores installation_id via updateGitHubAppInstallation", async () => {
+  it("verifies installation via GitHub API and stores install_id", async () => {
     const app = buildApp();
     const db = new FakeD1();
+    const kv = new FakeKV();
     const now = new Date().toISOString();
-    db.installations.set("test-org", {
+    db.installations.set("acme-corp", {
       id: 1,
-      org_id: "test-org",
+      org_id: "acme-corp",
       access_token: "tok",
       refresh_token: null,
       scopes: "read,write",
@@ -139,26 +169,63 @@ describe("GET /github/install/callback", () => {
 
     vi.stubGlobal(
       "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            id: 99999,
+            account: { login: "acme-corp", type: "Organization" },
+            repository_selection: "all",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    const res = await app.fetch(
+      new Request(
+        "https://agent.example/github/install/callback?installation_id=99999",
+      ),
+      makeEnv(db, kv, {
+        GITHUB_APP_ID: "123456",
+        GITHUB_APP_PRIVATE_KEY:
+          "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----",
+      }),
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.ok).toBe(true);
+    expect(body.installation_id).toBe(99999);
+    expect(body.account_login).toBe("acme-corp");
+
+    const row = db.installations.get("acme-corp")!;
+    expect(row.github_app_installation_id).toBe(99999);
+  });
+
+  it("returns 502 when GitHub API verification fails", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    const kv = new FakeKV();
+
+    vi.stubGlobal(
+      "fetch",
       vi.fn().mockResolvedValue(new Response("not found", { status: 404 })),
     );
 
     const res = await app.fetch(
       new Request(
-        "https://agent.example/github/install/callback?installation_id=99999&org_id=test-org",
+        "https://agent.example/github/install/callback?installation_id=99999",
       ),
-      makeEnv(db, {
+      makeEnv(db, kv, {
         GITHUB_APP_ID: "123456",
-        GITHUB_APP_PRIVATE_KEY: "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----",
+        GITHUB_APP_PRIVATE_KEY:
+          "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----",
       }),
       makeExecCtx(),
     );
-    expect(res.status).toBe(200);
-    const body = await res.json();
-    expect(body.ok).toBe(true);
-    expect(body.installation_id).toBe(99999);
-
-    const row = db.installations.get("test-org")!;
-    expect(row.github_app_installation_id).toBe(99999);
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.error).toBe("github_installation_verification_failed");
   });
 });
 
@@ -166,13 +233,14 @@ describe("admin credential routes", () => {
   it("rejects unauthenticated request", async () => {
     const app = buildApp();
     const db = new FakeD1();
+    const kv = new FakeKV();
     const res = await app.fetch(
       new Request("https://agent.example/admin/credentials/org-1/github_pat", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: "ghp_test" }),
       }),
-      makeEnv(db),
+      makeEnv(db, kv),
       makeExecCtx(),
     );
     expect(res.status).toBe(401);
@@ -181,6 +249,7 @@ describe("admin credential routes", () => {
   it("returns 503 when CREDENTIAL_KEK is not configured", async () => {
     const app = buildApp();
     const db = new FakeD1();
+    const kv = new FakeKV();
     const res = await app.fetch(
       authed(
         new Request(
@@ -192,7 +261,7 @@ describe("admin credential routes", () => {
           },
         ),
       ),
-      makeEnv(db),
+      makeEnv(db, kv),
       makeExecCtx(),
     );
     expect(res.status).toBe(503);
@@ -202,6 +271,7 @@ describe("admin credential routes", () => {
   it("stores and lists encrypted PAT credentials", async () => {
     const app = buildApp();
     const db = new FakeD1();
+    const kv = new FakeKV();
     const kek = await generateKekBase64();
 
     const putRes = await app.fetch(
@@ -215,7 +285,7 @@ describe("admin credential routes", () => {
           },
         ),
       ),
-      makeEnv(db, { CREDENTIAL_KEK: kek }),
+      makeEnv(db, kv, { CREDENTIAL_KEK: kek }),
       makeExecCtx(),
     );
     expect(putRes.status).toBe(200);
@@ -231,7 +301,7 @@ describe("admin credential routes", () => {
       authed(
         new Request("https://agent.example/admin/credentials/org-1"),
       ),
-      makeEnv(db, { CREDENTIAL_KEK: kek }),
+      makeEnv(db, kv, { CREDENTIAL_KEK: kek }),
       makeExecCtx(),
     );
     expect(listRes.status).toBe(200);
@@ -242,6 +312,7 @@ describe("admin credential routes", () => {
   it("deletes a PAT credential", async () => {
     const app = buildApp();
     const db = new FakeD1();
+    const kv = new FakeKV();
     const kek = await generateKekBase64();
 
     await app.fetch(
@@ -255,7 +326,7 @@ describe("admin credential routes", () => {
           },
         ),
       ),
-      makeEnv(db, { CREDENTIAL_KEK: kek }),
+      makeEnv(db, kv, { CREDENTIAL_KEK: kek }),
       makeExecCtx(),
     );
     expect(db.orgCredentials.has("org-1:github_pat")).toBe(true);
@@ -267,7 +338,7 @@ describe("admin credential routes", () => {
           { method: "DELETE" },
         ),
       ),
-      makeEnv(db, { CREDENTIAL_KEK: kek }),
+      makeEnv(db, kv, { CREDENTIAL_KEK: kek }),
       makeExecCtx(),
     );
     expect(delRes.status).toBe(200);

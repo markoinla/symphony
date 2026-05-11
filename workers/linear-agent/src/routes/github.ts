@@ -17,15 +17,20 @@ import { CredentialStore } from "../lib/credentials";
 import { createAppJwt } from "../lib/github-app";
 import { InstallationStore } from "../lib/store";
 
+const STATE_TTL_SECONDS = 600;
+
 export function buildGitHubRouter() {
   const app = new Hono<{ Bindings: Env }>();
 
-  app.get("/github/install", (c) => {
+  app.get("/github/install", async (c) => {
     const slug = c.env.GITHUB_APP_SLUG;
     if (!slug) {
       return c.json({ error: "github_app_not_configured" }, 503);
     }
     const state = crypto.randomUUID();
+    await c.env.LINEAR_TOKENS.put(`gh_install_state:${state}`, "1", {
+      expirationTtl: STATE_TTL_SECONDS,
+    });
     return c.redirect(
       `https://github.com/apps/${slug}/installations/new?state=${state}`,
     );
@@ -34,9 +39,20 @@ export function buildGitHubRouter() {
   app.get("/github/install/callback", async (c) => {
     const installationId = c.req.query("installation_id");
     const setupAction = c.req.query("setup_action");
+    const state = c.req.query("state");
 
     if (!installationId) {
       return c.json({ error: "missing_installation_id" }, 400);
+    }
+
+    if (state) {
+      const stored = await c.env.LINEAR_TOKENS.get(
+        `gh_install_state:${state}`,
+      );
+      if (!stored) {
+        return c.json({ error: "invalid_or_expired_state" }, 400);
+      }
+      await c.env.LINEAR_TOKENS.delete(`gh_install_state:${state}`);
     }
 
     if (setupAction === "request") {
@@ -58,35 +74,39 @@ export function buildGitHubRouter() {
       return c.json({ error: "github_app_not_configured" }, 503);
     }
 
-    let accountLogin = "unknown";
-
-    try {
-      const jwt = await createAppJwt(appId, privateKey);
-      const res = await fetch(
-        `https://api.github.com/app/installations/${ghInstallId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${jwt}`,
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-            "User-Agent": "symphony-github-app",
-          },
+    const jwt = await createAppJwt(appId, privateKey);
+    const ghRes = await fetch(
+      `https://api.github.com/app/installations/${ghInstallId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "symphony-github-app",
         },
+      },
+    );
+
+    if (!ghRes.ok) {
+      return c.json(
+        {
+          error: "github_installation_verification_failed",
+          status: ghRes.status,
+        },
+        502,
       );
-      if (res.ok) {
-        const data = (await res.json()) as {
-          account?: { login?: string };
-        };
-        accountLogin = data.account?.login ?? accountLogin;
-      }
-    } catch {
-      // Non-fatal: we still store the install_id even if the lookup fails
     }
 
-    const orgId = c.req.query("org_id") ?? accountLogin;
+    const data = (await ghRes.json()) as {
+      account?: { login?: string };
+    };
+    const accountLogin = data.account?.login;
+    if (!accountLogin) {
+      return c.json({ error: "github_account_not_found" }, 502);
+    }
 
     const store = new InstallationStore(c.env.DB);
-    await store.updateGitHubAppInstallation(orgId, ghInstallId);
+    await store.updateGitHubAppInstallation(accountLogin, ghInstallId);
 
     return c.json({
       ok: true,
