@@ -1,10 +1,14 @@
 import { Hono } from "hono";
 
 import { buildAdminRouter } from "./routes/admin";
+import { buildDashboardRouter } from "./routes/dashboard";
 import { buildOAuthRouter } from "./routes/oauth";
 import { buildWebhookRouter } from "./routes/webhook";
 
 export interface Env {
+  // Static assets for the dashboard SPA (served at /dashboard/*)
+  ASSETS: Fetcher;
+
   // KV namespace storing OAuth state nonces and webhook delivery
   // dedupe markers. As of item 3, the install access token lives in
   // D1 (`installations.access_token`), not here.
@@ -70,6 +74,7 @@ export function buildApp() {
 
   app.get("/health", (c) => c.json({ ok: true }));
 
+  app.route("/", buildDashboardRouter());
   app.route("/", buildOAuthRouter());
   app.route("/", buildWebhookRouter());
   app.route("/", buildAdminRouter());

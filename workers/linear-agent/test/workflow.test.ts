@@ -52,6 +52,7 @@ function makeEnv(
   db: FakeD1 = new FakeD1(),
 ): Env {
   return {
+    ASSETS: { fetch: () => new Response("") } as unknown as Fetcher,
     LINEAR_TOKENS: kv as unknown as KVNamespace,
     SESSION_RUNNER: {} as Workflow,
     DB: db as unknown as D1Database,

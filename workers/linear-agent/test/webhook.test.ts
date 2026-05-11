@@ -55,6 +55,7 @@ function makeEnv(
   sessionRunner: WorkflowStub = makeWorkflowStub(),
 ): Env {
   return {
+    ASSETS: { fetch: () => new Response("") } as unknown as Fetcher,
     LINEAR_TOKENS: kv as unknown as KVNamespace,
     SESSION_RUNNER: sessionRunner as unknown as Workflow,
     DB: new FakeD1() as unknown as D1Database,
