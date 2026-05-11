@@ -17,7 +17,9 @@
     "better-auth": "^1.6.10",
     "better-auth-cloudflare": "^0.3.0",
     "drizzle-orm": "^0.45.2",
-    "hono": "^4.7.0"
+    "hono": "^4.7.0",
+    "liquidjs": "^10.25.7",
+    "zod": "^4.0.0"
   },
   "devDependencies": {
     "@better-auth/cli": "1.5.0-beta.13",
