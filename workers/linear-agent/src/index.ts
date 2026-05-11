@@ -1,13 +1,17 @@
 import { Hono } from "hono";
 
 import { buildAdminRouter } from "./routes/admin";
+import { buildDashboardApiRouter } from "./routes/dashboard-api";
+import { buildDashboardRouter } from "./routes/dashboard";
 import { buildOAuthRouter } from "./routes/oauth";
 import { buildWebhookRouter } from "./routes/webhook";
 
 export interface Env {
+  // Static assets for the dashboard SPA (served at /dashboard/*)
+  ASSETS: Fetcher;
+
   // KV namespace storing OAuth state nonces and webhook delivery
-  // dedupe markers. As of item 3, the install access token lives in
-  // D1 (`installations.access_token`), not here.
+  // dedupe markers. Install access tokens live in D1 `installations`.
   LINEAR_TOKENS: KVNamespace;
 
   // Cloudflare Workflow binding for SessionRunner — drives a single
@@ -32,12 +36,9 @@ export interface Env {
   URL: string;
 
   // Run defaults — used when no per-project D1 row exists yet.
-  // PROJECT_MAPPINGS_JSON stays as a fallback during the D1 cutover
-  // so deploys without a seeded DB keep working.
   DEFAULT_SCOPE: string;
   DEFAULT_MODEL: string;
   DEFAULT_ENGINE: string;
-  PROJECT_MAPPINGS_JSON: string;
   // Max turns per session. Project rows override this. Defaults to 10
   // when neither is present.
   DEFAULT_MAX_TURNS?: string;
@@ -50,7 +51,26 @@ export interface Env {
   // apply the `symphony` label. Set with
   // `wrangler secret put GITHUB_TOKEN`. When unset, the workflow
   // posts the branch info as a thought but skips PR creation.
+  // Deprecated: prefer Symphony GitHub App (GITHUB_APP_ID +
+  // GITHUB_APP_PRIVATE_KEY) which mints per-org installation tokens.
   GITHUB_TOKEN?: string;
+
+  // Symphony GitHub App credentials. When present, per-org
+  // installation tokens are minted via the GitHub App instead of
+  // using the org-wide GITHUB_TOKEN PAT. Set with:
+  //   wrangler secret put GITHUB_APP_ID
+  //   wrangler secret put GITHUB_APP_PRIVATE_KEY
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_PRIVATE_KEY?: string;
+
+  // URL to the GitHub App installation settings page. Shown on the
+  // dashboard Integrations tab as the "Manage" link for GitHub.
+  GITHUB_APP_SETTINGS_URL?: string;
+
+  // Master KEK (base64-encoded AES-256 key) for envelope encryption
+  // of per-org credentials in the org_credentials table. Set with:
+  //   wrangler secret put CREDENTIAL_KEK
+  CREDENTIAL_KEK?: string;
 }
 
 // Re-export the Workflow class so wrangler's class_name resolution finds
@@ -70,6 +90,8 @@ export function buildApp() {
 
   app.get("/health", (c) => c.json({ ok: true }));
 
+  app.route("/", buildDashboardApiRouter());
+  app.route("/", buildDashboardRouter());
   app.route("/", buildOAuthRouter());
   app.route("/", buildWebhookRouter());
   app.route("/", buildAdminRouter());

@@ -9,10 +9,8 @@
 --                     `access_token` key from item 1.
 --
 --   projects        — per-team configuration (repo URL, default branch,
---                     engine, model, max_turns). Replaces the JSON
---                     env var `PROJECT_MAPPINGS_JSON`. A team without a
---                     row falls back to PROJECT_MAPPINGS_JSON during
---                     the cutover.
+--                     engine, model, max_turns). Superseded by the
+--                     multi-tenant schema in 0002_multi_tenant.sql.
 --
 -- `*_at` columns are ISO-8601 strings (datetime('now')) for readability
 -- in raw `wrangler d1 execute` queries. The dispatcher worker uses unix

@@ -603,6 +603,47 @@ describe("POST /run with credentials", () => {
     expect(piCall?.cmd).not.toContain("mcp.json");
   });
 
+  it("returns 502 when MCP config write fails", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-307"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      { exitCode: 1, stdout: "", stderr: "Permission denied" }, // writeMcpConfig fails
+    ];
+    sandboxHandles[runSandboxId("SYM-307")] = sandbox;
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-307",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "go",
+      engine: "pi",
+      credentials: {
+        mcp_servers: [
+          { name: "linear", url: "https://mcp.linear.app", token: "lin_tok_123" },
+        ],
+      },
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(502);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.error).toBe("mcp_config_write_failed");
+    expect(json.exit_code).toBe(1);
+    expect(json.stderr).toContain("Permission denied");
+    expect(sandbox.destroyed).toBe(true);
+    expect(sandbox.execCalls.find((c) => c.cmd.includes("pi --print"))).toBeUndefined();
+  });
+
   it("injects all supported credential env vars", async () => {
     const app = buildApp();
     const db = new FakeD1();

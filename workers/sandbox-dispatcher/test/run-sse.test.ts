@@ -445,4 +445,52 @@ describe("POST /run (Accept: text/event-stream)", () => {
     expect((events[3] as { exit_code: number }).exit_code).toBe(128);
     expect(sandbox.destroyed).toBe(true);
   });
+
+  it("emits error and result when MCP config write fails", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-312"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      { exitCode: 1, stdout: "", stderr: "Permission denied" }, // writeMcpConfig fails
+    ];
+    sandbox.streamScript = [];
+    sandboxHandles[runSandboxId("SYM-312")] = sandbox;
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-312",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+      credentials: {
+        mcp_servers: [
+          { name: "test-mcp", url: "https://mcp.example.com", token: "tok_abc" },
+        ],
+      },
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+    expect(events.map((e) => e.type)).toEqual([
+      "thought",
+      "thought",
+      "error",
+      "result",
+    ]);
+    expect((events[2] as { message: string }).message).toContain(
+      "mcp_config_write_failed",
+    );
+    expect((events[3] as { exit_code: number }).exit_code).toBe(1);
+    expect(sandbox.destroyed).toBe(true);
+  });
 });

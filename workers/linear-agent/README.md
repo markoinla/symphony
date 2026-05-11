@@ -58,14 +58,45 @@ wrangler secret put DISPATCH_HMAC_SECRET   # MUST match the dispatcher worker's
 # 4. Update wrangler.jsonc:
 #    - URL  → your deployed origin
 #    - DISPATCHER_URL → the sandbox-dispatcher origin
-#    - PROJECT_MAPPINGS_JSON → {"<linear-team-id>": "<repo-url>"}
 
-# 5. Deploy and install.
+# 5. Deploy and apply D1 migrations.
 wrangler deploy
+wrangler d1 migrations apply symphony-linear-agent --remote
+
+# 6. Seed your project(s) via the admin API:
+#    curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+#      -H "Content-Type: application/json" \
+#      -d '{"org_id":"<org-id>","linear_team_id":"<team-id>","repo_url":"https://github.com/<owner>/<repo>.git"}' \
+#      https://<your-worker>/admin/projects
 open https://linear-agent.<your-subdomain>.workers.dev/oauth/authorize
 ```
 
 After OAuth, mention the agent or assign it an issue in Linear.
+
+## D1 migrations
+
+The D1 database schema lives in `migrations/`. Apply migrations with:
+
+```bash
+# Local development (uses local SQLite file, no credentials needed)
+wrangler d1 migrations apply symphony-linear-agent --local
+
+# Production (requires Cloudflare auth)
+wrangler d1 migrations apply symphony-linear-agent --remote
+```
+
+Tables (v1 multi-tenant schema in `0002_multi_tenant.sql`):
+
+| Table | Purpose |
+|---|---|
+| `organizations` | One row per Linear workspace install |
+| `installations` | Per-org `actor=app` OAuth tokens |
+| `users` | Dashboard logins with per-user `actor=user` OAuth tokens |
+| `dashboard_sessions` | Session tokens mapping to users (httpOnly cookie storage) |
+| `projects` | Per-team config (repo URL, branch, engine/model overrides) |
+| `org_credentials` | Envelope-encrypted per-org secrets |
+| `sessions` | Agent session runs with status and cost |
+| `usage` | Aggregated turns/minutes per org per billing period |
 
 ## Development
 
@@ -76,6 +107,10 @@ npm test                         # vitest run
 npm run typecheck                # tsc --noEmit
 npm run dev                      # wrangler dev → http://localhost:8788
 ```
+
+**Dashboard access:** The dashboard at `/dashboard/*` requires session-based
+authentication. Complete the OAuth flow at `/oauth/authorize` to log in and
+create a session cookie.
 
 To exercise webhooks against a local `wrangler dev`, expose it via a
 tunnel (`cloudflared tunnel`, `ngrok`, etc.) and register the tunnel URL
@@ -99,6 +134,70 @@ The dispatcher call may take minutes (pi runs full agent turns). That is
 fine for the activity timeline but Worker invocation cost / CPU limits
 make this *not* a sustainable shape for production. Step 4 of the build
 plan replaces the inline `runSession` body with a Cloudflare Workflow.
+
+## Credential encryption
+
+Per-org secrets (BYO API keys for Anthropic, OpenAI, Cloudflare Workers AI,
+and custom MCP credentials) are stored in the `org_credentials` D1 table
+using envelope encryption:
+
+- A random **DEK** (AES-GCM-256) encrypts the plaintext.
+- A master **KEK** (AES-GCM-256, stored in Workers Secrets) wraps the DEK.
+- Both ciphertext and wrapped-DEK blobs are prefixed with a 12-byte random IV.
+- The `kek_version` column tracks which KEK version was used to wrap each DEK.
+
+Decryption happens only in `workers/linear-agent` — the dispatcher never
+sees plaintext credentials.
+
+### Setting up the KEK
+
+Generate a 256-bit base64-encoded key and store it as a Workers secret:
+
+```bash
+# Generate a random 256-bit key
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+
+# Store it (both dev and prod)
+wrangler secret put CREDENTIAL_KEK
+wrangler secret put CREDENTIAL_KEK --env production
+```
+
+### KEK rotation procedure
+
+1. **Generate a new KEK** and note the new version number (current + 1).
+
+2. **Store the new KEK** alongside the old one. During rollout, the worker
+   must be able to decrypt rows wrapped with the old KEK. The simplest
+   approach: set `CREDENTIAL_KEK` to the new key and keep the old key
+   available as `CREDENTIAL_KEK_PREV` (add to `Env` when implementing
+   rotation support).
+
+3. **Re-wrap existing DEKs**: run a migration script that, for each row
+   where `kek_version < new_version`:
+   - Unwraps the DEK with the old KEK
+   - Re-wraps the DEK with the new KEK
+   - Updates `dek_ciphertext` and `kek_version` in the row
+   - The plaintext and per-row DEK do **not** change — only the DEK wrapper
+
+   ```ts
+   // Pseudocode for the migration
+   const rows = await db.prepare(
+     "SELECT * FROM org_credentials WHERE kek_version < ?"
+   ).bind(newVersion).all();
+
+   for (const row of rows.results) {
+     const dek = await unwrapDek(row.dek_ciphertext, oldKek);
+     const newWrappedDek = await wrapDek(dek, newKek);
+     await db.prepare(
+       "UPDATE org_credentials SET dek_ciphertext = ?, kek_version = ?, updated_at = datetime('now') WHERE id = ?"
+     ).bind(newWrappedDek, newVersion, row.id).run();
+   }
+   ```
+
+4. **Verify**: confirm all rows now have `kek_version = new_version`.
+
+5. **Remove the old KEK** secret once all rows are re-wrapped and the
+   deploy is stable.
 
 ## Wire compat with the dispatcher
 

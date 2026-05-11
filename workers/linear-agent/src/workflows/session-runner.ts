@@ -4,7 +4,7 @@
  * from the last completed step instead of dropping the session.
  *
  * Steps:
- *   1. load-token            — read the install's access_token from KV.
+ *   1. load-token            — read the install's access_token from D1.
  *   2. post-initial-thought  — meet Linear's 10s first-activity SLA.
  *   3. resolve-inputs        — decide repo + prompt; classify outcome.
  *   4. turn-N (loop)         — stream the dispatcher's SSE response,
@@ -34,6 +34,7 @@ import {
   postThought,
 } from "../lib/activities";
 import { GitHubError, addLabels, createPr } from "../lib/github";
+import { mintInstallationToken } from "../lib/github-app";
 import { transitionIssue } from "../lib/issues";
 import {
   DispatcherClient,
@@ -41,12 +42,8 @@ import {
   type NormalizedEvent,
 } from "../lib/dispatcher";
 import { lastAssistantText, mapToActivity } from "../lib/event-mapper";
-import {
-  resolvePrompt,
-  resolveRepoUrl,
-  truncate,
-} from "../lib/session-helpers";
-import { InstallationStore, ProjectStore } from "../lib/store";
+import { resolvePrompt, truncate } from "../lib/session-helpers";
+import { AgentSessionStore, InstallationStore, ProjectStore } from "../lib/store";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
 
 export interface SessionRunnerParams {
@@ -61,6 +58,7 @@ type ResolvedInputs =
       engine: "pi";
       model: string | null;
       maxTurns: number;
+      scope: string;
     }
   | { kind: "no_repo" }
   | { kind: "no_prompt" };
@@ -78,13 +76,21 @@ type TurnOutcome =
       result: TurnResult;
       lastAssistant: string | null;
       inbandError: string | null;
+      eventSummary: EventSummaryItem[];
     }
   | {
       kind: "needs_continuation";
       result: TurnResult;
       lastAssistant: string | null;
+      eventSummary: EventSummaryItem[];
     }
   | { kind: "dispatch_error"; message: string };
+
+interface EventSummaryItem {
+  type: string;
+  timestamp: string;
+  body?: string;
+}
 
 const DEFAULT_MAX_TURNS = 10;
 const STDERR_TRUNCATE = 2000;
@@ -102,28 +108,29 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     const webhookEvent = event.payload.event;
     const sessionId = webhookEvent.agentSession.id;
 
-    // Look up the install for this delivery. New code path is D1
-    // `installations` keyed by `organizationId`; the legacy KV
-    // `access_token` is consulted as a fallback so single-org
-    // deployments that haven't seeded D1 yet keep working.
-    const token = await step.do("load-token", async () => {
+    const installInfo = await step.do("load-token", async () => {
       const installs = new InstallationStore(this.env.DB);
       const orgId = webhookEvent.organizationId;
       const install = orgId
         ? await installs.get(orgId)
         : await installs.getOnlyInstallation();
-      if (install) return install.access_token;
-      // Legacy single-tenant KV fallback.
-      return (await this.env.LINEAR_TOKENS.get("access_token")) ?? null;
+      if (!install) return null;
+      return {
+        token: install.access_token,
+        githubAppInstallationId: install.github_app_installation_id,
+      };
     });
 
-    if (!token) {
+    if (!installInfo) {
       console.error(
         "no_access_token",
         JSON.stringify({ session_id: sessionId }),
       );
       return { status: "no_token" };
     }
+
+    const token = installInfo.token;
+    const githubAppInstallationId = installInfo.githubAppInstallationId;
 
     await step.do("post-initial-thought", async () => {
       const linear = buildActivityClient(token);
@@ -142,15 +149,15 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           webhookEvent.agentSession.issue?.team?.id ??
           null;
 
-        // D1 project row is the primary source; PROJECT_MAPPINGS_JSON
-        // is a fallback for teams that haven't been seeded yet.
+        const orgId = webhookEvent.organizationId;
+        const projects = new ProjectStore(this.env.DB);
         const projectRow = teamId
-          ? await new ProjectStore(this.env.DB).get(teamId)
+          ? (orgId
+              ? await projects.getByTeamId(orgId, teamId)
+              : await projects.get(teamId))
           : null;
 
-        const repoUrl =
-          projectRow?.repo_url ??
-          resolveRepoUrl(this.env, webhookEvent.agentSession);
+        const repoUrl = projectRow?.repo_url ?? null;
         if (!repoUrl) return { kind: "no_repo" } as const;
 
         const prompt = resolvePrompt(webhookEvent);
@@ -163,16 +170,17 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           projectRow?.model ?? (this.env.DEFAULT_MODEL || null);
         const maxTurns =
           projectRow?.max_turns ?? parseMaxTurns(this.env.DEFAULT_MAX_TURNS);
+        const scope =
+          projectRow?.scope ?? this.env.DEFAULT_SCOPE ?? "default";
 
         return {
           kind: "ok",
           repoUrl,
           prompt,
-          // engine is "pi" today; cast keeps the workflow strict-typed
-          // even though D1 could in theory hold an unsupported string.
           engine: engine === "pi" ? "pi" : "pi",
           model,
           maxTurns,
+          scope,
         } as const;
       },
     );
@@ -182,7 +190,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         await postError(
           buildActivityClient(token),
           sessionId,
-          "No repository is configured for this team. Add one in `PROJECT_MAPPINGS_JSON` or the project config.",
+          "No repository is configured for this team. Add a project row via the admin API or dashboard.",
         );
       });
       return { status: "no_repo" };
@@ -224,10 +232,67 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       });
     }
 
+    // SYM-269: mint a per-org GitHub installation token if the org has
+    // installed the Symphony GitHub App. Falls back to env.GITHUB_TOKEN.
+    const githubToken: string | null = await step.do(
+      "mint-github-token",
+      async () => {
+        if (
+          githubAppInstallationId &&
+          this.env.GITHUB_APP_ID &&
+          this.env.GITHUB_APP_PRIVATE_KEY
+        ) {
+          try {
+            return await mintInstallationToken(
+              githubAppInstallationId,
+              this.env.GITHUB_APP_ID,
+              this.env.GITHUB_APP_PRIVATE_KEY,
+            );
+          } catch (e) {
+            console.error(
+              "github_app_token_mint_failed",
+              e instanceof Error ? e.message : String(e),
+            );
+          }
+        }
+        return this.env.GITHUB_TOKEN ?? null;
+      },
+    );
+
+    await step.do("record-session-start", async () => {
+      try {
+        await new AgentSessionStore(this.env.DB).create({
+          id: sessionId,
+          linearIssueId: issueGraphqlId,
+          linearIssueTitle:
+            webhookEvent.agentSession.issue?.title ?? null,
+          status: "running",
+          triggeredBy: webhookEvent.action,
+          team:
+            webhookEvent.agentSession.issue?.team?.key ??
+            webhookEvent.agentSession.issue?.teamId ??
+            null,
+          repo: resolved.repoUrl,
+          prompt: resolved.prompt,
+          configSnapshot: {
+            model: resolved.model,
+            max_turns: resolved.maxTurns,
+            engine: resolved.engine,
+          },
+        });
+      } catch (e) {
+        console.error(
+          "session_record_start_failed",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    });
+
     let prompt = resolved.prompt;
     let lastAssistant: string | null = null;
     let terminal: TurnOutcome | null = null;
     let turnsRun = 0;
+    const allEventSummaries: EventSummaryItem[] = [];
 
     for (let turn = 1; turn <= maxTurns; turn++) {
       turnsRun = turn;
@@ -242,12 +307,13 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         { retries: { limit: 0, delay: "1 second", backoff: "constant" } },
         async () =>
           runTurn(this.env, sessionId, token, {
-            scope: this.env.DEFAULT_SCOPE,
+            scope: resolved.scope,
             issueId: issueIdentifier,
             repoUrl: resolved.repoUrl,
             prompt: captured,
             engine: resolved.engine,
             model: resolved.model,
+            githubToken,
             turn,
           }),
       );
@@ -256,6 +322,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         terminal = outcome;
         break;
       }
+      allEventSummaries.push(...outcome.eventSummary);
       if (outcome.lastAssistant) lastAssistant = outcome.lastAssistant;
 
       if (outcome.kind === "done") {
@@ -272,6 +339,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           result: outcome.result,
           lastAssistant: outcome.lastAssistant,
           inbandError: "max_turns_reached",
+          eventSummary: [],
         };
         break;
       }
@@ -305,10 +373,10 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       terminal.kind === "done" &&
       terminal.result.exit_code === 0 &&
       terminal.result.branch &&
-      this.env.GITHUB_TOKEN
+      githubToken
     ) {
       const branch = terminal.result.branch;
-      const githubToken = this.env.GITHUB_TOKEN;
+      const prGithubToken = githubToken;
       const issueIdent = issueIdentifier;
       const responseBody = lastAssistant ?? `Symphony agent run for ${issueIdent}`;
 
@@ -325,14 +393,14 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
               body:
                 responseBody.slice(0, 4000) +
                 (issueGraphqlId ? `\n\n_Linear: \`${issueIdent}\`_` : ""),
-              token: githubToken,
+              token: prGithubToken,
             });
             try {
               await addLabels({
                 repoUrl: resolved.repoUrl,
                 prNumber: pr.number,
                 labels: ["symphony"],
-                token: githubToken,
+                token: prGithubToken,
               });
             } catch (e) {
               // Label failure is non-fatal — the PR still exists.
@@ -422,6 +490,38 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       }
     });
 
+    await step.do("record-session-end", async () => {
+      try {
+        const finalStatus =
+          terminal!.kind === "dispatch_error"
+            ? "error"
+            : terminal!.kind === "done" &&
+                terminal!.result.exit_code === 0
+              ? "completed"
+              : "error";
+        const errorMsg =
+          terminal!.kind === "dispatch_error"
+            ? terminal!.message
+            : terminal!.kind === "done" && terminal!.inbandError
+              ? terminal!.inbandError
+              : null;
+        await new AgentSessionStore(this.env.DB).update(sessionId, {
+          status: finalStatus,
+          completedAt: new Date().toISOString(),
+          error: errorMsg,
+          messages:
+            allEventSummaries.length > 0
+              ? JSON.stringify(allEventSummaries)
+              : null,
+        });
+      } catch (e) {
+        console.error(
+          "session_record_end_failed",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    });
+
     return {
       status: terminal.kind === "dispatch_error" ? "error" : "ok",
       exit_code:
@@ -451,6 +551,7 @@ async function runTurn(
     prompt: string;
     engine: "pi";
     model: string | null;
+    githubToken: string | null;
     turn: number;
   },
 ): Promise<TurnOutcome> {
@@ -473,6 +574,7 @@ async function runTurn(
       prompt: args.prompt,
       engine: args.engine,
       model: args.model,
+      githubToken: args.githubToken,
     })) {
       events.push(ev);
 
@@ -523,11 +625,12 @@ async function runTurn(
   }
 
   const lastAssistant = lastAssistantText(events);
+  const eventSummary = summarizeEvents(events);
 
   if (turnEndReason === "needs_continuation" && result.exit_code === 0) {
-    return { kind: "needs_continuation", result, lastAssistant };
+    return { kind: "needs_continuation", result, lastAssistant, eventSummary };
   }
-  return { kind: "done", result, lastAssistant, inbandError };
+  return { kind: "done", result, lastAssistant, inbandError, eventSummary };
 }
 
 function parseMaxTurns(raw: string | undefined): number {
@@ -551,6 +654,31 @@ function buildContinuationPrompt(
     ? `Previous turn's response:\n${previousAssistant}\n\n---\n`
     : "";
   return `${previous}Continuing the same task. Original request:\n\n${originalPrompt}`;
+}
+
+function summarizeEvents(events: NormalizedEvent[]): EventSummaryItem[] {
+  const now = new Date().toISOString();
+  return events
+    .filter((e) => e.type !== "turn_end")
+    .map((e) => {
+      const item: EventSummaryItem = { type: e.type, timestamp: now };
+      if (e.type === "thought" || e.type === "assistant_msg") {
+        item.body = truncate(e.text, 500);
+      } else if (e.type === "tool_call") {
+        const argStr =
+          typeof e.args === "string"
+            ? e.args
+            : JSON.stringify(e.args ?? "");
+        item.body = `${e.tool}(${truncate(argStr, 200)})`;
+      } else if (e.type === "tool_result") {
+        item.body = truncate(e.result ?? (e.ok ? "ok" : "error"), 200);
+      } else if (e.type === "error") {
+        item.body = e.message;
+      } else if (e.type === "result") {
+        item.body = `exit_code=${e.exit_code}`;
+      }
+      return item;
+    });
 }
 
 async function safe(fn: () => Promise<unknown>): Promise<void> {

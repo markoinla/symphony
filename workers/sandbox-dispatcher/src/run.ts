@@ -44,6 +44,7 @@ interface RunBody {
   model?: unknown;
   timeout_ms?: unknown;
   max_turns?: unknown;
+  github_token?: unknown;
   credentials?: unknown;
 }
 
@@ -75,6 +76,7 @@ interface ParsedRun {
   engine: Engine;
   model: string | null;
   timeoutMs: number;
+  githubToken: string | null;
   credentials: ParsedCredentials | null;
 }
 
@@ -142,7 +144,17 @@ export function buildRunRouter() {
       }
 
       if (parsed.credentials) {
-        await writeMcpConfig(sandbox, parsed.credentials);
+        const mcpResult = await writeMcpConfig(sandbox, parsed.credentials);
+        if (mcpResult && mcpResult.exitCode !== 0) {
+          return c.json(
+            {
+              error: "mcp_config_write_failed",
+              exit_code: mcpResult.exitCode,
+              stderr: mcpResult.stderr,
+            },
+            502,
+          );
+        }
       }
 
       const cmd = buildEngineCommand(parsed, workspaceDir);
@@ -151,11 +163,12 @@ export function buildRunRouter() {
       let branch: string | null = null;
       let commitSha: string | null = null;
       let pushError: string | null = null;
-      if (result.exitCode === 0 && c.env.DISPATCH_GITHUB_TOKEN) {
+      const pushToken = parsed.githubToken ?? c.env.DISPATCH_GITHUB_TOKEN;
+      if (result.exitCode === 0 && pushToken) {
         try {
           const pushed = await commitAndPush(sandbox, workspaceDir, {
             issueIdentifier: parsed.issueId,
-            githubToken: c.env.DISPATCH_GITHUB_TOKEN,
+            githubToken: pushToken,
           });
           branch = pushed?.branch ?? null;
           commitSha = pushed?.commit_sha ?? null;
@@ -302,7 +315,13 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
       }
 
       if (parsed.credentials) {
-        await writeMcpConfig(sandbox, parsed.credentials);
+        const mcpResult = await writeMcpConfig(sandbox, parsed.credentials);
+        if (mcpResult && mcpResult.exitCode !== 0) {
+          await emitTerminal(mcpResult.exitCode, {
+            message: `mcp_config_write_failed: ${mcpResult.stderr.slice(0, 500)}`,
+          });
+          return;
+        }
       }
 
       const cmd = buildEngineCommand(parsed, workspaceDir);
@@ -359,12 +378,14 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
       // a token is configured. Push failures don't fail the whole
       // run — we surface them as an `error` event so users see them
       // in the timeline, then continue to the result frame.
+      // SYM-269: prefer the per-run token from the body over the env.
       let branch: string | null = null;
-      if (exitCode === 0 && env.DISPATCH_GITHUB_TOKEN) {
+      const streamPushToken = parsed.githubToken ?? env.DISPATCH_GITHUB_TOKEN;
+      if (exitCode === 0 && streamPushToken) {
         try {
           const pushed = await commitAndPush(sandbox, workspaceDir, {
             issueIdentifier: parsed.issueId,
-            githubToken: env.DISPATCH_GITHUB_TOKEN,
+            githubToken: streamPushToken,
           });
           branch = pushed?.branch ?? null;
         } catch (e) {
@@ -438,6 +459,11 @@ function parseRun(body: RunBody): ParsedRun | string {
 
   const timeoutMs = parseTimeout(body.timeout_ms);
 
+  const githubToken =
+    typeof body.github_token === "string" && body.github_token.length > 0
+      ? body.github_token
+      : null;
+
   const credentials = parseCredentials(body.credentials);
   if (typeof credentials === "string") return credentials;
 
@@ -449,6 +475,7 @@ function parseRun(body: RunBody): ParsedRun | string {
     engine: body.engine as Engine,
     model,
     timeoutMs,
+    githubToken,
     credentials,
   };
 }
@@ -608,8 +635,8 @@ export function shellQuote(s: string): string {
 async function writeMcpConfig(
   sandbox: { exec(cmd: string): Promise<{ exitCode: number; stdout: string; stderr: string }> },
   credentials: ParsedCredentials,
-): Promise<void> {
-  if (credentials.mcpServers.length === 0) return;
+): Promise<{ exitCode: number; stdout: string; stderr: string } | null> {
+  if (credentials.mcpServers.length === 0) return null;
 
   const mcpConfig = {
     mcpServers: Object.fromEntries(
@@ -628,7 +655,7 @@ async function writeMcpConfig(
   const configPath = `${configDir}/mcp.json`;
   const configJson = JSON.stringify(mcpConfig);
 
-  await sandbox.exec(
+  return sandbox.exec(
     `mkdir -p ${shellQuote(configDir)} && printf '%s' ${shellQuote(configJson)} > ${shellQuote(configPath)}`,
   );
 }

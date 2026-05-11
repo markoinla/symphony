@@ -9,6 +9,13 @@
     "enabled": true
   },
 
+  // Static assets for the dashboard SPA. Built from dashboard/ via Vite.
+  // The Worker fetches from the ASSETS binding for /dashboard/* routes.
+  "assets": {
+    "directory": "./dashboard/dist",
+    "binding": "ASSETS"
+  },
+
   // KV holds (a) the per-flow OAuth state nonce and (b) the agent's own
   // installed `actor=app` access token. Single-org for the walking
   // skeleton — multi-tenant config lives in D1 in a later phase.
@@ -33,10 +40,9 @@
     }
   ],
 
-  // D1 holds multi-tenant config: one `installations` row per Linear
-  // workspace OAuth, one `projects` row per Linear team. Replaces the
-  // single KV `access_token` and the `PROJECT_MAPPINGS_JSON` env var.
-  // Create the DB once with:
+  // D1 holds multi-tenant config: organizations, installations, users,
+  // projects, org_credentials, sessions, and usage. See migrations/ for
+  // the full schema. Create the DB once with:
   //   wrangler d1 create symphony-linear-agent
   // then paste the printed `database_id` below and run:
   //   wrangler d1 migrations apply symphony-linear-agent --remote
@@ -51,15 +57,12 @@
 
   // Public-facing vars. URL must be the deployed origin so the OAuth
   // callback URL Linear redirects to matches what we register.
-  // PROJECT_MAPPINGS_JSON is a temporary stand-in for D1 project rows:
-  //   {"<linear-team-id>": "https://github.com/<owner>/<repo>.git"}
   "vars": {
     "URL": "https://linear-agent.m-6bb.workers.dev",
     "DISPATCHER_URL": "https://sandbox.marko.la",
     "DEFAULT_SCOPE": "marko",
     "DEFAULT_MODEL": "cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6",
-    "DEFAULT_ENGINE": "pi",
-    "PROJECT_MAPPINGS_JSON": "{\"e6ff2862-1971-4b10-88a8-4aa16137fff0\":\"https://github.com/markoinla/symphony.git\"}"
+    "DEFAULT_ENGINE": "pi"
   },
 
   // Secrets — set with `wrangler secret put <NAME>`:
@@ -99,8 +102,7 @@
         "DISPATCHER_URL": "http://localhost:8787",
         "DEFAULT_SCOPE": "default",
         "DEFAULT_MODEL": "cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6",
-        "DEFAULT_ENGINE": "pi",
-        "PROJECT_MAPPINGS_JSON": "{}"
+        "DEFAULT_ENGINE": "pi"
       }
     }
   }
