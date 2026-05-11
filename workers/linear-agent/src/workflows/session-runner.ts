@@ -45,6 +45,7 @@ import {
 import { lastAssistantText, mapToActivity } from "../lib/event-mapper";
 import { resolveLinearMcpToken } from "../lib/linear-token";
 import { resolvePrompt, truncate } from "../lib/session-helpers";
+import { renderPrompt } from "../lib/workflows/render";
 import {
   AgentSessionStore,
   GitHubInstallStore,
@@ -55,6 +56,45 @@ import type { AgentSessionEventWebhook } from "../types/agent-session";
 
 export interface SessionRunnerParams {
   event: AgentSessionEventWebhook;
+  // SYM-295 (track 3): when set, the runner uses this config instead
+  // of the per-project D1 columns. Populated by `dispatchAction` when
+  // a `start_session` trigger fires. Legacy AgentSessionEvent path
+  // leaves this undefined so behavior is unchanged.
+  workflowConfig?: WorkflowConfigSubset;
+}
+
+/**
+ * Workflow config slice the runner consumes. Mirrors the WORKFLOW.md
+ * front matter Symphony already has; expanded as we wire more knobs.
+ *
+ * Kept in this module so `dispatch.ts` (which builds it) and tests
+ * can import it without pulling in the whole Drizzle entity.
+ */
+export interface WorkflowConfigSubset {
+  id: string;
+  engine: string;
+  model: string | null;
+  max_turns: number | null;
+  max_continuations: number | null;
+  prompt_template: string | null;
+  allowed_tools: string[] | null;
+  disallowed_tools: string[] | null;
+  permission_mode: string | null;
+  allowed_domains: string[] | null;
+  additional_read_paths: string[] | null;
+  additional_write_paths: string[] | null;
+  hook_after_create: string | null;
+  hook_before_remove: string | null;
+  hook_timeout_ms: number | null;
+  mcp_servers:
+    | Array<{
+        name: string;
+        url?: string;
+        command?: string;
+        args?: string[];
+        env?: Record<string, string>;
+      }>
+    | null;
 }
 
 type ResolvedInputs =
@@ -155,6 +195,8 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       );
     });
 
+    const workflowConfig = event.payload.workflowConfig ?? null;
+
     const resolved: ResolvedInputs = await step.do(
       "resolve-inputs",
       async () => {
@@ -168,19 +210,53 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           ? await projects.getByTeamId(organizationId, teamId)
           : null;
 
+        // Repo always comes from the project row — workflows don't own
+        // repo configuration today. If a workflow run is dispatched
+        // for a team that has no project, we still error out the same
+        // way.
         const repoUrl = projectRow?.repo_url ?? null;
         if (!repoUrl) return { kind: "no_repo" } as const;
 
-        const prompt = resolvePrompt(webhookEvent);
+        // Prompt: when a workflow config carries a template, render it
+        // through Liquid against the issue payload; otherwise fall
+        // back to the legacy `resolvePrompt(webhookEvent)` path.
+        let prompt: string | null;
+        if (workflowConfig?.prompt_template) {
+          const issue = webhookEvent.agentSession.issue;
+          prompt = await renderPrompt(workflowConfig.prompt_template, {
+            issue: {
+              id: issue?.id ?? "",
+              identifier: issue?.identifier ?? null,
+              title: issue?.title ?? null,
+              team_id: issue?.teamId ?? issue?.team?.id ?? null,
+              labels: [],
+              comments: [],
+            },
+            attempt: 1,
+            prompt_context:
+              webhookEvent.agentSession.promptContext ??
+              webhookEvent.promptContext ??
+              "",
+            new_comments: webhookEvent.previousComments ?? [],
+          });
+        } else {
+          prompt = resolvePrompt(webhookEvent);
+        }
         if (!prompt) return { kind: "no_prompt" } as const;
 
-        const engine = (projectRow?.engine ?? this.env.DEFAULT_ENGINE ?? "pi") as
-          | "pi"
-          | string;
+        const engine =
+          (workflowConfig?.engine ??
+            projectRow?.engine ??
+            this.env.DEFAULT_ENGINE ??
+            "pi") as "pi" | string;
         const model =
-          projectRow?.model ?? (this.env.DEFAULT_MODEL || null);
+          workflowConfig?.model ??
+          projectRow?.model ??
+          (this.env.DEFAULT_MODEL || null);
         const maxTurns =
-          projectRow?.max_turns ?? parseMaxTurns(this.env.DEFAULT_MAX_TURNS);
+          workflowConfig?.max_turns ??
+          projectRow?.max_turns ??
+          parseMaxTurns(this.env.DEFAULT_MAX_TURNS);
         const scope =
           projectRow?.scope ?? this.env.DEFAULT_SCOPE ?? "default";
 

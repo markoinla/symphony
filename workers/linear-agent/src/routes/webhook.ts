@@ -2,6 +2,10 @@ import { Hono } from "hono";
 
 import type { Env } from "../index";
 import { verifyLinearSignature } from "../lib/signature";
+import { dispatchAction } from "../lib/workflows/dispatch";
+import { normalize, type LinearWebhookBody } from "../lib/workflows/normalize";
+import { resolveWorkflow } from "../lib/workflows/resolver";
+import { ensureDefaultWorkflow } from "../lib/workflows/seed";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
 
 export { summarizeStdout } from "../lib/session-helpers";
@@ -75,9 +79,17 @@ export function buildWebhookRouter() {
       } catch {}
 
       if (!isAgentSessionEvent(parsed)) {
-        console.log("ignored_not_agent_session_event");
-        // Other webhook categories (issue events, comment events) — ignore
-        // for now. We only care about Agent Session events.
+        // SYM-295: Issue / Comment / IssueLabel deliveries flow through
+        // the workflow router. AgentSessionEvent still uses the legacy
+        // path below so existing /run dispatches keep working.
+        const dispatched = await tryDispatchWorkflow(
+          c.env,
+          parsed as LinearWebhookBody,
+        );
+        if (dispatched) {
+          return c.json({ ok: true, scheduled: true, via: "workflow" });
+        }
+        console.log("ignored_non_agent_session_no_match");
         return c.json({ ok: true, ignored: true });
       }
 
@@ -96,6 +108,16 @@ export function buildWebhookRouter() {
 
       if (event.action !== "created" && event.action !== "prompted") {
         return c.json({ ok: true, ignored: true, action: event.action });
+      }
+
+      // SYM-295: try the workflow router first. Only AgentSessionEvents
+      // emit a `session_started` tuple today; if a workflow matches we
+      // dispatch through it. When no workflow matches (resolver returns
+      // null — either because the migration hasn't run or because no
+      // trigger fires), fall through to the legacy hand-off below.
+      const dispatched = await tryDispatchWorkflow(c.env, parsed as LinearWebhookBody);
+      if (dispatched) {
+        return c.json({ ok: true, scheduled: true, via: "workflow" });
       }
 
       // Hand off to the durable Workflow; respond immediately so we
@@ -143,5 +165,48 @@ function isAgentSessionEvent(value: unknown): value is AgentSessionEventWebhook 
   const session = v.agentSession as Record<string, unknown>;
   if (typeof session.id !== "string") return false;
   return true;
+}
+
+/**
+ * Run the SYM-295 router: normalize the payload, lazy-seed the
+ * Engineering Default workflow for the org if no workflows exist, then
+ * resolve + dispatch each EventTuple in order. Returns `true` if at
+ * least one trigger matched and dispatch was attempted.
+ *
+ * Defensive: swallows errors so a regression in the new router never
+ * 500s a Linear delivery. The legacy path still runs when this returns
+ * false.
+ */
+async function tryDispatchWorkflow(
+  env: Env,
+  body: LinearWebhookBody,
+): Promise<boolean> {
+  try {
+    const tuples = normalize(body);
+    if (!tuples || tuples.length === 0) return false;
+
+    const orgId = tuples[0]!.organization_id;
+    await ensureDefaultWorkflow(env, orgId);
+
+    let dispatchedAny = false;
+    for (const event of tuples) {
+      const match = await resolveWorkflow(env, event);
+      if (!match) continue;
+      await dispatchAction({
+        env,
+        workflow: match.workflow,
+        trigger: match.trigger,
+        event,
+      });
+      dispatchedAny = true;
+    }
+    return dispatchedAny;
+  } catch (e) {
+    console.error(
+      "workflow_router_failed",
+      e instanceof Error ? `${e.name}: ${e.message}` : String(e),
+    );
+    return false;
+  }
 }
 
