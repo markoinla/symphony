@@ -54,7 +54,17 @@ export interface Env {
   // apply the `symphony` label. Set with
   // `wrangler secret put GITHUB_TOKEN`. When unset, the workflow
   // posts the branch info as a thought but skips PR creation.
+  // Deprecated: prefer Symphony GitHub App (GITHUB_APP_ID +
+  // GITHUB_APP_PRIVATE_KEY) which mints per-org installation tokens.
   GITHUB_TOKEN?: string;
+
+  // Symphony GitHub App credentials. When present, per-org
+  // installation tokens are minted via the GitHub App instead of
+  // using the org-wide GITHUB_TOKEN PAT. Set with:
+  //   wrangler secret put GITHUB_APP_ID
+  //   wrangler secret put GITHUB_APP_PRIVATE_KEY
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_PRIVATE_KEY?: string;
 }
 
 // Re-export the Workflow class so wrangler's class_name resolution finds
