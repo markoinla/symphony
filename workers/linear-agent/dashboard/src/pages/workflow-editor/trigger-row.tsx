@@ -60,11 +60,13 @@ export function TriggerRow({
             onValueChange={(value) =>
               onChange({
                 event_type: value as EventType,
-                // Reset event-specific match columns when type changes.
+                // Reset event-specific match columns when the event
+                // type changes — keeps stale values from "any-matching"
+                // the new event type.
                 from_state: null,
                 to_state: null,
-                label_match: null,
-                assignee_match: null,
+                label_name: null,
+                comment_match: null,
               })
             }
           >
@@ -122,12 +124,17 @@ export function TriggerRow({
         </div>
       </div>
 
-      {/* Event-type-specific match fields */}
+      {/* Event-type-specific match fields. The backend only has four
+          match columns: to_state, from_state, label_name, comment_match.
+          Assignee transitions match via scope filters only. */}
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         {(trigger.event_type === 'state_entered' ||
           trigger.event_type === 'state_exited') && (
           <>
-            <Field label="From state" hint="Match only when leaving this state">
+            <Field
+              label="From state"
+              hint="Match only when leaving this state"
+            >
               <Input
                 onChange={(event) =>
                   onChange({ from_state: event.target.value || null })
@@ -153,24 +160,34 @@ export function TriggerRow({
           <Field label="Label name">
             <Input
               onChange={(event) =>
-                onChange({ label_match: event.target.value || null })
+                onChange({ label_name: event.target.value || null })
               }
               placeholder="rework"
-              value={trigger.label_match ?? ''}
+              value={trigger.label_name ?? ''}
+            />
+          </Field>
+        )}
+
+        {trigger.event_type === 'comment_added' && (
+          <Field
+            label="Comment match (regex)"
+            hint="Anchored regex, e.g. ^/retry\b"
+          >
+            <Input
+              onChange={(event) =>
+                onChange({ comment_match: event.target.value || null })
+              }
+              placeholder="^/retry\b"
+              value={trigger.comment_match ?? ''}
             />
           </Field>
         )}
 
         {trigger.event_type === 'assignee_changed' && (
-          <Field label="Assignee" hint="Linear user id or username">
-            <Input
-              onChange={(event) =>
-                onChange({ assignee_match: event.target.value || null })
-              }
-              placeholder="@marko"
-              value={trigger.assignee_match ?? ''}
-            />
-          </Field>
+          <p className="col-span-full text-xs text-th-text-4">
+            Assignee transitions match every event; use the assignee filter
+            below to scope to specific users.
+          </p>
         )}
       </div>
 
@@ -184,35 +201,38 @@ export function TriggerRow({
             <ChipInput
               onChange={(team_filter) => onChange({ team_filter })}
               placeholder="Add team…"
-              value={trigger.team_filter}
+              value={trigger.team_filter ?? []}
             />
           </Field>
           <Field label="Project filter" hint="Linear project ids or slugs">
             <ChipInput
               onChange={(project_filter) => onChange({ project_filter })}
               placeholder="Add project…"
-              value={trigger.project_filter}
+              value={trigger.project_filter ?? []}
             />
           </Field>
-          <Field label="Label filter" hint="Only fire when these labels present">
+          <Field
+            label="Label filter"
+            hint="Only fire when these labels present"
+          >
             <ChipInput
               onChange={(label_filter) => onChange({ label_filter })}
               placeholder="Add label…"
-              value={trigger.label_filter}
+              value={trigger.label_filter ?? []}
             />
           </Field>
           <Field label="Skip labels" hint="Bypass when any of these are present">
             <ChipInput
               onChange={(skip_label_filter) => onChange({ skip_label_filter })}
               placeholder="Add label…"
-              value={trigger.skip_label_filter}
+              value={trigger.skip_label_filter ?? []}
             />
           </Field>
           <Field label="Assignee filter">
             <ChipInput
               onChange={(assignee_filter) => onChange({ assignee_filter })}
               placeholder="Add assignee…"
-              value={trigger.assignee_filter}
+              value={trigger.assignee_filter ?? []}
             />
           </Field>
         </div>

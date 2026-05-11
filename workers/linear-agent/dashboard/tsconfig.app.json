@@ -20,7 +20,8 @@
     /* Path aliases (shadcn-style) */
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@server/*": ["../src/*"]
     },
 
     /* Linting */
@@ -30,5 +31,5 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src"]
+  "include": ["src", "../src/schemas/**/*"]
 }
