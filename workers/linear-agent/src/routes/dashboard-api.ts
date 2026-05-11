@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
+import { CredentialStore } from "../lib/credentials";
 import { requireDashboardAuth } from "../lib/dashboard-auth";
-import { ProjectStore } from "../lib/store";
+import { InstallationStore, ProjectStore } from "../lib/store";
 
 export function buildDashboardApiRouter() {
   const app = new Hono<{ Bindings: Env }>();
@@ -29,7 +30,7 @@ export function buildDashboardApiRouter() {
     const store = new ProjectStore(c.env.DB);
     await store.upsert({
       orgId: user.organizationId,
-      teamId: body!.linear_team_id as string,
+      linearTeamId: body!.linear_team_id as string,
       linearTeamName: (body!.linear_team_name as string) ?? "",
       repoUrl: body!.repo_url as string,
       defaultBranch: (body!.default_branch as string) || "main",
@@ -105,6 +106,70 @@ export function buildDashboardApiRouter() {
       user.organizationId,
     );
     if (!deleted) return c.json({ error: "not_found" }, 404);
+    return c.json({ ok: true });
+  });
+
+  // --- Integrations API routes ---
+
+  app.get("/dashboard/api/integrations", async (c) => {
+    const user = await requireDashboardAuth(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
+
+    const orgId = user.organizationId;
+    const installation = await new InstallationStore(c.env.DB).get(orgId);
+    const configuredKinds = await new CredentialStore(c.env.DB).listKinds(orgId);
+    const configuredSet = new Set(configuredKinds);
+
+    return c.json({
+      linear: {
+        connected: !!installation,
+        email: user.email ?? null,
+      },
+      github: {
+        connected: !!installation?.github_app_installation_id,
+        repo_count: 0,
+      },
+      anthropic: { configured: configuredSet.has("anthropic") },
+      openai: { configured: configuredSet.has("openai") },
+      cf_workers_ai: { configured: configuredSet.has("cf_workers_ai") },
+      github_app_settings_url: c.env.GITHUB_APP_SETTINGS_URL ?? null,
+    });
+  });
+
+  app.put("/dashboard/api/integrations/credentials", async (c) => {
+    const user = await requireDashboardAuth(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
+
+    const body = await c.req.json<{ provider?: string; api_key?: string }>();
+    const validProviders = ["anthropic", "openai", "cf_workers_ai"];
+    if (
+      !body.provider ||
+      !validProviders.includes(body.provider) ||
+      !body.api_key ||
+      typeof body.api_key !== "string" ||
+      body.api_key.trim().length === 0
+    ) {
+      return c.json(
+        { error: "invalid_request", message: "provider and api_key are required" },
+        400,
+      );
+    }
+
+    const kek = c.env.CREDENTIAL_KEK;
+    if (!kek) {
+      return c.json(
+        { error: "server_error", message: "Credential encryption not configured" },
+        500,
+      );
+    }
+
+    const credStore = new CredentialStore(c.env.DB);
+    await credStore.encryptForOrg(
+      user.organizationId,
+      body.provider,
+      body.api_key.trim(),
+      kek,
+    );
     return c.json({ ok: true });
   });
 
