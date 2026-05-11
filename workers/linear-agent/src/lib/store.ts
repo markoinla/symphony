@@ -178,6 +178,65 @@ export class UserStore {
   }
 }
 
+export interface DashboardSessionRecord {
+  token: string;
+  linear_user_id: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export class SessionStore {
+  constructor(private readonly db: D1Database) {}
+
+  async create(linearUserId: string, ttlDays = 30): Promise<string> {
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    const token = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    const expiresAt = new Date(Date.now() + ttlDays * 86_400_000)
+      .toISOString()
+      .replace("T", " ")
+      .replace("Z", "");
+    await this.db
+      .prepare(
+        `INSERT INTO dashboard_sessions (token, linear_user_id, expires_at)
+         VALUES (?, ?, ?)`,
+      )
+      .bind(token, linearUserId, expiresAt)
+      .run();
+    return token;
+  }
+
+  async validate(token: string): Promise<UserRecord | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT u.linear_user_id, u.organization_id, u.access_token,
+                u.refresh_token, u.expires_at, u.email, u.name,
+                u.created_at, u.refreshed_at
+         FROM dashboard_sessions s
+         JOIN users u ON u.linear_user_id = s.linear_user_id
+         WHERE s.token = ? AND s.expires_at > datetime('now')`,
+      )
+      .bind(token)
+      .first<UserRecord>();
+    return row ?? null;
+  }
+
+  async delete(token: string): Promise<boolean> {
+    const result = await this.db
+      .prepare("DELETE FROM dashboard_sessions WHERE token = ?")
+      .bind(token)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  async deleteByUser(linearUserId: string): Promise<void> {
+    await this.db
+      .prepare("DELETE FROM dashboard_sessions WHERE linear_user_id = ?")
+      .bind(linearUserId)
+      .run();
+  }
+}
+
 export class ProjectStore {
   constructor(private readonly db: D1Database) {}
 

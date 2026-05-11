@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
 import { OAuthHelper } from "../lib/oauth-helper";
-import { InstallationStore, UserStore } from "../lib/store";
+import { InstallationStore, SessionStore, UserStore } from "../lib/store";
+import { setSessionCookie } from "./dashboard";
 
 /**
  * OAuth routes for installing the agent into a Linear workspace.
@@ -164,13 +165,13 @@ export function buildOAuthRouter() {
 
       await c.env.LINEAR_TOKENS.delete("oauth_user_state:" + state);
 
-      return c.json({
-        ok: true,
-        user: {
-          linear_user_id: viewer.id,
-          email: viewer.email,
-          name: viewer.name,
-          organization_id: viewer.organizationId,
+      const sessionToken = await new SessionStore(c.env.DB).create(viewer.id);
+      const secure = new URL(c.req.url).protocol === "https:";
+      return new Response(null, {
+        status: 302,
+        headers: {
+          Location: "/dashboard/",
+          "Set-Cookie": setSessionCookie(sessionToken, 30, secure),
         },
       });
     } catch (e) {
