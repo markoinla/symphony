@@ -3,6 +3,7 @@ import type { IncomingRequestCfProperties } from "@cloudflare/workers-types";
 
 import { createAuth } from "./lib/auth";
 import { buildAdminRouter } from "./routes/admin";
+import { buildApiV1Router } from "./routes/api-v1";
 import { buildDashboardApiRouter } from "./routes/dashboard-api";
 import { buildDashboardRouter } from "./routes/dashboard";
 import { buildGitHubRouter } from "./routes/github";
@@ -131,6 +132,7 @@ export function buildApp() {
     }
   });
 
+  app.route("/", buildApiV1Router());
   app.route("/", buildDashboardApiRouter());
   app.route("/", buildDashboardRouter());
   app.route("/", buildOAuthRouter());
