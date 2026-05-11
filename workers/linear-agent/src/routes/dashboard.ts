@@ -258,6 +258,13 @@ export function buildDashboardRouter() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("rerun_workflow_create_failed", msg);
+      await store
+        .update(newSessionId, {
+          status: "error",
+          error: msg,
+          completedAt: new Date().toISOString().replace("T", " ").replace(/\.\d{3}Z$/, ""),
+        })
+        .catch(() => {});
       return c.json({ error: "workflow_create_failed", message: msg }, 500);
     }
 
