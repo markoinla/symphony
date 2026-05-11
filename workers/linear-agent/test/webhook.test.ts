@@ -37,12 +37,13 @@ function makeEnv(
   kv: FakeKV,
   overrides: Partial<Env> = {},
   sessionRunner: WorkflowStub = makeWorkflowStub(),
+  db: FakeD1 = new FakeD1(),
 ): Env {
   return {
     ASSETS: { fetch: () => new Response("") } as unknown as Fetcher,
     LINEAR_TOKENS: kv as unknown as KVNamespace,
     SESSION_RUNNER: sessionRunner as unknown as Workflow,
-    DB: new FakeD1() as unknown as D1Database,
+    DB: db as unknown as D1Database,
     LINEAR_CLIENT_ID: "client",
     LINEAR_CLIENT_SECRET: "secret",
     LINEAR_WEBHOOK_SECRET: LINEAR_SECRET,

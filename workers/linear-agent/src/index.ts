@@ -10,8 +10,7 @@ export interface Env {
   ASSETS: Fetcher;
 
   // KV namespace storing OAuth state nonces and webhook delivery
-  // dedupe markers. As of item 3, the install access token lives in
-  // D1 (`installations.access_token`), not here.
+  // dedupe markers. Install access tokens live in D1 `installations`.
   LINEAR_TOKENS: KVNamespace;
 
   // Cloudflare Workflow binding for SessionRunner — drives a single

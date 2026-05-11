@@ -43,6 +43,13 @@ interface UserRow {
   refreshed_at: string;
 }
 
+interface DashboardSessionRow {
+  token: string;
+  linear_user_id: string;
+  created_at: string;
+  expires_at: string;
+}
+
 let nextInstallId = 1;
 let nextProjectId = 1;
 
@@ -50,6 +57,7 @@ export class FakeD1 {
   installations = new Map<string, InstallationRow>();
   projects = new Map<string, ProjectRow>();
   users = new Map<string, UserRow>();
+  dashboardSessions = new Map<string, DashboardSessionRow>();
 
   prepare(sql: string) {
     return new FakeStatement(this, sql);
@@ -129,6 +137,33 @@ class FakeStatement {
       this.db.projects.delete(key);
       return { success: true, meta: { changes: had ? 1 : 0 } };
     }
+    if (/^INSERT INTO dashboard_sessions/i.test(sql)) {
+      const [token, linearUserId, expiresAt] = this.bindings as [string, string, string];
+      this.db.dashboardSessions.set(token, {
+        token,
+        linear_user_id: linearUserId,
+        created_at: new Date().toISOString(),
+        expires_at: expiresAt,
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (/^DELETE FROM dashboard_sessions WHERE token/i.test(sql)) {
+      const [token] = this.bindings as [string];
+      const had = this.db.dashboardSessions.has(token);
+      this.db.dashboardSessions.delete(token);
+      return { success: true, meta: { changes: had ? 1 : 0 } };
+    }
+    if (/^DELETE FROM dashboard_sessions WHERE linear_user_id/i.test(sql)) {
+      const [userId] = this.bindings as [string];
+      let count = 0;
+      for (const [k, v] of this.db.dashboardSessions) {
+        if (v.linear_user_id === userId) {
+          this.db.dashboardSessions.delete(k);
+          count++;
+        }
+      }
+      return { success: true, meta: { changes: count } };
+    }
     if (/^INSERT INTO users/i.test(sql)) {
       const [linearUserId, orgId, accessToken, refreshToken, expiresAt, email, name] =
         this.bindings as [string, string, string, string | null, string | null, string | null, string | null];
@@ -170,6 +205,14 @@ class FakeStatement {
     if (/^SELECT .* FROM users WHERE linear_user_id/i.test(sql)) {
       const [userId] = this.bindings as [string];
       return (this.db.users.get(userId) as unknown as T) ?? null;
+    }
+    if (/^SELECT .* FROM dashboard_sessions s.*JOIN users/i.test(sql)) {
+      const [token] = this.bindings as [string];
+      const session = this.db.dashboardSessions.get(token);
+      if (!session) return null;
+      if (new Date(session.expires_at) <= new Date()) return null;
+      const user = this.db.users.get(session.linear_user_id);
+      return (user as unknown as T) ?? null;
     }
     throw new Error(`FakeD1.first: unsupported SQL: ${sql}`);
   }

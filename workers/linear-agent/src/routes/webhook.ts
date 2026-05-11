@@ -133,7 +133,6 @@ export function buildWebhookRouter() {
   return app;
 }
 
-
 function isAgentSessionEvent(value: unknown): value is AgentSessionEventWebhook {
   if (!value || typeof value !== "object") return false;
   const v = value as Record<string, unknown>;

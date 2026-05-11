@@ -92,6 +92,7 @@ Tables (v1 multi-tenant schema in `0002_multi_tenant.sql`):
 | `organizations` | One row per Linear workspace install |
 | `installations` | Per-org `actor=app` OAuth tokens |
 | `users` | Dashboard logins with per-user `actor=user` OAuth tokens |
+| `dashboard_sessions` | Session tokens mapping to users (httpOnly cookie storage) |
 | `projects` | Per-team config (repo URL, branch, engine/model overrides) |
 | `org_credentials` | Envelope-encrypted per-org secrets |
 | `sessions` | Agent session runs with status and cost |
@@ -106,6 +107,10 @@ npm test                         # vitest run
 npm run typecheck                # tsc --noEmit
 npm run dev                      # wrangler dev → http://localhost:8788
 ```
+
+**Dashboard access:** The dashboard at `/dashboard/*` requires session-based
+authentication. Complete the OAuth flow at `/oauth/authorize` to log in and
+create a session cookie.
 
 To exercise webhooks against a local `wrangler dev`, expose it via a
 tunnel (`cloudflared tunnel`, `ngrok`, etc.) and register the tunnel URL
