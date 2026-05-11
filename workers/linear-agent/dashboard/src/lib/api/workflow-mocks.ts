@@ -17,9 +17,9 @@ import {
   type WorkflowUpdateBody,
 } from './workflow-types'
 
-// Default ON during this PR. Track 2 will flip the default once real
-// routes are live; until then, the UI runs entirely off this mock store.
-export const USE_MOCK_WORKFLOWS_API = true
+// /api/v1/workflows* is live (SYM-295 track 2). Set to true locally if
+// you want to develop the UI without a Worker running.
+export const USE_MOCK_WORKFLOWS_API = false
 
 function newId(prefix: string) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`
