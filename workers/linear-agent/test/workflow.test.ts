@@ -46,10 +46,28 @@ class FakeKV {
   }
 }
 
+function makeSeededDb(): FakeD1 {
+  const db = new FakeD1();
+  db.projects.set("org-1:team-abc", {
+    id: 1,
+    org_id: "org-1",
+    linear_team_id: "team-abc",
+    repo_url: "https://github.com/markoinla/symphony.git",
+    default_branch: "main",
+    engine: "pi",
+    model: null,
+    max_turns: 10,
+    scope: null,
+    system_prompt_override: null,
+    updated_at: new Date().toISOString(),
+  });
+  return db;
+}
+
 function makeEnv(
   kv: FakeKV,
   overrides: Partial<Env> = {},
-  db: FakeD1 = new FakeD1(),
+  db: FakeD1 = makeSeededDb(),
 ): Env {
   return {
     ASSETS: { fetch: () => new Response("") } as unknown as Fetcher,
@@ -65,9 +83,6 @@ function makeEnv(
     DEFAULT_SCOPE: "default",
     DEFAULT_MODEL: "anthropic/claude-sonnet-4-6",
     DEFAULT_ENGINE: "pi",
-    PROJECT_MAPPINGS_JSON: JSON.stringify({
-      "team-abc": "https://github.com/markoinla/symphony.git",
-    }),
     DEFAULT_MAX_TURNS: "10",
     ...overrides,
   };
@@ -348,7 +363,8 @@ describe("SessionRunner.run — abort branches", () => {
     const kv = new FakeKV();
     await kv.put("access_token", "fake-token");
     installFetchMock({ dispatcherEvents: [] });
-    const env = makeEnv(kv, { PROJECT_MAPPINGS_JSON: "{}" });
+    const emptyDb = new FakeD1();
+    const env = makeEnv(kv, {}, emptyDb);
     const runner = buildRunner(env);
     const { step, ran } = makeStep();
 
@@ -865,7 +881,21 @@ describe("SessionRunner.run — multi-turn loop", () => {
       throw new Error(`unexpected fetch: ${url}`);
     });
 
-    const env = makeEnv(kv, { DEFAULT_MAX_TURNS: "2" });
+    const db = new FakeD1();
+    db.projects.set("org-1:team-abc", {
+      id: 1,
+      org_id: "org-1",
+      linear_team_id: "team-abc",
+      repo_url: "https://github.com/markoinla/symphony.git",
+      default_branch: "main",
+      engine: "pi",
+      model: null,
+      max_turns: 2,
+      scope: null,
+      system_prompt_override: null,
+      updated_at: new Date().toISOString(),
+    });
+    const env = makeEnv(kv, {}, db);
     const runner = buildRunner(env);
     const { step } = makeStep();
 
@@ -878,8 +908,6 @@ describe("SessionRunner.run — multi-turn loop", () => {
     };
 
     const result = await runner.run(makeEvent(event), step as never);
-    // 2 turns; on the second, max_turns_reached makes terminal an error
-    // post with code 0 but inband "max_turns_reached" reason.
     expect(result.turns).toBe(2);
     const lastCall = linearCalls[linearCalls.length - 1];
     expect(lastCall?.content.type).toBe("error");

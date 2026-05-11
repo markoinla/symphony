@@ -58,10 +58,16 @@ wrangler secret put DISPATCH_HMAC_SECRET   # MUST match the dispatcher worker's
 # 4. Update wrangler.jsonc:
 #    - URL  → your deployed origin
 #    - DISPATCHER_URL → the sandbox-dispatcher origin
-#    - PROJECT_MAPPINGS_JSON → {"<linear-team-id>": "<repo-url>"}
 
-# 5. Deploy and install.
+# 5. Deploy and apply D1 migrations.
 wrangler deploy
+wrangler d1 migrations apply symphony-linear-agent --remote
+
+# 6. Seed your project(s) via the admin API:
+#    curl -H "Authorization: Bearer $ADMIN_TOKEN" \
+#      -H "Content-Type: application/json" \
+#      -d '{"org_id":"<org-id>","linear_team_id":"<team-id>","repo_url":"https://github.com/<owner>/<repo>.git"}' \
+#      https://<your-worker>/admin/projects
 open https://linear-agent.<your-subdomain>.workers.dev/oauth/authorize
 ```
 

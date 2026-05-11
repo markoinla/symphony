@@ -57,15 +57,12 @@
 
   // Public-facing vars. URL must be the deployed origin so the OAuth
   // callback URL Linear redirects to matches what we register.
-  // PROJECT_MAPPINGS_JSON is a temporary stand-in for D1 project rows:
-  //   {"<linear-team-id>": "https://github.com/<owner>/<repo>.git"}
   "vars": {
     "URL": "https://linear-agent.m-6bb.workers.dev",
     "DISPATCHER_URL": "https://sandbox.marko.la",
     "DEFAULT_SCOPE": "marko",
     "DEFAULT_MODEL": "cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6",
-    "DEFAULT_ENGINE": "pi",
-    "PROJECT_MAPPINGS_JSON": "{\"e6ff2862-1971-4b10-88a8-4aa16137fff0\":\"https://github.com/markoinla/symphony.git\"}"
+    "DEFAULT_ENGINE": "pi"
   },
 
   // Secrets — set with `wrangler secret put <NAME>`:
@@ -105,8 +102,7 @@
         "DISPATCHER_URL": "http://localhost:8787",
         "DEFAULT_SCOPE": "default",
         "DEFAULT_MODEL": "cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6",
-        "DEFAULT_ENGINE": "pi",
-        "PROJECT_MAPPINGS_JSON": "{}"
+        "DEFAULT_ENGINE": "pi"
       }
     }
   }

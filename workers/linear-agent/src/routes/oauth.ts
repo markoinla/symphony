@@ -81,13 +81,11 @@ export function buildOAuthRouter() {
           organizationId,
           token.access_token,
           token.scope,
+          "oauth",
         );
       }
 
-      // Keep the legacy KV key in sync during the cutover so any code
-      // path that still reads from it (none in production after item
-      // 3, but tests + the legacy `runSession` still rely on it) keeps
-      // working. Drop this once `runSession` is deleted.
+      // Legacy KV fallback for the session-runner's load-token step.
       await c.env.LINEAR_TOKENS.put("access_token", token.access_token);
       await c.env.LINEAR_TOKENS.delete("oauth_state");
 
@@ -134,7 +132,7 @@ export function buildOAuthRouter() {
       );
     }
     if (install) {
-      await store.delete(install.organization_id);
+      await store.delete(install.org_id);
     }
     await c.env.LINEAR_TOKENS.delete("access_token");
     return c.json({ ok: true });

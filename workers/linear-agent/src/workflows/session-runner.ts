@@ -41,11 +41,7 @@ import {
   type NormalizedEvent,
 } from "../lib/dispatcher";
 import { lastAssistantText, mapToActivity } from "../lib/event-mapper";
-import {
-  resolvePrompt,
-  resolveRepoUrl,
-  truncate,
-} from "../lib/session-helpers";
+import { resolvePrompt, truncate } from "../lib/session-helpers";
 import { InstallationStore, ProjectStore } from "../lib/store";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
 
@@ -61,6 +57,7 @@ type ResolvedInputs =
       engine: "pi";
       model: string | null;
       maxTurns: number;
+      scope: string;
     }
   | { kind: "no_repo" }
   | { kind: "no_prompt" };
@@ -142,15 +139,11 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           webhookEvent.agentSession.issue?.team?.id ??
           null;
 
-        // D1 project row is the primary source; PROJECT_MAPPINGS_JSON
-        // is a fallback for teams that haven't been seeded yet.
         const projectRow = teamId
           ? await new ProjectStore(this.env.DB).get(teamId)
           : null;
 
-        const repoUrl =
-          projectRow?.repo_url ??
-          resolveRepoUrl(this.env, webhookEvent.agentSession);
+        const repoUrl = projectRow?.repo_url ?? null;
         if (!repoUrl) return { kind: "no_repo" } as const;
 
         const prompt = resolvePrompt(webhookEvent);
@@ -163,16 +156,17 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           projectRow?.model ?? (this.env.DEFAULT_MODEL || null);
         const maxTurns =
           projectRow?.max_turns ?? parseMaxTurns(this.env.DEFAULT_MAX_TURNS);
+        const scope =
+          projectRow?.scope ?? this.env.DEFAULT_SCOPE ?? "default";
 
         return {
           kind: "ok",
           repoUrl,
           prompt,
-          // engine is "pi" today; cast keeps the workflow strict-typed
-          // even though D1 could in theory hold an unsupported string.
           engine: engine === "pi" ? "pi" : "pi",
           model,
           maxTurns,
+          scope,
         } as const;
       },
     );
@@ -182,7 +176,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         await postError(
           buildActivityClient(token),
           sessionId,
-          "No repository is configured for this team. Add one in `PROJECT_MAPPINGS_JSON` or the project config.",
+          "No repository is configured for this team. Add a project row via the admin API or dashboard.",
         );
       });
       return { status: "no_repo" };
@@ -242,7 +236,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         { retries: { limit: 0, delay: "1 second", backoff: "constant" } },
         async () =>
           runTurn(this.env, sessionId, token, {
-            scope: this.env.DEFAULT_SCOPE,
+            scope: resolved.scope,
             issueId: issueIdentifier,
             repoUrl: resolved.repoUrl,
             prompt: captured,

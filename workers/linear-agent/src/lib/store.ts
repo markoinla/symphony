@@ -1,84 +1,78 @@
 /**
  * D1-backed repository for the linear-agent worker.
  *
- * Two tables:
- *   - `installations` — one row per Linear org OAuth (replaces the
- *     single KV `access_token` from item 1).
- *   - `projects`     — per-team config: repo URL, engine, model,
- *     max_turns (replaces `PROJECT_MAPPINGS_JSON`).
- *
- * Migration: see `workers/linear-agent/migrations/0001_init.sql`.
- *
- * Style note: column names are SQL-flavored (`organization_id`,
- * `max_turns`); the typed records mirror them via `snake_case` so we
- * don't have to remember which mapping is which. Callers that prefer
- * camelCase wrap the read in their own adapter.
+ * Tables (multi-tenant schema, see migrations/0002_multi_tenant.sql):
+ *   - `installations` — per-org OAuth token (keyed by org_id).
+ *   - `projects`      — per-team config: repo URL, engine, model,
+ *     max_turns, scope, system_prompt_override (keyed by org_id +
+ *     linear_team_id).
  */
 
 export interface InstallationRecord {
-  organization_id: string;
+  id: number;
+  org_id: string;
   access_token: string;
+  refresh_token: string | null;
   scopes: string;
+  installed_by: string;
+  status: string;
   installed_at: string;
   refreshed_at: string;
 }
 
 export interface ProjectRecord {
-  team_id: string;
+  id: number;
+  org_id: string;
+  linear_team_id: string;
   repo_url: string;
   default_branch: string;
   engine: string;
   model: string | null;
   max_turns: number;
+  scope: string | null;
+  system_prompt_override: string | null;
   updated_at: string;
 }
 
 export class InstallationStore {
   constructor(private readonly db: D1Database) {}
 
-  /**
-   * Insert or replace the installation token for an organization. The
-   * caller passes the token Linear returned from the OAuth code
-   * exchange. Multiple re-installs of the same org just overwrite the
-   * row.
-   */
+  private static readonly COLUMNS =
+    "id, org_id, access_token, refresh_token, scopes, installed_by, status, installed_at, refreshed_at";
+
   async upsert(
-    organizationId: string,
+    orgId: string,
     accessToken: string,
     scopes: string,
+    installedBy: string,
   ): Promise<void> {
     await this.db
       .prepare(
-        `INSERT INTO installations (organization_id, access_token, scopes)
-         VALUES (?, ?, ?)
-         ON CONFLICT(organization_id) DO UPDATE SET
+        `INSERT INTO installations (org_id, access_token, scopes, installed_by)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(org_id) DO UPDATE SET
            access_token = excluded.access_token,
            scopes       = excluded.scopes,
            refreshed_at = datetime('now')`,
       )
-      .bind(organizationId, accessToken, scopes)
+      .bind(orgId, accessToken, scopes, installedBy)
       .run();
   }
 
-  async get(organizationId: string): Promise<InstallationRecord | null> {
+  async get(orgId: string): Promise<InstallationRecord | null> {
     return await this.db
       .prepare(
-        `SELECT organization_id, access_token, scopes, installed_at, refreshed_at
-         FROM installations WHERE organization_id = ?`,
+        `SELECT ${InstallationStore.COLUMNS}
+         FROM installations WHERE org_id = ?`,
       )
-      .bind(organizationId)
+      .bind(orgId)
       .first<InstallationRecord>();
   }
 
-  /**
-   * Single-org fallback for webhook deliveries that don't carry an
-   * `organizationId` field. If there's exactly one install, return it;
-   * otherwise return null and force the caller to look up by org id.
-   */
   async getOnlyInstallation(): Promise<InstallationRecord | null> {
     const result = await this.db
       .prepare(
-        `SELECT organization_id, access_token, scopes, installed_at, refreshed_at
+        `SELECT ${InstallationStore.COLUMNS}
          FROM installations LIMIT 2`,
       )
       .all<InstallationRecord>();
@@ -86,10 +80,10 @@ export class InstallationStore {
     return result.results[0] ?? null;
   }
 
-  async delete(organizationId: string): Promise<boolean> {
+  async delete(orgId: string): Promise<boolean> {
     const result = await this.db
-      .prepare("DELETE FROM installations WHERE organization_id = ?")
-      .bind(organizationId)
+      .prepare("DELETE FROM installations WHERE org_id = ?")
+      .bind(orgId)
       .run();
     return (result.meta.changes ?? 0) > 0;
   }
@@ -98,61 +92,93 @@ export class InstallationStore {
 export class ProjectStore {
   constructor(private readonly db: D1Database) {}
 
+  private static readonly COLUMNS =
+    "id, org_id, linear_team_id, repo_url, default_branch, engine, model, max_turns, scope, system_prompt_override, updated_at";
+
   async upsert(input: {
-    teamId: string;
+    orgId: string;
+    linearTeamId: string;
     repoUrl: string;
     defaultBranch?: string;
     engine?: string;
     model?: string | null;
     maxTurns?: number;
+    scope?: string | null;
+    systemPromptOverride?: string | null;
   }): Promise<void> {
     await this.db
       .prepare(
-        `INSERT INTO projects (team_id, repo_url, default_branch, engine, model, max_turns)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(team_id) DO UPDATE SET
-           repo_url       = excluded.repo_url,
-           default_branch = excluded.default_branch,
-           engine         = excluded.engine,
-           model          = excluded.model,
-           max_turns      = excluded.max_turns,
-           updated_at     = datetime('now')`,
+        `INSERT INTO projects (org_id, linear_team_id, repo_url, default_branch, engine, model, max_turns, scope, system_prompt_override)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(org_id, linear_team_id) DO UPDATE SET
+           repo_url               = excluded.repo_url,
+           default_branch         = excluded.default_branch,
+           engine                 = excluded.engine,
+           model                  = excluded.model,
+           max_turns              = excluded.max_turns,
+           scope                  = excluded.scope,
+           system_prompt_override = excluded.system_prompt_override,
+           updated_at             = datetime('now')`,
       )
       .bind(
-        input.teamId,
+        input.orgId,
+        input.linearTeamId,
         input.repoUrl,
         input.defaultBranch ?? "main",
         input.engine ?? "pi",
         input.model ?? null,
         input.maxTurns ?? 10,
+        input.scope ?? null,
+        input.systemPromptOverride ?? null,
       )
       .run();
   }
 
-  async get(teamId: string): Promise<ProjectRecord | null> {
+  async getByTeamId(orgId: string, linearTeamId: string): Promise<ProjectRecord | null> {
     return await this.db
       .prepare(
-        `SELECT team_id, repo_url, default_branch, engine, model, max_turns, updated_at
-         FROM projects WHERE team_id = ?`,
+        `SELECT ${ProjectStore.COLUMNS}
+         FROM projects WHERE org_id = ? AND linear_team_id = ?`,
       )
-      .bind(teamId)
+      .bind(orgId, linearTeamId)
       .first<ProjectRecord>();
+  }
+
+  async get(linearTeamId: string): Promise<ProjectRecord | null> {
+    return await this.db
+      .prepare(
+        `SELECT ${ProjectStore.COLUMNS}
+         FROM projects WHERE linear_team_id = ?`,
+      )
+      .bind(linearTeamId)
+      .first<ProjectRecord>();
+  }
+
+  async listByOrg(orgId: string): Promise<ProjectRecord[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT ${ProjectStore.COLUMNS}
+         FROM projects WHERE org_id = ? ORDER BY linear_team_id`,
+      )
+      .bind(orgId)
+      .all<ProjectRecord>();
+    return result.results;
   }
 
   async list(): Promise<ProjectRecord[]> {
     const result = await this.db
       .prepare(
-        `SELECT team_id, repo_url, default_branch, engine, model, max_turns, updated_at
-         FROM projects ORDER BY team_id`,
+        `SELECT ${ProjectStore.COLUMNS}
+         FROM projects ORDER BY org_id, linear_team_id`,
       )
       .all<ProjectRecord>();
     return result.results;
   }
 
-  async delete(teamId: string): Promise<boolean> {
+  async delete(orgId: string, linearTeamId: string): Promise<boolean> {
     const result = await this.db
-      .prepare("DELETE FROM projects WHERE team_id = ?")
-      .bind(teamId)
+      .prepare("DELETE FROM projects WHERE org_id = ? AND linear_team_id = ?")
+      .bind(orgId, linearTeamId)
       .run();
     return (result.meta.changes ?? 0) > 0;
   }

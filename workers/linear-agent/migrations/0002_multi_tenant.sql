@@ -60,6 +60,7 @@ CREATE TABLE projects (
   model            TEXT,
   max_turns        INTEGER NOT NULL DEFAULT 10,
   scope            TEXT,
+  system_prompt_override TEXT,
   updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(org_id, linear_team_id)
 );

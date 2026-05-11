@@ -2,23 +2,8 @@ import { Hono } from "hono";
 
 import type { Env } from "../index";
 import { verifyLinearSignature } from "../lib/signature";
-import { DispatcherClient, DispatcherError } from "../lib/dispatcher";
-import {
-  buildActivityClient,
-  postError,
-  postResponse,
-  postThought,
-} from "../lib/activities";
-import {
-  resolvePrompt,
-  resolveRepoUrl,
-  summarizeStdout,
-  truncate,
-} from "../lib/session-helpers";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
 
-// Re-exported so existing call sites (and tests) that imported these
-// from `routes/webhook` keep working after the helpers moved.
 export { summarizeStdout } from "../lib/session-helpers";
 
 /**
@@ -148,102 +133,6 @@ export function buildWebhookRouter() {
   return app;
 }
 
-export async function runSession(
-  env: Env,
-  event: AgentSessionEventWebhook,
-): Promise<void> {
-  const accessToken = await env.LINEAR_TOKENS.get("access_token");
-  if (!accessToken) {
-    // Nothing we can post back to Linear without the token — log and bail.
-    console.error(
-      "no_access_token",
-      JSON.stringify({ session_id: event.agentSession.id }),
-    );
-    return;
-  }
-
-  const linear = buildActivityClient(accessToken);
-  const sessionId = event.agentSession.id;
-
-  await safe(() =>
-    postThought(
-      linear,
-      sessionId,
-      "Picked this up — preparing the sandbox. Cold-starts can take ~30–60s before tool activity begins streaming.",
-    ),
-  );
-
-  const repoUrl = resolveRepoUrl(env, event.agentSession);
-  if (!repoUrl) {
-    await safe(() =>
-      postError(
-        linear,
-        sessionId,
-        "No repository is configured for this team. Add one in `PROJECT_MAPPINGS_JSON` or the project config.",
-      ),
-    );
-    return;
-  }
-
-  const prompt = resolvePrompt(event);
-  if (!prompt) {
-    await safe(() =>
-      postError(
-        linear,
-        sessionId,
-        "Couldn't find a prompt in the session payload (no promptContext, comment body, or issue description).",
-      ),
-    );
-    return;
-  }
-
-  const dispatcher = new DispatcherClient(env.DISPATCHER_URL, env.DISPATCH_HMAC_SECRET);
-
-  const issueIdentifier = event.agentSession.issue?.identifier ?? sessionId;
-
-  try {
-    const result = await dispatcher.run({
-      scope: env.DEFAULT_SCOPE,
-      issueId: issueIdentifier,
-      repoUrl,
-      prompt,
-      engine: (env.DEFAULT_ENGINE as "pi") ?? "pi",
-      model: env.DEFAULT_MODEL || null,
-    });
-
-    if (result.exit_code === 0) {
-      await safe(() =>
-        postResponse(
-          linear,
-          sessionId,
-          summarizeStdout(result.stdout) ||
-            `Run finished in ${(result.duration_ms / 1000).toFixed(1)}s.`,
-        ),
-      );
-    } else {
-      await safe(() =>
-        postError(
-          linear,
-          sessionId,
-          `Engine exited with code ${result.exit_code}.\n\n` +
-            "```\n" +
-            truncate(result.stderr || result.stdout, 2000) +
-            "\n```",
-        ),
-      );
-    }
-  } catch (e) {
-    const msg =
-      e instanceof DispatcherError
-        ? `Dispatcher error (${e.status}): ${typeof e.body === "string" ? e.body : e.body.error}`
-        : e instanceof Error
-          ? e.message
-          : "unknown_dispatcher_error";
-    await safe(() =>
-      postError(linear, sessionId, msg),
-    );
-  }
-}
 
 function isAgentSessionEvent(value: unknown): value is AgentSessionEventWebhook {
   if (!value || typeof value !== "object") return false;
@@ -257,10 +146,3 @@ function isAgentSessionEvent(value: unknown): value is AgentSessionEventWebhook 
   return true;
 }
 
-async function safe(fn: () => Promise<unknown>): Promise<void> {
-  try {
-    await fn();
-  } catch (e) {
-    console.error("activity_post_failed", e instanceof Error ? e.message : e);
-  }
-}

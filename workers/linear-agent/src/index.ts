@@ -36,12 +36,9 @@ export interface Env {
   URL: string;
 
   // Run defaults — used when no per-project D1 row exists yet.
-  // PROJECT_MAPPINGS_JSON stays as a fallback during the D1 cutover
-  // so deploys without a seeded DB keep working.
   DEFAULT_SCOPE: string;
   DEFAULT_MODEL: string;
   DEFAULT_ENGINE: string;
-  PROJECT_MAPPINGS_JSON: string;
   // Max turns per session. Project rows override this. Defaults to 10
   // when neither is present.
   DEFAULT_MAX_TURNS?: string;
