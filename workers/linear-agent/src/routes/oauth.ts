@@ -57,9 +57,6 @@ export function buildOAuthRouter() {
         `${c.env.URL}/oauth/callback`,
       );
 
-      // Look up the organization id so we can key the install by it.
-      // If the viewer query fails (transient Linear API issue), the
-      // token is not persisted — the next /oauth run can heal the row.
       let organizationId: string | null = null;
       try {
         organizationId = await OAuthHelper.fetchOrganizationId(
@@ -72,13 +69,19 @@ export function buildOAuthRouter() {
         );
       }
 
-      if (organizationId) {
-        await new InstallationStore(c.env.DB).upsert(
-          organizationId,
-          token.access_token,
-          token.scope,
+      if (!organizationId) {
+        await c.env.LINEAR_TOKENS.delete("oauth_state");
+        return c.json(
+          { error: "org_lookup_failed", message: "Could not resolve organization. Please retry the install." },
+          502,
         );
       }
+
+      await new InstallationStore(c.env.DB).upsert(
+        organizationId,
+        token.access_token,
+        token.scope,
+      );
 
       await c.env.LINEAR_TOKENS.delete("oauth_state");
 
