@@ -47,7 +47,7 @@ import {
   resolveRepoUrl,
   truncate,
 } from "../lib/session-helpers";
-import { InstallationStore, ProjectStore, SessionStore } from "../lib/store";
+import { AgentSessionStore, InstallationStore, ProjectStore } from "../lib/store";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
 
 export interface SessionRunnerParams {
@@ -273,7 +273,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
 
     await step.do("record-session-start", async () => {
       try {
-        await new SessionStore(this.env.DB).create({
+        await new AgentSessionStore(this.env.DB).create({
           id: sessionId,
           linearIssueId: issueGraphqlId,
           linearIssueTitle:
@@ -517,7 +517,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
             : terminal!.kind === "done" && terminal!.inbandError
               ? terminal!.inbandError
               : null;
-        await new SessionStore(this.env.DB).update(sessionId, {
+        await new AgentSessionStore(this.env.DB).update(sessionId, {
           status: finalStatus,
           completedAt: new Date().toISOString(),
           error: errorMsg,

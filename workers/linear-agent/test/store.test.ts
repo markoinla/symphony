@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { InstallationStore, ProjectStore, UserStore } from "../src/lib/store";
+import { InstallationStore, ProjectStore, SessionStore, UserStore } from "../src/lib/store";
 import { FakeD1 } from "./helpers/fake-d1";
 
 describe("InstallationStore", () => {
@@ -133,7 +133,7 @@ describe("UserStore", () => {
 
     const org2Users = await store.listByOrg("org-2");
     expect(org2Users).toHaveLength(1);
-    expect(org2Users[0].linear_user_id).toBe("u-c");
+    expect(org2Users[0]?.linear_user_id).toBe("u-c");
   });
 });
 
@@ -178,5 +178,71 @@ describe("ProjectStore", () => {
       max_turns: 25,
       default_branch: "trunk",
     });
+  });
+});
+
+describe("SessionStore", () => {
+  function seedUser(db: FakeD1, id = "user-1") {
+    const users = new UserStore(db as unknown as D1Database);
+    return users.upsert({
+      linearUserId: id,
+      organizationId: "org-1",
+      accessToken: "tok",
+      email: "alice@example.com",
+      name: "Alice",
+    });
+  }
+
+  it("creates a session and validates it", async () => {
+    const db = new FakeD1();
+    await seedUser(db);
+    const store = new SessionStore(db as unknown as D1Database);
+
+    const token = await store.create("user-1");
+    expect(token).toHaveLength(64);
+
+    const user = await store.validate(token);
+    expect(user).not.toBeNull();
+    expect(user?.linear_user_id).toBe("user-1");
+    expect(user?.email).toBe("alice@example.com");
+  });
+
+  it("returns null for unknown token", async () => {
+    const db = new FakeD1();
+    const store = new SessionStore(db as unknown as D1Database);
+    expect(await store.validate("bogus")).toBeNull();
+  });
+
+  it("returns null for expired session", async () => {
+    const db = new FakeD1();
+    await seedUser(db);
+    const store = new SessionStore(db as unknown as D1Database);
+
+    const token = await store.create("user-1", 0);
+    const user = await store.validate(token);
+    expect(user).toBeNull();
+  });
+
+  it("deletes a session by token", async () => {
+    const db = new FakeD1();
+    await seedUser(db);
+    const store = new SessionStore(db as unknown as D1Database);
+
+    const token = await store.create("user-1");
+    expect(await store.delete(token)).toBe(true);
+    expect(await store.validate(token)).toBeNull();
+    expect(await store.delete(token)).toBe(false);
+  });
+
+  it("deletes all sessions for a user", async () => {
+    const db = new FakeD1();
+    await seedUser(db);
+    const store = new SessionStore(db as unknown as D1Database);
+
+    const t1 = await store.create("user-1");
+    const t2 = await store.create("user-1");
+    await store.deleteByUser("user-1");
+    expect(await store.validate(t1)).toBeNull();
+    expect(await store.validate(t2)).toBeNull();
   });
 });
