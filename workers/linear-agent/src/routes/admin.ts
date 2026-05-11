@@ -109,6 +109,10 @@ export function buildAdminRouter() {
   });
 
   app.get("/admin/installations", async (c) => {
+    // Don't leak access tokens here — return scopes + timestamps only.
+    // We SELECT just the safe columns AND strip the token field in JS
+    // as defense-in-depth, so an accidental SELECT * elsewhere can't
+    // leak credentials.
     const result = await c.env.DB
       .prepare(
         `SELECT org_id, scopes, status, github_app_installation_id, installed_at, refreshed_at
@@ -122,7 +126,15 @@ export function buildAdminRouter() {
         installed_at: string;
         refreshed_at: string;
       }>();
-    return c.json({ installations: result.results });
+    const installations = result.results.map((row) => ({
+      org_id: row.org_id,
+      scopes: row.scopes,
+      status: row.status,
+      github_app_installation_id: row.github_app_installation_id,
+      installed_at: row.installed_at,
+      refreshed_at: row.refreshed_at,
+    }));
+    return c.json({ installations });
   });
 
   /**

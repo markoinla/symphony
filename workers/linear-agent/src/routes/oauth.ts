@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
+import { signCookieValue } from "../lib/dashboard-auth";
 import { OAuthHelper } from "../lib/oauth-helper";
-import { InstallationStore, SessionStore, UserStore } from "../lib/store";
-import { setSessionCookie } from "./dashboard";
+import { InstallationStore, UserStore } from "../lib/store";
 
 /**
  * OAuth routes for installing the agent into a Linear workspace.
@@ -164,13 +164,18 @@ export function buildOAuthRouter() {
 
       await c.env.LINEAR_TOKENS.delete("oauth_user_state:" + state);
 
-      const sessionToken = await new SessionStore(c.env.DB).create(viewer.id);
-      const secure = new URL(c.req.url).protocol === "https:";
+      const signed = await signCookieValue(
+        viewer.id,
+        c.env.LINEAR_CLIENT_SECRET,
+      );
+      const thirtyDays = 30 * 24 * 60 * 60 * 1000;
+      const expires = new Date(Date.now() + thirtyDays).toUTCString();
+
       return new Response(null, {
         status: 302,
         headers: {
-          Location: "/dashboard/",
-          "Set-Cookie": setSessionCookie(sessionToken, 30, secure),
+          Location: "/dashboard",
+          "Set-Cookie": `dashboard_session=${signed}; Path=/; Expires=${expires}; HttpOnly; SameSite=Lax; Secure`,
         },
       });
     } catch (e) {
