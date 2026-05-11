@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 
 import { buildAdminRouter } from "./routes/admin";
+import { buildDashboardApiRouter } from "./routes/dashboard-api";
 import { buildDashboardRouter } from "./routes/dashboard";
 import { buildOAuthRouter } from "./routes/oauth";
 import { buildWebhookRouter } from "./routes/webhook";
@@ -85,6 +86,7 @@ export function buildApp() {
 
   app.get("/health", (c) => c.json({ ok: true }));
 
+  app.route("/", buildDashboardApiRouter());
   app.route("/", buildDashboardRouter());
   app.route("/", buildOAuthRouter());
   app.route("/", buildWebhookRouter());
