@@ -2,27 +2,35 @@
  * Pi engine adapter — translates `pi --print --mode json` NDJSON output
  * into NormalizedEvent records.
  *
- * Pi emits one JSON object per stdout line. The schemas we observe in
- * practice (mirrored in tests against fixture stdout):
+ * Pi's event schema is documented in its `AgentEvent` (lifecycle +
+ * tool_execution_*) and `AssistantMessageEvent` (the
+ * `assistantMessageEvent` field on `message_update`) types:
+ *   node_modules/@mariozechner/pi-ai/dist/types.d.ts
+ *   node_modules/@mariozechner/pi-coding-agent/docs/json.md
  *
- *   { "type": "session", "id": "..." }                          — drop
- *   { "type": "agent_start" }                                   — drop
- *   { "type": "turn_start" }                                    — drop
- *   { "type": "message_start", "message": { "role": "user" } }  — drop
- *   { "type": "message_end",
- *     "message": { "role": "assistant",
- *                  "content": [ { "type":"text", "text":"..." } ] } }
- *     → { type: "assistant_msg", text: "..." }
- *   { "type": "message_update",
- *     "assistantMessageEvent": { "type":"text_delta", "delta":"..." } }
- *     → currently dropped (the message_end carries the full text);
- *       a future change could publish these as fine-grained streaming
- *       text events. For now we keep activity volume low.
- *   { "type": "agent_end" }                                     — drop
+ * We surface the user-meaningful subset and drop streaming deltas to
+ * keep Linear's activity volume sane (the timeline becomes unreadable
+ * above ~1 activity/sec). Mapping:
  *
- * Pi does not currently surface structured tool-call events on stdout;
- * tool use is internal. If pi grows a `tool_use` event later, this is
- * where it lands.
+ *   tool_execution_start                      → tool_call
+ *   tool_execution_end (isError=false)        → tool_result ok=true
+ *   tool_execution_end (isError=true)         → tool_result ok=false
+ *   message_update / thinking_end             → thought (full block)
+ *   message_end (role=assistant, text blocks) → assistant_msg
+ *
+ * Dropped:
+ *   session, agent_start, agent_end, turn_start, turn_end (lifecycle)
+ *   message_start                             (consolidated by message_end)
+ *   message_update / text_delta|text_start|text_end (high volume; final
+ *                                             text comes via message_end)
+ *   message_update / thinking_delta|thinking_start (consolidated by
+ *                                             thinking_end)
+ *   message_update / toolcall_*               (model planning the call;
+ *                                             actual invocation is
+ *                                             tool_execution_*)
+ *   tool_execution_update                     (partial tool output;
+ *                                             final result comes via _end)
+ *   user-role message_end                     (the input we sent)
  *
  * The `turn` field on the produced events is filled in by the dispatcher
  * caller, not by this adapter — adapters are turn-agnostic.
@@ -35,13 +43,30 @@ interface PiContent {
   text?: string;
 }
 
+interface PiToolResultContent {
+  type?: string;
+  text?: string;
+}
+
 interface PiMessageEvent {
   type?: string;
   message?: {
     role?: string;
     content?: PiContent[];
   };
-  assistantMessageEvent?: { type?: string; delta?: string };
+  assistantMessageEvent?: {
+    type?: string;
+    content?: string;
+    delta?: string;
+  };
+  // tool_execution_* shapes
+  toolCallId?: string;
+  toolName?: string;
+  args?: unknown;
+  result?: {
+    content?: PiToolResultContent[];
+  } | string | null;
+  isError?: boolean;
 }
 
 export const piEngineAdapter: EngineAdapter = {
@@ -59,6 +84,39 @@ export const piEngineAdapter: EngineAdapter = {
       return [];
     }
 
+    if (event.type === "tool_execution_start") {
+      if (!event.toolName) return [];
+      return [
+        {
+          type: "tool_call",
+          tool: event.toolName,
+          args: event.args,
+          tool_id: event.toolCallId,
+        },
+      ];
+    }
+
+    if (event.type === "tool_execution_end") {
+      const text = extractToolResultText(event.result);
+      return [
+        {
+          type: "tool_result",
+          tool_id: event.toolCallId,
+          ok: !event.isError,
+          result: text,
+        },
+      ];
+    }
+
+    if (
+      event.type === "message_update" &&
+      event.assistantMessageEvent?.type === "thinking_end"
+    ) {
+      const text = event.assistantMessageEvent.content ?? "";
+      if (text.length === 0) return [];
+      return [{ type: "thought", text }];
+    }
+
     if (event.type === "message_end" && event.message?.role === "assistant") {
       const text = (event.message.content ?? [])
         .filter((c) => c.type === "text" && typeof c.text === "string")
@@ -68,10 +126,16 @@ export const piEngineAdapter: EngineAdapter = {
       return [{ type: "assistant_msg", text }];
     }
 
-    // Everything else (session/lifecycle/text_delta/user-role
-    // message_end) is intentionally dropped today. The runtime that
-    // collects events still has access to raw stdout via the
-    // dispatcher's buffered branch if it needs the full transcript.
     return [];
   },
 };
+
+function extractToolResultText(result: PiMessageEvent["result"]): string {
+  if (result == null) return "";
+  if (typeof result === "string") return result;
+  const blocks = result.content ?? [];
+  return blocks
+    .filter((c) => c.type === "text" && typeof c.text === "string")
+    .map((c) => c.text as string)
+    .join("");
+}

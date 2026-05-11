@@ -250,6 +250,14 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
         return;
       }
 
+      // Surface each prep stage as a `thought` so the Linear timeline
+      // shows progress during the cold-start window (snapshot restore +
+      // clone can run 30–60s combined). These flow through the same
+      // event pipeline as engine-emitted thoughts.
+      await emit({
+        type: "thought",
+        text: "Restoring sandbox environment from snapshot…",
+      });
       await sandbox.restoreBackup(record.handle);
 
       const workspaceDir = `/workspace/${parsed.issueId}`;
@@ -257,6 +265,10 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
       await sandbox.exec(
         `rm -rf ${shellQuote(workspaceDir)} && mkdir -p ${shellQuote(workspaceDir)}`,
       );
+      await emit({
+        type: "thought",
+        text: `Cloning ${parsed.repoUrl}…`,
+      });
       const cloneResult = await sandbox.exec(
         `cd ${shellQuote(workspaceDir)} && git clone ${shellQuote(parsed.repoUrl)} .`,
       );
@@ -268,6 +280,10 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
       }
 
       const cmd = buildEngineCommand(parsed, workspaceDir);
+      await emit({
+        type: "thought",
+        text: `Starting ${parsed.engine}${parsed.model ? ` (${parsed.model})` : ""}…`,
+      });
       const execStream = await sandbox.execStream(cmd, {
         timeout: parsed.timeoutMs,
       });

@@ -127,7 +127,11 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
 
     await step.do("post-initial-thought", async () => {
       const linear = buildActivityClient(token);
-      await postThought(linear, sessionId, "Picked this up — working on it.");
+      await postThought(
+        linear,
+        sessionId,
+        "Picked this up — preparing the sandbox. Cold-starts can take ~30–60s before tool activity begins streaming.",
+      );
     });
 
     const resolved: ResolvedInputs = await step.do(

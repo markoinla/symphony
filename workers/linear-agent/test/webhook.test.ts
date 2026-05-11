@@ -336,7 +336,10 @@ describe("runSession", () => {
     expect(linearCalls).toHaveLength(2);
     expect(linearCalls[0]).toEqual({
       agentSessionId: "session-2",
-      content: { type: "thought", body: "Picked this up — working on it." },
+      content: {
+        type: "thought",
+        body: "Picked this up — preparing the sandbox. Cold-starts can take ~30–60s before tool activity begins streaming.",
+      },
     });
     expect(linearCalls[1]).toEqual({
       agentSessionId: "session-2",

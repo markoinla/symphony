@@ -165,7 +165,13 @@ export async function runSession(
   const linear = buildActivityClient(accessToken);
   const sessionId = event.agentSession.id;
 
-  await safe(() => postThought(linear, sessionId, "Picked this up — working on it."));
+  await safe(() =>
+    postThought(
+      linear,
+      sessionId,
+      "Picked this up — preparing the sandbox. Cold-starts can take ~30–60s before tool activity begins streaming.",
+    ),
+  );
 
   const repoUrl = resolveRepoUrl(env, event.agentSession);
   if (!repoUrl) {

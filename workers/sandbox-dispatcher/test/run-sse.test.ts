@@ -249,18 +249,37 @@ describe("POST /run (Accept: text/event-stream)", () => {
 
     const events = await consumeSseFrames(res);
 
+    // The dispatcher prefixes each successful run with three progress
+    // `thought` events so the Linear timeline shows what's happening
+    // during the cold-start window (snapshot restore + clone +
+    // engine startup).
     expect(events.map((e) => e.type)).toEqual([
+      "thought",
+      "thought",
+      "thought",
       "assistant_msg",
       "turn_end",
       "result",
     ]);
     expect(events[0]).toMatchObject({
+      type: "thought",
+      text: expect.stringContaining("Restoring sandbox"),
+    });
+    expect(events[1]).toMatchObject({
+      type: "thought",
+      text: expect.stringContaining("Cloning"),
+    });
+    expect(events[2]).toMatchObject({
+      type: "thought",
+      text: expect.stringContaining("Starting pi"),
+    });
+    expect(events[3]).toMatchObject({
       type: "assistant_msg",
       text: "Done — opened PR #123.",
     });
-    expect(events[1]).toMatchObject({ type: "turn_end", turn: 1, reason: "completed" });
-    expect(events[2]).toMatchObject({ type: "result", exit_code: 0 });
-    expect(events[2]?.duration_ms).toEqual(expect.any(Number));
+    expect(events[4]).toMatchObject({ type: "turn_end", turn: 1, reason: "completed" });
+    expect(events[5]).toMatchObject({ type: "result", exit_code: 0 });
+    expect(events[5]?.duration_ms).toEqual(expect.any(Number));
     expect(sandbox.destroyed).toBe(true);
   });
 
@@ -319,9 +338,16 @@ describe("POST /run (Accept: text/event-stream)", () => {
 
     expect(res.status).toBe(200);
     const events = await consumeSseFrames(res);
-    expect(events.map((e) => e.type)).toEqual(["error", "result"]);
-    expect((events[0] as { message: string }).message).toContain("clone_failed");
-    expect((events[1] as { exit_code: number }).exit_code).toBe(128);
+    // The "Restoring sandbox" and "Cloning" thoughts emit before the
+    // clone error; "Starting pi" never fires because we abort first.
+    expect(events.map((e) => e.type)).toEqual([
+      "thought",
+      "thought",
+      "error",
+      "result",
+    ]);
+    expect((events[2] as { message: string }).message).toContain("clone_failed");
+    expect((events[3] as { exit_code: number }).exit_code).toBe(128);
     expect(sandbox.destroyed).toBe(true);
   });
 });
