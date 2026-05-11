@@ -68,16 +68,7 @@ export async function mintInstallationToken(
   return json.token;
 }
 
-/**
- * Create a short-lived JWT for GitHub App authentication.
- *
- * GitHub requires:
- *   - iss: the App ID
- *   - iat: issued at (backdate 60s for clock skew)
- *   - exp: expiration (max 10 minutes; we use 9 minutes)
- *   - alg: RS256
- */
-async function createAppJwt(
+export async function createAppJwt(
   appId: string,
   privateKeyPem: string,
 ): Promise<string> {
@@ -130,4 +121,8 @@ function base64UrlEncodeBytes(bytes: Uint8Array): string {
   let binary = "";
   for (const b of bytes) binary += String.fromCharCode(b);
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+export function clearTokenCache(): void {
+  tokenCache.clear();
 }
