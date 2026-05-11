@@ -1,18 +1,12 @@
 /**
  * D1-backed repository for the linear-agent worker.
  *
- * Two tables:
- *   - `installations` — one row per Linear org OAuth (replaces the
- *     single KV `access_token` from item 1).
- *   - `projects`     — per-team config: repo URL, engine, model,
- *     max_turns (replaces `PROJECT_MAPPINGS_JSON`).
+ * Three tables:
+ *   - `installations` — one row per Linear org OAuth (app install).
+ *   - `projects`      — per-team config: repo URL, engine, model, max_turns.
+ *   - `users`         — per-user OAuth tokens for dashboard login.
  *
- * Migration: see `workers/linear-agent/migrations/0001_init.sql`.
- *
- * Style note: column names are SQL-flavored (`organization_id`,
- * `max_turns`); the typed records mirror them via `snake_case` so we
- * don't have to remember which mapping is which. Callers that prefer
- * camelCase wrap the read in their own adapter.
+ * Migrations: `migrations/0001_init.sql`, `migrations/0002_users.sql`.
  */
 
 export interface InstallationRecord {
@@ -108,6 +102,79 @@ export class InstallationStore {
       .bind(organizationId)
       .run();
     return (result.meta.changes ?? 0) > 0;
+  }
+}
+
+export interface UserRecord {
+  linear_user_id: string;
+  organization_id: string;
+  access_token: string;
+  refresh_token: string | null;
+  expires_at: string | null;
+  email: string | null;
+  name: string | null;
+  created_at: string;
+  refreshed_at: string;
+}
+
+export class UserStore {
+  constructor(private readonly db: D1Database) {}
+
+  async upsert(input: {
+    linearUserId: string;
+    organizationId: string;
+    accessToken: string;
+    refreshToken?: string | null;
+    expiresAt?: string | null;
+    email?: string | null;
+    name?: string | null;
+  }): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO users (linear_user_id, organization_id, access_token, refresh_token, expires_at, email, name)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(linear_user_id) DO UPDATE SET
+           organization_id = excluded.organization_id,
+           access_token    = excluded.access_token,
+           refresh_token   = excluded.refresh_token,
+           expires_at      = excluded.expires_at,
+           email           = excluded.email,
+           name            = excluded.name,
+           refreshed_at    = datetime('now')`,
+      )
+      .bind(
+        input.linearUserId,
+        input.organizationId,
+        input.accessToken,
+        input.refreshToken ?? null,
+        input.expiresAt ?? null,
+        input.email ?? null,
+        input.name ?? null,
+      )
+      .run();
+  }
+
+  async getByLinearUserId(linearUserId: string): Promise<UserRecord | null> {
+    return await this.db
+      .prepare(
+        `SELECT linear_user_id, organization_id, access_token, refresh_token,
+                expires_at, email, name, created_at, refreshed_at
+         FROM users WHERE linear_user_id = ?`,
+      )
+      .bind(linearUserId)
+      .first<UserRecord>();
+  }
+
+  async listByOrg(organizationId: string): Promise<UserRecord[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT linear_user_id, organization_id, access_token, refresh_token,
+                expires_at, email, name, created_at, refreshed_at
+         FROM users WHERE organization_id = ? ORDER BY created_at`,
+      )
+      .bind(organizationId)
+      .all<UserRecord>();
+    return result.results;
   }
 }
 
