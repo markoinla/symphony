@@ -13,7 +13,10 @@
   // The Worker fetches from the ASSETS binding for /dashboard/* routes.
   "assets": {
     "directory": "./dashboard/dist",
-    "binding": "ASSETS"
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "none",
+    "not_found_handling": "none"
   },
 
   // KV holds (a) the per-flow OAuth state nonce and (b) the agent's own

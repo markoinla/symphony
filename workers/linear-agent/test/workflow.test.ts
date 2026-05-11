@@ -46,12 +46,21 @@ class FakeKV {
   }
 }
 
+// Tests use a fixed Better Auth org id `org-1`, mapped to the
+// Linear org `linear-org-1`. The load-token step looks up the install
+// by linear_organization_id; subsequent steps key off the Better Auth
+// organization_id.
+const NOW_SEC = () => Math.floor(Date.now() / 1000);
+const LINEAR_ORG_ID = "linear-org-1";
+const ORG_ID = "org-1";
+
 function makeSeededDb(): FakeD1 {
   const db = new FakeD1();
-  db.projects.set("org-1:team-abc", {
-    id: 1,
-    org_id: "org-1",
+  db.projects.set(`${ORG_ID}:team-abc`, {
+    id: "project-uuid-1",
+    organization_id: ORG_ID,
     linear_team_id: "team-abc",
+    linear_team_name: "",
     repo_url: "https://github.com/markoinla/symphony.git",
     default_branch: "main",
     engine: "pi",
@@ -59,7 +68,8 @@ function makeSeededDb(): FakeD1 {
     max_turns: 10,
     scope: null,
     system_prompt_override: null,
-    updated_at: new Date().toISOString(),
+    created_at: NOW_SEC(),
+    updated_at: NOW_SEC(),
   });
   return db;
 }
@@ -226,22 +236,23 @@ function buildRunner(env: Env): SessionRunner {
 
 function seededDb(): FakeD1 {
   const db = new FakeD1();
-  db.installations.set("org-1", {
-    id: 1,
-    org_id: "org-1",
+  db.linearAgentInstalls.set(ORG_ID, {
+    id: "install-uuid-1",
+    organization_id: ORG_ID,
+    linear_organization_id: LINEAR_ORG_ID,
     access_token: "fake-token",
     refresh_token: null,
     scopes: "read,write",
-    installed_by: "oauth",
+    installed_by_user_id: "user-1",
     status: "active",
-    github_app_installation_id: null,
-    installed_at: new Date().toISOString(),
-    refreshed_at: new Date().toISOString(),
+    installed_at: NOW_SEC(),
+    refreshed_at: NOW_SEC(),
   });
-  db.projects.set("org-1:team-abc", {
-    id: 1,
-    org_id: "org-1",
+  db.projects.set(`${ORG_ID}:team-abc`, {
+    id: "project-uuid-1",
+    organization_id: ORG_ID,
     linear_team_id: "team-abc",
+    linear_team_name: "",
     repo_url: "https://github.com/markoinla/symphony.git",
     default_branch: "main",
     engine: "pi",
@@ -249,7 +260,8 @@ function seededDb(): FakeD1 {
     max_turns: 10,
     scope: null,
     system_prompt_override: null,
-    updated_at: new Date().toISOString(),
+    created_at: NOW_SEC(),
+    updated_at: NOW_SEC(),
   });
   return db;
 }
@@ -290,6 +302,7 @@ describe("SessionRunner.run — happy path", () => {
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
       action: "created",
       webhookId: "wh-1",
       agentSession: baseSession,
@@ -351,6 +364,7 @@ describe("SessionRunner.run — happy path", () => {
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
       action: "created",
       webhookId: "wh-tool",
       agentSession: baseSession,
@@ -380,6 +394,7 @@ describe("SessionRunner.run — abort branches", () => {
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
       action: "created",
       webhookId: "wh-2",
       agentSession: baseSession,
@@ -396,17 +411,17 @@ describe("SessionRunner.run — abort branches", () => {
     const kv = new FakeKV();
     installFetchMock({ dispatcherEvents: [] });
     const installOnlyDb = new FakeD1();
-    installOnlyDb.installations.set("org-1", {
-      id: 1,
-      org_id: "org-1",
+    installOnlyDb.linearAgentInstalls.set(ORG_ID, {
+      id: "install-uuid-1",
+      organization_id: ORG_ID,
+      linear_organization_id: LINEAR_ORG_ID,
       access_token: "fake-token",
       refresh_token: null,
       scopes: "read,write",
-      installed_by: "oauth",
+      installed_by_user_id: "user-1",
       status: "active",
-      github_app_installation_id: null,
-      installed_at: new Date().toISOString(),
-      refreshed_at: new Date().toISOString(),
+      installed_at: NOW_SEC(),
+      refreshed_at: NOW_SEC(),
     });
     const env = makeEnv(kv, {}, installOnlyDb);
     const runner = buildRunner(env);
@@ -414,6 +429,7 @@ describe("SessionRunner.run — abort branches", () => {
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
       action: "created",
       webhookId: "wh-3",
       agentSession: baseSession,
@@ -444,6 +460,7 @@ describe("SessionRunner.run — abort branches", () => {
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
       action: "created",
       webhookId: "wh-4",
       agentSession: { id: "session-1", issue: { ...baseSession.issue, title: "" } },
@@ -482,6 +499,7 @@ describe("SessionRunner.run — dispatch failures", () => {
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
       action: "created",
       webhookId: "wh-5",
       agentSession: baseSession,
@@ -537,6 +555,7 @@ describe("SessionRunner.run — dispatch failures", () => {
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
       action: "created",
       webhookId: "wh-6",
       agentSession: baseSession,
@@ -576,6 +595,7 @@ describe("SessionRunner.run — dispatch failures", () => {
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
       action: "created",
       webhookId: "wh-7",
       agentSession: baseSession,
@@ -696,6 +716,7 @@ describe("SessionRunner.run — PR creation (item 4)", () => {
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
       action: "created",
       webhookId: "wh-pr",
       agentSession: baseSession,
@@ -752,6 +773,7 @@ describe("SessionRunner.run — PR creation (item 4)", () => {
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
       action: "created",
       webhookId: "wh-no-token",
       agentSession: baseSession,
@@ -786,6 +808,7 @@ describe("SessionRunner.run — PR creation (item 4)", () => {
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
       action: "created",
       webhookId: "wh-no-branch",
       agentSession: baseSession,
@@ -869,6 +892,7 @@ describe("SessionRunner.run — multi-turn loop", () => {
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
       action: "created",
       webhookId: "wh-multi",
       agentSession: baseSession,
@@ -929,22 +953,23 @@ describe("SessionRunner.run — multi-turn loop", () => {
     });
 
     const db = new FakeD1();
-    db.installations.set("org-1", {
-      id: 1,
-      org_id: "org-1",
+    db.linearAgentInstalls.set(ORG_ID, {
+      id: "install-uuid-1",
+      organization_id: ORG_ID,
+      linear_organization_id: LINEAR_ORG_ID,
       access_token: "fake-token",
       refresh_token: null,
       scopes: "read,write",
-      installed_by: "oauth",
+      installed_by_user_id: "user-1",
       status: "active",
-      github_app_installation_id: null,
-      installed_at: new Date().toISOString(),
-      refreshed_at: new Date().toISOString(),
+      installed_at: NOW_SEC(),
+      refreshed_at: NOW_SEC(),
     });
-    db.projects.set("org-1:team-abc", {
-      id: 1,
-      org_id: "org-1",
+    db.projects.set(`${ORG_ID}:team-abc`, {
+      id: "project-uuid-1",
+      organization_id: ORG_ID,
       linear_team_id: "team-abc",
+      linear_team_name: "",
       repo_url: "https://github.com/markoinla/symphony.git",
       default_branch: "main",
       engine: "pi",
@@ -952,7 +977,8 @@ describe("SessionRunner.run — multi-turn loop", () => {
       max_turns: 2,
       scope: null,
       system_prompt_override: null,
-      updated_at: new Date().toISOString(),
+      created_at: NOW_SEC(),
+      updated_at: NOW_SEC(),
     });
     const env = makeEnv(kv, {}, db);
     const runner = buildRunner(env);
@@ -960,6 +986,7 @@ describe("SessionRunner.run — multi-turn loop", () => {
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
       action: "created",
       webhookId: "wh-max",
       agentSession: baseSession,

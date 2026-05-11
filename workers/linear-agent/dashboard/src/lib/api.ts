@@ -1,216 +1,866 @@
-export interface Project {
-  id: number;
-  org_id: string;
-  linear_team_id: string;
-  linear_team_name: string;
-  repo_url: string;
-  default_branch: string;
-  engine: string;
-  model: string | null;
-  max_turns: number;
-  scope: string | null;
-  system_prompt_override: string | null;
-  created_at: string;
-  updated_at: string;
-}
+// Dashboard API client for the linear-agent Cloudflare Worker.
+//
+// This file preserves the export surface of the original Symphony API
+// client (so the ported pages compile unchanged) but routes every call
+// to the Worker's `/dashboard/api/*` and `/oauth/*` endpoints. Where the
+// Worker has no equivalent yet (settings KV, in-flight orchestrator
+// state, per-session SSE timeline, Linear project search, GitHub repo
+// search, proxy flow) the function returns a benign empty/disabled
+// shape and logs a one-time `console.warn` so unimplemented surfaces are
+// visible in the browser console as we wire them up.
+//
+// Worker route reference:
+//   src/routes/dashboard.ts      — /dashboard/api/me, /dashboard/api/sessions*
+//   src/routes/dashboard-api.ts  — /dashboard/api/projects*, /dashboard/api/integrations*
+//   src/routes/oauth.ts          — /linear/agent-install (agent install flow)
+//   src/routes/github.ts         — /github/install
+//   Better Auth                  — /api/auth/* (sign-in, sign-up, signout, org plugin)
 
-export interface ProjectInput {
-  linear_team_id: string;
-  linear_team_name: string;
-  repo_url: string;
-  default_branch: string;
-  engine: string;
-  model: string | null;
-  scope: string | null;
-  system_prompt_override: string | null;
-}
+import { authClient } from "./auth-client";
 
-class ApiError extends Error {
-  constructor(
-    public status: number,
-    public body: { error: string; fields?: Record<string, string> },
-  ) {
-    super(body.error);
+export type ApiErrorPayload = {
+  error?: {
+    code?: string
+    message?: string
+    details?: Record<string, string[]>
   }
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    ...options,
+export class ApiError extends Error {
+  status: number
+  payload: ApiErrorPayload | null
+
+  constructor(status: number, payload: ApiErrorPayload | null, fallback: string) {
+    super(payload?.error?.message ?? fallback)
+    this.status = status
+    this.payload = payload
+  }
+}
+
+// ── Types (preserved from Symphony so pages compile unchanged) ──────
+
+export type Project = {
+  id: number
+  name: string
+  linear_project_slug: string | null
+  linear_organization_slug: string | null
+  linear_filter_by: string | null
+  linear_label_name: string | null
+  github_repo: string | null
+  github_branch: string | null
+  workspace_root: string | null
+  env_vars: string | null
+  created_at: string | null
+  updated_at: string | null
+}
+
+export type Setting = {
+  key: string
+  value: string
+}
+
+export type AgentSettingsDefaults = {
+  max_concurrent_agents: number
+  max_turns: number
+}
+
+export type SettingsPayload = {
+  settings: Setting[]
+  agent_defaults: AgentSettingsDefaults
+}
+
+export type TimelineMessage = {
+  id: number | string
+  timestamp: string | null
+  type: string
+  content: string
+  metadata: Record<string, unknown>
+}
+
+export type TimelineSession = {
+  id: number | null
+  issue_identifier: string | null
+  issue_title: string | null
+  session_id: string
+  status: string
+  started_at: string | null
+  ended_at: string | null
+  turn_count: number | null
+  input_tokens: number | null
+  output_tokens: number | null
+  total_tokens: number | null
+  worker_host: string | null
+  error: string | null
+  error_category: string | null
+  workflow_name: string | null
+  live: boolean
+  messages: TimelineMessage[]
+}
+
+export type SessionsPayload = {
+  sessions: Array<{
+    id: number
+    issue_identifier: string | null
+    issue_title: string | null
+    session_id: string | null
+    status: string
+    started_at: string | null
+    ended_at: string | null
+    turn_count: number
+    input_tokens: number
+    output_tokens: number
+    total_tokens: number
+    worker_host: string | null
+    error: string | null
+    error_category: string | null
+    workflow_name: string | null
+    github_branch: string | null
+    github_repo: string | null
+    project_name: string | null
+  }>
+}
+
+export type MessagesPayload = {
+  issue_identifier: string
+  issue_id: string | null
+  issue_title: string | null
+  status: string
+  active_session_id: string | null
+  sessions: TimelineSession[]
+}
+
+export type IssuePayload = {
+  issue_identifier: string
+  issue_id: string
+  status: string
+  workspace: { path: string | null; host: string | null }
+  attempts: { restart_count: number; current_retry_attempt: number }
+  running: {
+    worker_host: string | null
+    workspace_path: string | null
+    session_id: string | null
+    turn_count: number
+    state: string
+    started_at: string | null
+    last_event: string | null
+    last_message: string | null
+    last_event_at: string | null
+    tokens: { input_tokens: number; output_tokens: number; total_tokens: number }
+  } | null
+  retry: {
+    attempt: number
+    due_at: string | null
+    error: string | null
+    worker_host: string | null
+    workspace_path: string | null
+  } | null
+  recent_events: Array<{ at: string | null; event: string | null; message: string | null }>
+}
+
+export type LoadedWorkflow = { name: string; display_name: string }
+
+export type StatePayload = {
+  generated_at: string
+  counts: { running: number; retrying: number }
+  loaded_workflows?: LoadedWorkflow[]
+  running: Array<{
+    issue_id: string
+    issue_identifier: string
+    project_id: number | null
+    project_name: string | null
+    workflow_name?: string
+    state: string
+    worker_host: string | null
+    workspace_path: string | null
+    session_id: string | null
+    turn_count: number
+    last_event: string | null
+    last_message: string | null
+    started_at: string | null
+    last_event_at: string | null
+    tokens: { input_tokens: number; output_tokens: number; total_tokens: number }
+  }>
+  retrying: Array<{
+    issue_id: string
+    issue_identifier: string
+    project_id: number | null
+    project_name: string | null
+    workflow_name?: string
+    attempt: number
+    due_at: string | null
+    error: string | null
+    worker_host: string | null
+    workspace_path: string | null
+  }>
+  engine_totals: {
+    input_tokens: number
+    output_tokens: number
+    total_tokens: number
+    seconds_running: number
+  }
+  error?: { code: string; message: string }
+}
+
+export type ProjectBody = Omit<Project, 'id' | 'created_at' | 'updated_at'>
+
+// ── HTTP helper ─────────────────────────────────────────────────────
+
+async function requestJson<T>(input: string, init?: RequestInit) {
+  const response = await fetch(input, {
     headers: {
-      "Content-Type": "application/json",
-      ...options?.headers,
+      'content-type': 'application/json',
+      ...(init?.headers ?? {}),
     },
-    credentials: "same-origin",
-  });
+    credentials: 'same-origin',
+    ...init,
+  })
 
-  const json = await res.json();
-
-  if (!res.ok) {
-    throw new ApiError(
-      res.status,
-      json as { error: string; fields?: Record<string, string> },
-    );
+  if (response.status === 204) {
+    return null as T
   }
 
-  return json as T;
+  let payload: T | ApiErrorPayload
+  try {
+    payload = (await response.json()) as T | ApiErrorPayload
+  } catch {
+    payload = null as unknown as T
+  }
+
+  if (!response.ok) {
+    throw new ApiError(response.status, payload as ApiErrorPayload, 'Request failed')
+  }
+
+  return payload as T
 }
 
-export async function listProjects(): Promise<Project[]> {
-  const data = await request<{ projects: Project[] }>(
-    "/dashboard/api/projects",
-  );
-  return data.projects;
+const warned = new Set<string>()
+function warnUnimplemented(name: string) {
+  if (warned.has(name)) return
+  warned.add(name)
+  // eslint-disable-next-line no-console
+  console.warn(`[linear-agent dashboard] TODO: ${name} — Worker route not yet wired`)
 }
 
-export async function createProject(input: ProjectInput): Promise<Project> {
-  const data = await request<{ project: Project }>("/dashboard/api/projects", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-  return data.project;
+// ── Auth (Better Auth) ──────────────────────────────────────────────
+
+export type CurrentUser = {
+  id: number
+  email: string
+  name: string | null
 }
 
-export async function updateProject(
-  id: number,
-  input: Partial<ProjectInput>,
-): Promise<Project> {
-  const data = await request<{ project: Project }>(
-    `/dashboard/api/projects/${id}`,
-    {
-      method: "PUT",
-      body: JSON.stringify(input),
+export type AuthStatus = {
+  authenticated: boolean
+  auth_required: boolean
+  user?: CurrentUser
+}
+
+function stableHash(s: string): number {
+  let h = 0
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0
+  return Math.abs(h)
+}
+
+export async function getAuthStatus(): Promise<AuthStatus> {
+  const { data, error } = await authClient.getSession()
+  if (error) {
+    if (error.status === 401) {
+      return { authenticated: false, auth_required: true }
+    }
+    throw new ApiError(error.status ?? 500, null, error.message ?? 'Auth lookup failed')
+  }
+  if (!data) {
+    return { authenticated: false, auth_required: true }
+  }
+  return {
+    authenticated: true,
+    auth_required: true,
+    user: {
+      // Pages expect a numeric id from the Symphony shape; Better Auth
+      // ids are uuid strings. Hash to a stable int — only used for UI
+      // identity, not for any DB join.
+      id: stableHash(data.user.id),
+      email: data.user.email,
+      name: data.user.name ?? null,
     },
-  );
-  return data.project;
-}
-
-export async function deleteProject(id: number): Promise<void> {
-  await request<{ ok: boolean }>(`/dashboard/api/projects/${id}`, {
-    method: "DELETE",
-  });
-}
-
-export { ApiError };
-
-const BASE = "/dashboard/api";
-
-export interface SessionRow {
-  id: string;
-  linear_issue_id: string | null;
-  linear_issue_title: string | null;
-  status: string;
-  started_at: string;
-  completed_at: string | null;
-  triggered_by: string | null;
-  team: string | null;
-  repo: string | null;
-}
-
-export interface SessionDebug extends SessionRow {
-  prompt: string | null;
-  config_snapshot: Record<string, unknown> | null;
-  stderr: string | null;
-  dispatcher_logs: DispatcherLogEntry[];
-  messages: EventSummaryItem[];
-  error: string | null;
-}
-
-export interface DispatcherLogEntry {
-  timestamp: string;
-  level: string;
-  message: string;
-}
-
-export interface EventSummaryItem {
-  type: string;
-  timestamp: string;
-  body?: string;
-}
-
-export interface SessionFilters {
-  team?: string;
-  repo?: string;
-  status?: string;
-  triggered_by?: string;
-}
-
-export async function fetchSessions(
-  filters: SessionFilters = {},
-): Promise<SessionRow[]> {
-  const params = new URLSearchParams();
-  if (filters.team) params.set("team", filters.team);
-  if (filters.repo) params.set("repo", filters.repo);
-  if (filters.status) params.set("status", filters.status);
-  if (filters.triggered_by) params.set("triggered_by", filters.triggered_by);
-
-  const qs = params.toString();
-  const url = `${BASE}/sessions${qs ? `?${qs}` : ""}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`Failed to fetch sessions: ${res.status}`);
-  const data = (await res.json()) as { sessions: SessionRow[] };
-  return data.sessions;
-}
-
-export async function fetchSessionDebug(id: string): Promise<SessionDebug> {
-  const res = await fetch(`${BASE}/sessions/${encodeURIComponent(id)}/debug`);
-  if (!res.ok)
-    throw new Error(`Failed to fetch session debug: ${res.status}`);
-  return (await res.json()) as SessionDebug;
-}
-
-// --- Integrations ---
-
-export interface ProviderStatus {
-  connected?: boolean;
-  configured?: boolean;
-  email?: string | null;
-  repo_count?: number;
-}
-
-export interface IntegrationsStatus {
-  linear: { connected: boolean; email: string | null };
-  github: { connected: boolean; repo_count: number };
-  anthropic: { configured: boolean };
-  openai: { configured: boolean };
-  cf_workers_ai: { configured: boolean };
-  github_app_settings_url: string | null;
-}
-
-export async function fetchIntegrations(): Promise<IntegrationsStatus> {
-  const res = await fetch(`${BASE}/integrations`, { credentials: "same-origin" });
-  if (!res.ok) throw new Error(`Failed to fetch integrations: ${res.status}`);
-  return (await res.json()) as IntegrationsStatus;
-}
-
-export async function saveCredential(
-  provider: string,
-  apiKey: string,
-): Promise<void> {
-  const res = await fetch(`${BASE}/integrations/credentials`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    body: JSON.stringify({ provider, api_key: apiKey }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({})) as { message?: string };
-    throw new Error(body.message || `Failed to save credential: ${res.status}`);
   }
 }
 
-export async function rerunSession(
-  id: string,
-  prompt?: string,
-): Promise<{ ok: boolean; new_session_id: string }> {
-  const res = await fetch(
-    `${BASE}/sessions/${encodeURIComponent(id)}/rerun`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(prompt ? { prompt } : {}),
+export async function login(
+  email: string,
+  password: string,
+): Promise<{ ok: boolean; user: CurrentUser }> {
+  const { data, error } = await authClient.signIn.email({ email, password })
+  if (error) {
+    throw new ApiError(error.status ?? 401, null, error.message ?? 'Invalid credentials')
+  }
+  if (!data) {
+    throw new ApiError(401, null, 'Sign-in returned no session')
+  }
+  return {
+    ok: true,
+    user: {
+      id: stableHash(data.user.id),
+      email: data.user.email,
+      name: data.user.name ?? null,
     },
-  );
-  if (!res.ok) throw new Error(`Failed to rerun session: ${res.status}`);
-  return (await res.json()) as { ok: boolean; new_session_id: string };
+  }
+}
+
+export async function setupAccount(
+  email: string,
+  password: string,
+  name?: string,
+): Promise<{ ok: boolean; user: CurrentUser }> {
+  const { data, error } = await authClient.signUp.email({
+    email,
+    password,
+    name: name ?? email.split('@')[0],
+  })
+  if (error) {
+    // Map "user exists" to the legacy 409 the setup form recognizes.
+    const status = /already exists|exists/i.test(error.message ?? '')
+      ? 409
+      : (error.status ?? 422)
+    throw new ApiError(status, null, error.message ?? 'Sign-up failed')
+  }
+  if (!data) {
+    throw new ApiError(422, null, 'Sign-up returned no session')
+  }
+  return {
+    ok: true,
+    user: {
+      id: stableHash(data.user.id),
+      email: data.user.email,
+      name: data.user.name ?? null,
+    },
+  }
+}
+
+export async function logout() {
+  const { error } = await authClient.signOut()
+  if (error) {
+    throw new ApiError(error.status ?? 500, null, error.message ?? 'Logout failed')
+  }
+  return { ok: true }
+}
+
+export async function changePassword(current: string, next: string) {
+  const { error } = await authClient.changePassword({
+    currentPassword: current,
+    newPassword: next,
+  })
+  if (error) {
+    throw new ApiError(error.status ?? 400, null, error.message ?? 'Password change failed')
+  }
+  return { ok: true }
+}
+
+// ── Orchestrator state (no Worker equivalent yet) ───────────────────
+
+export function getState(): Promise<StatePayload> {
+  warnUnimplemented('getState')
+  return Promise.resolve({
+    generated_at: new Date().toISOString(),
+    counts: { running: 0, retrying: 0 },
+    running: [],
+    retrying: [],
+    engine_totals: { input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0 },
+  })
+}
+
+export function getIssue(_issueIdentifier: string): Promise<IssuePayload | null> {
+  warnUnimplemented('getIssue')
+  return Promise.resolve(null)
+}
+
+// ── Sessions ────────────────────────────────────────────────────────
+
+type WorkerSessionRow = {
+  id: string
+  linear_issue_id: string | null
+  linear_issue_title: string | null
+  status: string
+  started_at: string | null
+  completed_at: string | null
+  triggered_by: string | null
+  team: string | null
+  repo: string | null
+}
+
+export async function getSessions(params?: {
+  issueIdentifier?: string
+  limit?: number
+  projectId?: number
+}): Promise<SessionsPayload> {
+  const search = new URLSearchParams()
+  if (params?.limit) search.set('limit', String(params.limit))
+  // The Worker doesn't yet filter by issue_identifier or project_id; the
+  // results below get filtered client-side as a fallback so callers
+  // still see the right rows.
+  const query = search.toString()
+  const raw = await requestJson<{ sessions: WorkerSessionRow[] }>(
+    `/dashboard/api/sessions${query ? `?${query}` : ''}`,
+  )
+
+  let sessions = raw.sessions
+  if (params?.issueIdentifier) {
+    const wanted = params.issueIdentifier
+    sessions = sessions.filter(
+      (s) => s.linear_issue_title === wanted || s.linear_issue_id === wanted,
+    )
+  }
+
+  return {
+    sessions: sessions.map((s) => ({
+      id: stableHash(s.id),
+      issue_identifier: s.linear_issue_title,
+      issue_title: s.linear_issue_title,
+      session_id: s.id,
+      status: s.status,
+      started_at: s.started_at,
+      ended_at: s.completed_at,
+      turn_count: 0,
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      worker_host: null,
+      error: null,
+      error_category: null,
+      workflow_name: s.triggered_by,
+      github_branch: null,
+      github_repo: s.repo,
+      project_name: s.team,
+    })),
+  }
+}
+
+type WorkerSessionDebug = {
+  id: string
+  linear_issue_id: string | null
+  linear_issue_title: string | null
+  status: string
+  started_at: string | null
+  completed_at: string | null
+  triggered_by: string | null
+  team: string | null
+  repo: string | null
+  prompt: string | null
+  config_snapshot: Record<string, unknown> | null
+  stderr: string | null
+  dispatcher_logs: unknown[]
+  messages: Array<{ role?: string; content?: string; timestamp?: string } | string>
+  error: string | null
+}
+
+export async function getSessionTimeline(issueIdentifier: string): Promise<MessagesPayload> {
+  // Worker only exposes `/dashboard/api/sessions/:sessionId/debug`. The
+  // Symphony route takes an issue identifier and returns all sessions
+  // for that issue. We approximate: list sessions, filter to that
+  // issue, hydrate each via the debug endpoint.
+  const all = await getSessions({ issueIdentifier })
+  const sessions = await Promise.all(
+    all.sessions.map(async (s) => hydrateSession(s.session_id ?? '', s)),
+  )
+
+  return {
+    issue_identifier: issueIdentifier,
+    issue_id: sessions[0]?.id != null ? String(sessions[0].id) : null,
+    issue_title: sessions[0]?.issue_title ?? null,
+    status: sessions[0]?.status ?? 'unknown',
+    active_session_id: sessions.find((s) => s.live)?.session_id ?? null,
+    sessions,
+  }
+}
+
+async function hydrateSession(
+  sessionId: string,
+  base: SessionsPayload['sessions'][number],
+): Promise<TimelineSession> {
+  if (!sessionId) {
+    return toTimelineSession(base, [], false)
+  }
+  try {
+    const debug = await requestJson<WorkerSessionDebug>(
+      `/dashboard/api/sessions/${encodeURIComponent(sessionId)}/debug`,
+    )
+    const live = debug.status === 'running'
+    return toTimelineSession(base, debug.messages ?? [], live, debug.error)
+  } catch {
+    return toTimelineSession(base, [], false)
+  }
+}
+
+function toTimelineSession(
+  base: SessionsPayload['sessions'][number],
+  rawMessages: WorkerSessionDebug['messages'],
+  live: boolean,
+  error: string | null = null,
+): TimelineSession {
+  const messages: TimelineMessage[] = rawMessages.map((m, i) => {
+    if (typeof m === 'string') {
+      return { id: i, timestamp: null, type: 'message', content: m, metadata: {} }
+    }
+    return {
+      id: i,
+      timestamp: m.timestamp ?? null,
+      type: m.role ?? 'message',
+      content: m.content ?? '',
+      metadata: {},
+    }
+  })
+
+  return {
+    id: base.id,
+    issue_identifier: base.issue_identifier,
+    issue_title: base.issue_title,
+    session_id: base.session_id ?? '',
+    status: base.status,
+    started_at: base.started_at,
+    ended_at: base.ended_at,
+    turn_count: null,
+    input_tokens: null,
+    output_tokens: null,
+    total_tokens: null,
+    worker_host: base.worker_host,
+    error,
+    error_category: null,
+    workflow_name: base.workflow_name,
+    live,
+    messages,
+  }
+}
+
+// ── Projects ────────────────────────────────────────────────────────
+
+type WorkerProject = {
+  id: number
+  org_id: string
+  linear_team_id: string
+  linear_team_name: string
+  repo_url: string
+  default_branch: string
+  engine: string
+  model: string | null
+  max_turns: number
+  scope: string | null
+  system_prompt_override: string | null
+  created_at: string
+  updated_at: string
+}
+
+function workerToProject(p: WorkerProject): Project {
+  return {
+    id: p.id,
+    name: p.linear_team_name || p.linear_team_id,
+    linear_project_slug: p.linear_team_id,
+    linear_organization_slug: p.org_id,
+    linear_filter_by: 'team',
+    linear_label_name: null,
+    github_repo: p.repo_url,
+    github_branch: p.default_branch,
+    workspace_root: null,
+    env_vars: p.system_prompt_override,
+    created_at: p.created_at,
+    updated_at: p.updated_at,
+  }
+}
+
+function projectBodyToWorker(body: ProjectBody): Record<string, unknown> {
+  const repo = body.github_repo?.trim() ?? ''
+  const repoUrl = repo
+    ? /^https?:\/\//.test(repo)
+      ? repo
+      : `https://github.com/${repo.replace(/^\/+|\/+$/g, '')}`
+    : ''
+  return {
+    linear_team_id: body.linear_project_slug ?? '',
+    linear_team_name: body.name,
+    repo_url: repoUrl,
+    default_branch: body.github_branch ?? 'main',
+    system_prompt_override: body.env_vars ?? null,
+  }
+}
+
+export async function getProjects(): Promise<{ projects: Project[] }> {
+  const raw = await requestJson<{ projects: WorkerProject[] }>('/dashboard/api/projects')
+  return { projects: raw.projects.map(workerToProject) }
+}
+
+export async function createProject(body: ProjectBody): Promise<{ project: Project }> {
+  const raw = await requestJson<{ project: WorkerProject }>('/dashboard/api/projects', {
+    method: 'POST',
+    body: JSON.stringify(projectBodyToWorker(body)),
+  })
+  return { project: workerToProject(raw.project) }
+}
+
+export async function updateProject(id: number, body: ProjectBody): Promise<{ project: Project }> {
+  const raw = await requestJson<{ project: WorkerProject }>(`/dashboard/api/projects/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(projectBodyToWorker(body)),
+  })
+  return { project: workerToProject(raw.project) }
+}
+
+export function deleteProject(id: number) {
+  return requestJson<{ ok: boolean }>(`/dashboard/api/projects/${id}`, { method: 'DELETE' })
+}
+
+// ── Settings (no Worker equivalent yet) ─────────────────────────────
+
+export function getSettings(): Promise<SettingsPayload> {
+  warnUnimplemented('getSettings')
+  return Promise.resolve({
+    settings: [],
+    agent_defaults: { max_concurrent_agents: 1, max_turns: 10 },
+  })
+}
+
+export function upsertSetting(_key: string, _value: string): Promise<{ setting: Setting }> {
+  warnUnimplemented('upsertSetting')
+  return Promise.reject(new ApiError(501, null, 'Settings KV not implemented on Worker'))
+}
+
+export function deleteSetting(_key: string) {
+  warnUnimplemented('deleteSetting')
+  return Promise.reject(new ApiError(501, null, 'Settings KV not implemented on Worker'))
+}
+
+// ── OAuth status (derived from /dashboard/api/integrations) ─────────
+
+export type OAuthStatus = {
+  status: 'connected' | 'expired' | 'disconnected' | 'reconnect_required'
+  expires_at: string | null
+  credentials_source: 'env' | 'store' | 'none'
+  proxy_available: boolean
+  last_refresh_error?: string | null
+  last_refresh_at?: string | null
+}
+
+export type Integrations = {
+  linear: { connected: boolean; email: string | null }
+  github: {
+    connected: boolean
+    repo_selection: 'all' | 'selected' | null
+    repo_count: number | null
+  }
+  anthropic: { configured: boolean }
+  openai: { configured: boolean }
+  cf_workers_ai: { configured: boolean }
+  github_app_settings_url: string | null
+}
+
+export function getIntegrations(): Promise<Integrations> {
+  return requestJson<Integrations>('/dashboard/api/integrations')
+}
+
+async function fetchIntegrations(): Promise<Integrations> {
+  return getIntegrations()
+}
+
+export async function getOAuthStatus(): Promise<OAuthStatus> {
+  const ints = await fetchIntegrations()
+  return {
+    status: ints.linear.connected ? 'connected' : 'disconnected',
+    expires_at: null,
+    credentials_source: ints.linear.connected ? 'store' : 'none',
+    proxy_available: false,
+  }
+}
+
+export type OAuthAuthorizeResponse = {
+  authorize_url: string
+  flow: 'direct' | 'proxy'
+  state?: string
+}
+
+export function getOAuthAuthorizeUrl(): Promise<OAuthAuthorizeResponse> {
+  // Linear Agent install flow — must be hit while signed in with an
+  // active org (Worker route validates).
+  return Promise.resolve({ authorize_url: '/linear/agent-install', flow: 'direct' })
+}
+
+export async function revokeOAuth(): Promise<{ status: string }> {
+  await fetch('/linear/agent-install/revoke', {
+    method: 'POST',
+    credentials: 'same-origin',
+  })
+  return { status: 'revoked' }
+}
+
+export async function getGitHubOAuthStatus(): Promise<OAuthStatus> {
+  const ints = await fetchIntegrations()
+  return {
+    status: ints.github.connected ? 'connected' : 'disconnected',
+    expires_at: null,
+    credentials_source: ints.github.connected ? 'store' : 'none',
+    proxy_available: false,
+  }
+}
+
+export function getGitHubOAuthAuthorizeUrl(): Promise<OAuthAuthorizeResponse> {
+  return Promise.resolve({ authorize_url: '/github/install', flow: 'direct' })
+}
+
+export function revokeGitHubOAuth(): Promise<{ status: string }> {
+  warnUnimplemented('revokeGitHubOAuth')
+  return Promise.resolve({ status: 'noop' })
+}
+
+// ── Linear projects / GitHub repos search (not yet routed) ──────────
+
+export type LinearProject = {
+  id: string
+  name: string
+  slug_id: string
+  slug: string
+  url: string
+  state: string
+  organization_slug: string | null
+  team_id: string | null
+  team_key: string | null
+}
+
+export type GitHubRepo = {
+  id: number
+  full_name: string
+  name: string
+  owner: string
+  description: string | null
+  private: boolean
+  default_branch: string
+  url: string
+}
+
+export function searchLinearProjects(query: string): Promise<{ projects: LinearProject[] }> {
+  const qs = new URLSearchParams({ q: query }).toString()
+  return requestJson<{ projects: LinearProject[] }>(`/dashboard/api/linear/projects?${qs}`)
+}
+
+export function searchGitHubRepos(query: string): Promise<{ repos: GitHubRepo[] }> {
+  const qs = new URLSearchParams({ q: query }).toString()
+  return requestJson<{ repos: GitHubRepo[] }>(`/dashboard/api/github/repos?${qs}`)
+}
+
+// ── Proxy (does not apply on Workers — always disabled) ─────────────
+
+export type ProxyStatus = {
+  enabled: boolean
+  instance_url: string | null
+  linear_org_id: string | null
+}
+
+export function getProxyStatus(): Promise<ProxyStatus> {
+  return Promise.resolve({ enabled: false, instance_url: null, linear_org_id: null })
+}
+
+export function proxyHealthCheck() {
+  return Promise.resolve({ ok: false, error: 'proxy disabled on Worker' })
+}
+
+export function proxyRegister() {
+  return Promise.resolve({ ok: false })
+}
+
+export type ProxyPingResult = {
+  proxy: { ok: boolean; error?: string }
+  webhook: {
+    ok: boolean
+    registered?: boolean
+    instance_url?: string
+    error?: string
+    response_body?: string
+    response_server?: string
+  }
+}
+
+export function proxyPing(): Promise<ProxyPingResult> {
+  return Promise.resolve({
+    proxy: { ok: false, error: 'proxy disabled on Worker' },
+    webhook: { ok: false, error: 'proxy disabled on Worker' },
+  })
+}
+
+export type ProxyPollResponse = { status: 'complete' | 'pending' }
+
+export function pollLinearProxyOAuth(): Promise<ProxyPollResponse> {
+  return Promise.resolve({ status: 'complete' })
+}
+
+export function pollGitHubProxyOAuth(): Promise<ProxyPollResponse> {
+  return Promise.resolve({ status: 'complete' })
+}
+
+// ── Timeline merge helpers (preserved verbatim) ─────────────────────
+
+export function mergeTimelineMessage(payload: MessagesPayload, incoming: TimelineMessage) {
+  const sessions = [...payload.sessions]
+  const activeIndex = sessions.findIndex((session) => session.live)
+
+  if (activeIndex === -1) {
+    const fallbackSessionId = payload.active_session_id ?? 'live'
+
+    sessions.push({
+      id: null,
+      issue_identifier: payload.issue_identifier,
+      issue_title: payload.issue_title,
+      session_id: fallbackSessionId,
+      status: 'running',
+      started_at: incoming.timestamp,
+      ended_at: null,
+      turn_count: null,
+      input_tokens: null,
+      output_tokens: null,
+      total_tokens: null,
+      worker_host: null,
+      error: null,
+      error_category: null,
+      workflow_name: null,
+      live: true,
+      messages: [incoming],
+    })
+  } else {
+    const session = sessions[activeIndex]
+    sessions[activeIndex] = { ...session, messages: [...session.messages, incoming] }
+  }
+
+  return { ...payload, sessions }
+}
+
+export function updateTimelineMessage(payload: MessagesPayload, incoming: TimelineMessage) {
+  const sessions = payload.sessions.map((session) => {
+    if (!session.live) {
+      return session
+    }
+
+    const nextMessages = [...session.messages]
+    const lastIndex = nextMessages.findLastIndex(
+      (message) => String(message.id) === String(incoming.id),
+    )
+
+    if (lastIndex >= 0) {
+      nextMessages[lastIndex] = incoming
+    } else {
+      nextMessages.push(incoming)
+    }
+
+    return { ...session, messages: nextMessages }
+  })
+
+  return { ...payload, sessions }
+}
+
+export function emptyProject(): ProjectBody {
+  return {
+    name: '',
+    linear_project_slug: null,
+    linear_organization_slug: null,
+    linear_filter_by: 'team',
+    linear_label_name: null,
+    github_repo: null,
+    github_branch: 'main',
+    workspace_root: null,
+    env_vars: null,
+  }
 }

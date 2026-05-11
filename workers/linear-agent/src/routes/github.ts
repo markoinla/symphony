@@ -14,8 +14,9 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
 import { CredentialStore } from "../lib/credentials";
+import { requireOrg } from "../lib/dashboard-auth";
 import { createAppJwt } from "../lib/github-app";
-import { GitHubInstallStore, InstallationStore } from "../lib/store";
+import { GitHubInstallStore } from "../lib/store";
 
 const STATE_TTL_SECONDS = 600;
 
@@ -23,14 +24,28 @@ export function buildGitHubRouter() {
   const app = new Hono<{ Bindings: Env }>();
 
   app.get("/github/install", async (c) => {
+    const user = await requireOrg(c);
+    if (!user) {
+      return c.json(
+        {
+          error: "unauthorized",
+          message: "Sign in and select an organization first.",
+        },
+        401,
+      );
+    }
     const slug = c.env.GITHUB_APP_SLUG;
     if (!slug) {
       return c.json({ error: "github_app_not_configured" }, 503);
     }
+    // Use the install state to bind the install back to a Better Auth
+    // organization. Stored as JSON so the callback can re-hydrate.
     const state = crypto.randomUUID();
-    await c.env.LINEAR_TOKENS.put(`gh_install_state:${state}`, "1", {
-      expirationTtl: STATE_TTL_SECONDS,
-    });
+    await c.env.LINEAR_TOKENS.put(
+      `gh_install_state:${state}`,
+      JSON.stringify({ orgId: user.organizationId }),
+      { expirationTtl: STATE_TTL_SECONDS },
+    );
     return c.redirect(
       `https://github.com/apps/${slug}/installations/new?state=${state}`,
     );
@@ -45,14 +60,21 @@ export function buildGitHubRouter() {
       return c.json({ error: "missing_installation_id" }, 400);
     }
 
-    if (state) {
-      const stored = await c.env.LINEAR_TOKENS.get(
-        `gh_install_state:${state}`,
-      );
-      if (!stored) {
-        return c.json({ error: "invalid_or_expired_state" }, 400);
-      }
-      await c.env.LINEAR_TOKENS.delete(`gh_install_state:${state}`);
+    if (!state) {
+      return c.json({ error: "missing_state" }, 400);
+    }
+    const storedRaw = await c.env.LINEAR_TOKENS.get(
+      `gh_install_state:${state}`,
+    );
+    if (!storedRaw) {
+      return c.json({ error: "invalid_or_expired_state" }, 400);
+    }
+    await c.env.LINEAR_TOKENS.delete(`gh_install_state:${state}`);
+    let stateData: { orgId: string };
+    try {
+      stateData = JSON.parse(storedRaw);
+    } catch {
+      return c.json({ error: "corrupt_state" }, 400);
     }
 
     if (setupAction === "request") {
@@ -109,24 +131,15 @@ export function buildGitHubRouter() {
     const accountType = data.account?.type ?? "Organization";
     const repoSelection = data.repository_selection ?? "all";
 
-    const store = new InstallationStore(c.env.DB);
-    await store.updateGitHubAppInstallation(accountLogin, ghInstallId);
-
-    const ghInstallStore = new GitHubInstallStore(c.env.DB);
-    await ghInstallStore.upsert({
-      orgId: accountLogin,
+    await new GitHubInstallStore(c.env.DB).upsert({
+      organizationId: stateData.orgId,
       installId: ghInstallId,
       accountLogin,
       accountType,
       repoSelection,
     });
 
-    return c.json({
-      ok: true,
-      message: "GitHub App installed.",
-      installation_id: ghInstallId,
-      account_login: accountLogin,
-    });
+    return c.redirect("/dashboard/settings?github_oauth=success");
   });
 
   // --- Admin-gated PAT credential routes ---

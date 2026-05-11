@@ -1,39 +1,66 @@
-import { Hono } from "hono";
-import type { Env } from "../index";
-import { signCookieValue } from "../lib/dashboard-auth";
-import { OAuthHelper } from "../lib/oauth-helper";
-import { InstallationStore, UserStore } from "../lib/store";
+// Linear Agent install flow (actor=app OAuth).
+//
+// This is NOT a user login flow — Better Auth at `/api/auth/*` handles
+// password sign-in plus GitHub and Linear *user* OAuth. This flow exists
+// to install the Linear Agent into a Linear workspace, granting the
+// agent its own `actor=app` access token so it can read webhooks and
+// post agent activities.
+//
+// Requirements before starting the install:
+//   - Authenticated Better Auth session (cookie)
+//   - Session has an active Better Auth organization
+//
+// Routes:
+//   GET  /linear/agent-install            — redirect to Linear consent
+//   GET  /linear/agent-install/callback   — exchange code, write D1
+//   POST /linear/agent-install/revoke     — revoke + delete D1 row
+//
+// The legacy `/oauth/authorize`, `/oauth/callback`, `/oauth/user/*`,
+// `/oauth/revoke`, and `/oauth/github/install-callback` routes are
+// retired — Better Auth replaces them.
 
-/**
- * OAuth routes for installing the agent into a Linear workspace.
- *
- * - `GET /oauth/authorize` → redirects to Linear's consent screen with
- *   `actor=app` so the install creates a dedicated agent user.
- * - `GET /oauth/callback` → exchanges the code for an access token and
- *   stores it in D1 `installations` keyed by `organizationId`.
- * - `GET /oauth/revoke` → revokes the token at Linear and removes the
- *   D1 installation row.
- */
+import { Hono } from "hono";
+
+import type { Env } from "../index";
+import { requireOrg } from "../lib/dashboard-auth";
+import { OAuthHelper } from "../lib/oauth-helper";
+import { LinearAgentInstallStore } from "../lib/store";
+
+const STATE_TTL_S = 600;
 
 export function buildOAuthRouter() {
   const app = new Hono<{ Bindings: Env }>();
 
-  app.get("/oauth/authorize", async (c) => {
+  app.get("/linear/agent-install", async (c) => {
+    const user = await requireOrg(c);
+    if (!user) {
+      return c.json(
+        { error: "unauthorized", message: "Sign in and select an organization first." },
+        401,
+      );
+    }
+    if (!c.env.LINEAR_CLIENT_ID) {
+      return c.json({ error: "linear_not_configured" }, 503);
+    }
+
     const state = OAuthHelper.generateState();
-    await c.env.LINEAR_TOKENS.put("oauth_state", state, {
-      // 10-minute TTL on the state so abandoned flows don't accumulate.
-      expirationTtl: 600,
-    });
+    // Bind state ↔ user's active organization so the callback knows
+    // which Better Auth org to attach the install to.
+    await c.env.LINEAR_TOKENS.put(
+      `linear_install_state:${state}`,
+      JSON.stringify({ orgId: user.organizationId, userId: user.userId }),
+      { expirationTtl: STATE_TTL_S },
+    );
 
     const url = OAuthHelper.generateAuthorizationUrl(
       c.env.LINEAR_CLIENT_ID,
-      `${c.env.URL}/oauth/callback`,
+      `${c.env.URL}/linear/agent-install/callback`,
       state,
     );
     return c.redirect(url);
   });
 
-  app.get("/oauth/callback", async (c) => {
+  app.get("/linear/agent-install/callback", async (c) => {
     const code = c.req.query("code");
     const state = c.req.query("state");
     const error = c.req.query("error");
@@ -45,9 +72,23 @@ export function buildOAuthRouter() {
       return c.json({ error: "missing_parameters" }, 400);
     }
 
-    const stored = await c.env.LINEAR_TOKENS.get("oauth_state");
-    if (!stored || stored !== state) {
+    const stateRaw = await c.env.LINEAR_TOKENS.get(
+      `linear_install_state:${state}`,
+    );
+    if (!stateRaw) {
       return c.json({ error: "invalid_state" }, 400);
+    }
+    await c.env.LINEAR_TOKENS.delete(`linear_install_state:${state}`);
+
+    let stateData: { orgId: string; userId: string };
+    try {
+      stateData = JSON.parse(stateRaw);
+    } catch {
+      return c.json({ error: "corrupt_state" }, 400);
+    }
+
+    if (!c.env.LINEAR_CLIENT_ID || !c.env.LINEAR_CLIENT_SECRET) {
+      return c.json({ error: "linear_not_configured" }, 503);
     }
 
     try {
@@ -55,206 +96,61 @@ export function buildOAuthRouter() {
         code,
         c.env.LINEAR_CLIENT_ID,
         c.env.LINEAR_CLIENT_SECRET,
-        `${c.env.URL}/oauth/callback`,
+        `${c.env.URL}/linear/agent-install/callback`,
       );
 
-      let organizationId: string | null = null;
-      try {
-        organizationId = await OAuthHelper.fetchOrganizationId(
-          token.access_token,
-        );
-      } catch (e) {
-        console.error(
-          "viewer_query_failed",
-          e instanceof Error ? e.message : String(e),
-        );
-      }
-
-      if (!organizationId) {
-        await c.env.LINEAR_TOKENS.delete("oauth_state");
+      const linearOrgId = await OAuthHelper.fetchOrganizationId(
+        token.access_token,
+      );
+      if (!linearOrgId) {
         return c.json(
-          { error: "org_lookup_failed", message: "Could not resolve organization. Please retry the install." },
+          {
+            error: "org_lookup_failed",
+            message:
+              "Could not resolve Linear organization. Please retry the install.",
+          },
           502,
         );
       }
 
-      await new InstallationStore(c.env.DB).upsert(
-        organizationId,
-        token.access_token,
-        token.scope,
-        "oauth",
-      );
+      await new LinearAgentInstallStore(c.env.DB).upsert({
+        organizationId: stateData.orgId,
+        linearOrganizationId: linearOrgId,
+        accessToken: token.access_token,
+        refreshToken: (token as { refresh_token?: string }).refresh_token,
+        scopes: token.scope,
+        installedByUserId: stateData.userId,
+      });
 
-      await c.env.LINEAR_TOKENS.delete("oauth_state");
-
-      // After agent install, redirect the installer through the user
-      // OAuth flow so they also get a personal user token stored.
-      return c.redirect(`${c.env.URL}/oauth/user/authorize`);
+      return c.redirect("/dashboard/settings?oauth=success");
     } catch (e) {
-      await c.env.LINEAR_TOKENS.delete("oauth_state");
-      return c.json(
-        {
-          error: "token_exchange_failed",
-          message: e instanceof Error ? e.message : "unknown_error",
-        },
-        400,
+      const message = e instanceof Error ? e.message : "unknown_error";
+      return c.redirect(
+        `/dashboard/settings?oauth=error&message=${encodeURIComponent(message)}`,
       );
     }
   });
 
-  // ── User OAuth flow ──────────────────────────────────────────────
-  // Separate from the agent install flow: no `actor=app`, only
-  // `read,write` scopes. Stores per-user tokens in D1 `users` table
-  // for dashboard login.
+  app.post("/linear/agent-install/revoke", async (c) => {
+    const user = await requireOrg(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
 
-  app.get("/oauth/user/authorize", async (c) => {
-    const state = OAuthHelper.generateState();
-    await c.env.LINEAR_TOKENS.put("oauth_user_state:" + state, "1", {
-      expirationTtl: 600,
-    });
-
-    const url = OAuthHelper.generateUserAuthorizationUrl(
-      c.env.LINEAR_CLIENT_ID,
-      `${c.env.URL}/oauth/user/callback`,
-      state,
-    );
-    return c.redirect(url);
-  });
-
-  app.get("/oauth/user/callback", async (c) => {
-    const code = c.req.query("code");
-    const state = c.req.query("state");
-    const error = c.req.query("error");
-
-    if (error) {
-      return c.json({ error: "authorization_failed", details: error }, 400);
-    }
-    if (!code || !state) {
-      return c.json({ error: "missing_parameters" }, 400);
-    }
-
-    const stored = await c.env.LINEAR_TOKENS.get("oauth_user_state:" + state);
-    if (!stored) {
-      return c.json({ error: "invalid_state" }, 400);
+    const store = new LinearAgentInstallStore(c.env.DB);
+    const install = await store.getByOrgId(user.organizationId);
+    if (!install) {
+      return c.json({ error: "not_installed" }, 404);
     }
 
     try {
-      const token = await OAuthHelper.exchangeCodeForToken(
-        code,
-        c.env.LINEAR_CLIENT_ID,
-        c.env.LINEAR_CLIENT_SECRET,
-        `${c.env.URL}/oauth/user/callback`,
-      );
-
-      const viewer = await OAuthHelper.fetchViewer(token.access_token);
-
-      const expiresAt = token.expires_in
-        ? new Date(Date.now() + token.expires_in * 1000).toISOString()
-        : null;
-
-      await new UserStore(c.env.DB).upsert({
-        linearUserId: viewer.id,
-        organizationId: viewer.organizationId,
-        accessToken: token.access_token,
-        refreshToken: (token as { refresh_token?: string }).refresh_token,
-        expiresAt,
-        email: viewer.email,
-        name: viewer.name,
+      await fetch("https://api.linear.app/oauth/revoke", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${install.access_token}` },
       });
-
-      await c.env.LINEAR_TOKENS.delete("oauth_user_state:" + state);
-
-      const signed = await signCookieValue(
-        viewer.id,
-        c.env.LINEAR_CLIENT_SECRET,
-      );
-      const thirtyDays = 30 * 24 * 60 * 60 * 1000;
-      const expires = new Date(Date.now() + thirtyDays).toUTCString();
-
-      return new Response(null, {
-        status: 302,
-        headers: {
-          Location: "/dashboard",
-          "Set-Cookie": `dashboard_session=${signed}; Path=/; Expires=${expires}; HttpOnly; SameSite=Lax; Secure`,
-        },
-      });
-    } catch (e) {
-      await c.env.LINEAR_TOKENS.delete("oauth_user_state:" + state);
-      return c.json(
-        {
-          error: "token_exchange_failed",
-          message: e instanceof Error ? e.message : "unknown_error",
-        },
-        400,
-      );
-    }
-  });
-
-  // SYM-269: GitHub App install callback. After an org installs the
-  // Symphony GitHub App, GitHub redirects here with `installation_id`
-  // and `state` (the Linear org id we passed when redirecting to the
-  // GitHub App install page). We write the installation id to D1.
-  app.get("/oauth/github/install-callback", async (c) => {
-    const installationId = c.req.query("installation_id");
-    const state = c.req.query("state");
-    const setupAction = c.req.query("setup_action");
-
-    if (!installationId || !state) {
-      return c.json({ error: "missing_parameters" }, 400);
+    } catch {
+      // Best-effort revoke; still drop the row.
     }
 
-    const numericId = parseInt(installationId, 10);
-    if (!Number.isFinite(numericId) || numericId <= 0) {
-      return c.json({ error: "invalid_installation_id" }, 400);
-    }
-
-    const store = new InstallationStore(c.env.DB);
-    const install = await store.get(state);
-    if (!install) {
-      return c.json(
-        {
-          error: "unknown_organization",
-          message:
-            "No Linear installation found for this org. Install the Linear agent first.",
-        },
-        404,
-      );
-    }
-
-    await store.updateGitHubAppInstallation(state, numericId);
-
-    return c.json({
-      ok: true,
-      message: "GitHub App installed. Symphony will use per-org tokens for PRs.",
-      organization_id: state,
-      github_app_installation_id: numericId,
-      setup_action: setupAction ?? "install",
-    });
-  });
-
-  app.get("/oauth/revoke", async (c) => {
-    const orgQuery = c.req.query("organization_id");
-    const store = new InstallationStore(c.env.DB);
-    const install = orgQuery
-      ? await store.get(orgQuery)
-      : await store.getOnlyInstallation();
-    if (!install) {
-      return c.json({ error: "no_token" }, 400);
-    }
-    const res = await fetch("https://api.linear.app/oauth/revoke", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${install.access_token}` },
-    });
-    if (!res.ok) {
-      return c.json(
-        { error: "revoke_failed", status: res.status, details: await res.text() },
-        500,
-      );
-    }
-    if (install) {
-      await store.delete(install.org_id);
-    }
-    await c.env.LINEAR_TOKENS.delete("access_token");
+    await store.delete(user.organizationId);
     return c.json({ ok: true });
   });
 

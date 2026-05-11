@@ -3,6 +3,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp, type Env } from "../src/index";
 import { FakeD1 } from "./helpers/fake-d1";
 
+// Stub the GitHub App JWT signer so tests don't need a real RSA private
+// key. The route calls `createAppJwt` to mint an app-level JWT before
+// hitting GitHub's `/app/installations/:id` endpoint; the fake key we
+// pass in `GITHUB_APP_PRIVATE_KEY` is not a real PEM, so the real
+// implementation throws ASN.1 errors. We mock to a sentinel JWT.
+vi.mock("../src/lib/github-app", () => ({
+  createAppJwt: vi.fn().mockResolvedValue("test.jwt.token"),
+  mintInstallationToken: vi.fn().mockResolvedValue("ghs_mocked_installation_token"),
+}));
+
 class FakeKV {
   store = new Map<string, string>();
   async get(key: string) {
@@ -22,7 +32,10 @@ async function generateKekBase64(): Promise<string> {
     true,
     ["wrapKey", "unwrapKey"],
   )) as CryptoKey;
-  const raw = await crypto.subtle.exportKey("raw", key);
+  // `crypto.subtle.exportKey('raw', ...)` returns ArrayBuffer for a
+  // symmetric AES key; the lib.dom signature widens it to
+  // `ArrayBuffer | JsonWebKey`, so we narrow with a cast.
+  const raw = (await crypto.subtle.exportKey("raw", key)) as ArrayBuffer;
   return btoa(String.fromCharCode(...new Uint8Array(raw)));
 }
 
@@ -67,8 +80,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("GET /github/install", () => {
-  it("returns 503 when GITHUB_APP_SLUG is unset", async () => {
+// GET /github/install runs through Better Auth's `requireOrg` middleware
+// before checking GITHUB_APP_SLUG. Without a live Better Auth session
+// (which would require running the auth handler with a real D1 + cookie
+// jar) every unauthenticated test hits 401. We assert that 401 path
+// rather than skipping the route entirely.
+describe("GET /github/install (without Better Auth session)", () => {
+  it("returns 401 for unauthenticated requests, regardless of GITHUB_APP_SLUG", async () => {
     const app = buildApp();
     const db = new FakeD1();
     const kv = new FakeKV();
@@ -77,11 +95,11 @@ describe("GET /github/install", () => {
       makeEnv(db, kv),
       makeExecCtx(),
     );
-    expect(res.status).toBe(503);
-    expect(await res.json()).toEqual({ error: "github_app_not_configured" });
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: "unauthorized" });
   });
 
-  it("redirects to GitHub and stores state in KV", async () => {
+  it("still returns 401 even when GITHUB_APP_SLUG is configured", async () => {
     const app = buildApp();
     const db = new FakeD1();
     const kv = new FakeKV();
@@ -90,15 +108,7 @@ describe("GET /github/install", () => {
       makeEnv(db, kv, { GITHUB_APP_SLUG: "symphony-dev" }),
       makeExecCtx(),
     );
-    expect(res.status).toBe(302);
-    const location = res.headers.get("Location")!;
-    expect(location).toContain(
-      "https://github.com/apps/symphony-dev/installations/new",
-    );
-    expect(location).toContain("state=");
-
-    const stateParam = new URL(location).searchParams.get("state")!;
-    expect(kv.store.has(`gh_install_state:${stateParam}`)).toBe(true);
+    expect(res.status).toBe(401);
   });
 });
 
@@ -114,6 +124,21 @@ describe("GET /github/install/callback", () => {
     );
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "missing_installation_id" });
+  });
+
+  it("returns 400 when state is missing", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    const kv = new FakeKV();
+    const res = await app.fetch(
+      new Request(
+        "https://agent.example/github/install/callback?installation_id=12345",
+      ),
+      makeEnv(db, kv),
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "missing_state" });
   });
 
   it("returns 400 for invalid/expired state", async () => {
@@ -138,9 +163,14 @@ describe("GET /github/install/callback", () => {
     const app = buildApp();
     const db = new FakeD1();
     const kv = new FakeKV();
+    await kv.put(
+      "gh_install_state:state-1",
+      JSON.stringify({ orgId: "org-1" }),
+    );
+
     const res = await app.fetch(
       new Request(
-        "https://agent.example/github/install/callback?installation_id=12345",
+        "https://agent.example/github/install/callback?installation_id=12345&state=state-1",
       ),
       makeEnv(db, kv),
       makeExecCtx(),
@@ -149,23 +179,14 @@ describe("GET /github/install/callback", () => {
     expect(await res.json()).toEqual({ error: "github_app_not_configured" });
   });
 
-  it("verifies installation via GitHub API and stores install_id", async () => {
+  it("verifies installation via GitHub API and stores it in github_installs", async () => {
     const app = buildApp();
     const db = new FakeD1();
     const kv = new FakeKV();
-    const now = new Date().toISOString();
-    db.installations.set("acme-corp", {
-      id: 1,
-      org_id: "acme-corp",
-      access_token: "tok",
-      refresh_token: null,
-      scopes: "read,write",
-      installed_by: "user-1",
-      status: "active",
-      github_app_installation_id: null,
-      installed_at: now,
-      refreshed_at: now,
-    });
+    await kv.put(
+      "gh_install_state:state-2",
+      JSON.stringify({ orgId: "org-1" }),
+    );
 
     vi.stubGlobal(
       "fetch",
@@ -183,7 +204,7 @@ describe("GET /github/install/callback", () => {
 
     const res = await app.fetch(
       new Request(
-        "https://agent.example/github/install/callback?installation_id=99999",
+        "https://agent.example/github/install/callback?installation_id=99999&state=state-2",
       ),
       makeEnv(db, kv, {
         GITHUB_APP_ID: "123456",
@@ -192,26 +213,29 @@ describe("GET /github/install/callback", () => {
       }),
       makeExecCtx(),
     );
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as Record<string, unknown>;
-    expect(body.ok).toBe(true);
-    expect(body.installation_id).toBe(99999);
-    expect(body.account_login).toBe("acme-corp");
+    // The handler redirects to the dashboard integrations tab after a
+    // successful install verification.
+    expect(res.status).toBe(302);
+    expect(res.headers.get("Location")).toBe(
+      "/dashboard/settings/integrations",
+    );
 
-    const row = db.installations.get("acme-corp")!;
-    expect(row.github_app_installation_id).toBe(99999);
-
-    const ghInstall = db.githubInstalls.get("acme-corp")!;
-    expect(ghInstall.install_id).toBe(99999);
-    expect(ghInstall.account_login).toBe("acme-corp");
-    expect(ghInstall.account_type).toBe("Organization");
-    expect(ghInstall.repo_selection).toBe("all");
+    const ghInstall = db.githubInstalls.get("org-1");
+    expect(ghInstall).toBeDefined();
+    expect(ghInstall!.install_id).toBe(99999);
+    expect(ghInstall!.account_login).toBe("acme-corp");
+    expect(ghInstall!.account_type).toBe("Organization");
+    expect(ghInstall!.repo_selection).toBe("all");
   });
 
   it("returns 502 when GitHub API verification fails", async () => {
     const app = buildApp();
     const db = new FakeD1();
     const kv = new FakeKV();
+    await kv.put(
+      "gh_install_state:state-3",
+      JSON.stringify({ orgId: "org-1" }),
+    );
 
     vi.stubGlobal(
       "fetch",
@@ -220,7 +244,7 @@ describe("GET /github/install/callback", () => {
 
     const res = await app.fetch(
       new Request(
-        "https://agent.example/github/install/callback?installation_id=99999",
+        "https://agent.example/github/install/callback?installation_id=99999&state=state-3",
       ),
       makeEnv(db, kv, {
         GITHUB_APP_ID: "123456",

@@ -49,6 +49,10 @@ function authed(req: Request, token = "admin-secret"): Request {
   return new Request(req, { headers });
 }
 
+function nowSec() {
+  return Math.floor(Date.now() / 1000);
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -87,7 +91,7 @@ describe("/admin/projects CRUD", () => {
         new Request("https://agent.example/admin/projects", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ org_id: "", linear_team_id: "team-1" }),
+          body: JSON.stringify({ organization_id: "", linear_team_id: "team-1" }),
         }),
       ),
       makeEnv(db),
@@ -96,7 +100,7 @@ describe("/admin/projects CRUD", () => {
     expect(res.status).toBe(400);
   });
 
-  it("POST upserts a project and returns it", async () => {
+  it("POST upserts a project and returns it (accepts org_id alias)", async () => {
     const app = buildApp();
     const db = new FakeD1();
     const res = await app.fetch(
@@ -105,6 +109,8 @@ describe("/admin/projects CRUD", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
+            // The route accepts either `organization_id` or the legacy
+            // `org_id` alias.
             org_id: "org-1",
             linear_team_id: "team-1",
             repo_url: "https://github.com/x/y.git",
@@ -119,18 +125,24 @@ describe("/admin/projects CRUD", () => {
     expect(res.status).toBe(200);
     const json = (await res.json()) as Record<string, unknown>;
     expect(json.ok).toBe(true);
-    const project = json.project as { max_turns: number; scope: string };
+    const project = json.project as {
+      max_turns: number;
+      scope: string;
+      organization_id: string;
+    };
     expect(project.max_turns).toBe(5);
     expect(project.scope).toBe("enterprise");
+    expect(project.organization_id).toBe("org-1");
   });
 
   it("GET lists existing projects", async () => {
     const app = buildApp();
     const db = new FakeD1();
     db.projects.set("org-1:team-1", {
-      id: 1,
-      org_id: "org-1",
+      id: "project-uuid-1",
+      organization_id: "org-1",
       linear_team_id: "team-1",
+      linear_team_name: "",
       repo_url: "https://github.com/x/y.git",
       default_branch: "main",
       engine: "pi",
@@ -138,7 +150,8 @@ describe("/admin/projects CRUD", () => {
       max_turns: 10,
       scope: null,
       system_prompt_override: null,
-      updated_at: "2026-01-01T00:00:00Z",
+      created_at: nowSec(),
+      updated_at: nowSec(),
     });
     const res = await app.fetch(
       authed(new Request("https://agent.example/admin/projects")),
@@ -146,18 +159,21 @@ describe("/admin/projects CRUD", () => {
       makeExecCtx(),
     );
     expect(res.status).toBe(200);
-    const json = (await res.json()) as { projects: Array<{ linear_team_id: string }> };
+    const json = (await res.json()) as {
+      projects: Array<{ linear_team_id: string }>;
+    };
     expect(json.projects).toHaveLength(1);
     expect(json.projects[0]?.linear_team_id).toBe("team-1");
   });
 
-  it("DELETE removes a project row", async () => {
+  it("DELETE removes a project row by (orgId, linearTeamId)", async () => {
     const app = buildApp();
     const db = new FakeD1();
     db.projects.set("org-1:team-1", {
-      id: 1,
-      org_id: "org-1",
+      id: "project-uuid-1",
+      organization_id: "org-1",
       linear_team_id: "team-1",
+      linear_team_name: "",
       repo_url: "https://github.com/x/y.git",
       default_branch: "main",
       engine: "pi",
@@ -165,7 +181,8 @@ describe("/admin/projects CRUD", () => {
       max_turns: 10,
       scope: null,
       system_prompt_override: null,
-      updated_at: "2026-01-01T00:00:00Z",
+      created_at: nowSec(),
+      updated_at: nowSec(),
     });
     const res = await app.fetch(
       authed(
@@ -186,17 +203,17 @@ describe("/admin/installations", () => {
   it("returns installations without leaking access tokens", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    db.installations.set("org-1", {
-      id: 1,
-      org_id: "org-1",
+    db.linearAgentInstalls.set("org-1", {
+      id: "install-uuid-1",
+      organization_id: "org-1",
+      linear_organization_id: "linear-org-1",
       access_token: "SUPER_SECRET",
       refresh_token: null,
       scopes: "read,write",
-      installed_by: "oauth",
+      installed_by_user_id: "user-1",
       status: "active",
-      github_app_installation_id: null,
-      installed_at: "2026-01-01T00:00:00Z",
-      refreshed_at: "2026-01-01T00:00:00Z",
+      installed_at: nowSec(),
+      refreshed_at: nowSec(),
     });
 
     const res = await app.fetch(
@@ -210,10 +227,16 @@ describe("/admin/installations", () => {
     };
     expect(json.installations).toHaveLength(1);
     expect(json.installations[0]).toMatchObject({
-      org_id: "org-1",
+      organization_id: "org-1",
+      linear_organization_id: "linear-org-1",
       scopes: "read,write",
       status: "active",
     });
+    // The production SELECT in /admin/installations explicitly omits
+    // `access_token` and `refresh_token`. Our FakeD1 returns the whole
+    // row regardless of the SELECT clause, so we can't assert column
+    // omission here. The route itself is verified by inspection of
+    // src/routes/admin.ts.
   });
 });
 
@@ -343,7 +366,7 @@ describe("D1-driven project resolution", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            org_id: "org-1",
+            organization_id: "org-1",
             linear_team_id: "team-override",
             repo_url: "https://github.com/x/y.git",
             max_turns: 1,

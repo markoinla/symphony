@@ -45,7 +45,12 @@ import {
 import { lastAssistantText, mapToActivity } from "../lib/event-mapper";
 import { resolveLinearMcpToken } from "../lib/linear-token";
 import { resolvePrompt, truncate } from "../lib/session-helpers";
-import { AgentSessionStore, InstallationStore, ProjectStore, UserStore } from "../lib/store";
+import {
+  AgentSessionStore,
+  GitHubInstallStore,
+  LinearAgentInstallStore,
+  ProjectStore,
+} from "../lib/store";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
 
 export interface SessionRunnerParams {
@@ -112,15 +117,20 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     const sessionId = webhookEvent.agentSession.id;
 
     const installInfo = await step.do("load-token", async () => {
-      const installs = new InstallationStore(this.env.DB);
-      const orgId = webhookEvent.organizationId;
-      const install = orgId
-        ? await installs.get(orgId)
-        : await installs.getOnlyInstallation();
+      const linearOrgId = webhookEvent.organizationId;
+      if (!linearOrgId) return null;
+
+      const installs = new LinearAgentInstallStore(this.env.DB);
+      const install = await installs.getByLinearOrgId(linearOrgId);
       if (!install) return null;
+
+      const github = await new GitHubInstallStore(this.env.DB).getByOrgId(
+        install.organization_id,
+      );
       return {
         token: install.access_token,
-        githubAppInstallationId: install.github_app_installation_id,
+        organizationId: install.organization_id,
+        githubAppInstallationId: github?.install_id ?? null,
       };
     });
 
@@ -133,6 +143,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     }
 
     const token = installInfo.token;
+    const organizationId = installInfo.organizationId;
     const githubAppInstallationId = installInfo.githubAppInstallationId;
 
     await step.do("post-initial-thought", async () => {
@@ -152,12 +163,9 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           webhookEvent.agentSession.issue?.team?.id ??
           null;
 
-        const orgId = webhookEvent.organizationId;
         const projects = new ProjectStore(this.env.DB);
         const projectRow = teamId
-          ? (orgId
-              ? await projects.getByTeamId(orgId, teamId)
-              : await projects.get(teamId))
+          ? await projects.getByTeamId(organizationId, teamId)
           : null;
 
         const repoUrl = projectRow?.repo_url ?? null;
@@ -266,6 +274,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       try {
         await new AgentSessionStore(this.env.DB).create({
           id: sessionId,
+          organizationId,
           linearIssueId: issueGraphqlId,
           linearIssueTitle:
             webhookEvent.agentSession.issue?.title ?? null,
@@ -307,40 +316,23 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       const linearMcpCredentials: RunCredentials | null = await step.do(
         `resolve-linear-mcp-token-${turn}`,
         async () => {
-          const orgId = webhookEvent.organizationId;
-          if (!orgId) return null;
-
-          const triggeringUserId =
-            webhookEvent.agentSession.comment?.userId ?? null;
-
-          try {
-            const result = await resolveLinearMcpToken({
-              orgId,
-              triggeringUserId,
-              userStore: new UserStore(this.env.DB),
-              clientId: this.env.LINEAR_CLIENT_ID,
-              clientSecret: this.env.LINEAR_CLIENT_SECRET,
-              runTimeoutMs: DEFAULT_TIMEOUT_MS,
-            });
-
-            if (!result) return null;
-
-            return {
-              mcp_servers: [
-                {
-                  name: "linear",
-                  url: "https://mcp.linear.app/sse",
-                  token: result.accessToken,
-                },
-              ],
-            } as RunCredentials;
-          } catch (e) {
-            console.error(
-              "resolve_linear_mcp_token_failed",
-              e instanceof Error ? e.message : String(e),
-            );
-            return null;
-          }
+          const result = await resolveLinearMcpToken({
+            env: this.env,
+            organizationId,
+            triggeringUserId:
+              webhookEvent.agentSession.comment?.userId ?? null,
+            runTimeoutMs: DEFAULT_TIMEOUT_MS,
+          });
+          if (!result) return null;
+          return {
+            mcp_servers: [
+              {
+                name: "linear",
+                url: "https://mcp.linear.app/sse",
+                token: result.accessToken,
+              },
+            ],
+          } as RunCredentials;
         },
       );
 
@@ -550,7 +542,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
               : null;
         await new AgentSessionStore(this.env.DB).update(sessionId, {
           status: finalStatus,
-          completedAt: new Date().toISOString(),
+          completedAt: Math.floor(Date.now() / 1000),
           error: errorMsg,
           messages:
             allEventSummaries.length > 0

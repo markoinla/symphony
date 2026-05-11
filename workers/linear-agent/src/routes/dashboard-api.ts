@@ -1,14 +1,29 @@
 import { Hono } from "hono";
 import type { Env } from "../index";
 import { CredentialStore } from "../lib/credentials";
-import { requireDashboardAuth } from "../lib/dashboard-auth";
-import { InstallationStore, ProjectStore } from "../lib/store";
+import { requireOrg } from "../lib/dashboard-auth";
+import { mintInstallationToken } from "../lib/github-app";
+import {
+  LinearAgentInstallStore,
+  GitHubInstallStore,
+  ProjectStore,
+} from "../lib/store";
+
+
+function buildLinearProjectSlug(name: string, slugId: string): string {
+  if (!name) return slugId;
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${slug}-${slugId}`;
+}
 
 export function buildDashboardApiRouter() {
   const app = new Hono<{ Bindings: Env }>();
 
   app.get("/dashboard/api/projects", async (c) => {
-    const user = await requireDashboardAuth(c);
+    const user = await requireOrg(c);
     if (!user) return c.json({ error: "unauthorized" }, 401);
 
     const projects = await new ProjectStore(c.env.DB).listByOrg(
@@ -18,7 +33,7 @@ export function buildDashboardApiRouter() {
   });
 
   app.post("/dashboard/api/projects", async (c) => {
-    const user = await requireDashboardAuth(c);
+    const user = await requireOrg(c);
     if (!user) return c.json({ error: "unauthorized" }, 401);
 
     const body = await c.req.json<Record<string, unknown>>().catch(() => null);
@@ -27,9 +42,8 @@ export function buildDashboardApiRouter() {
       return c.json({ error: "validation_failed", fields: errors }, 400);
     }
 
-    const store = new ProjectStore(c.env.DB);
-    await store.upsert({
-      orgId: user.organizationId,
+    const project = await new ProjectStore(c.env.DB).upsert({
+      organizationId: user.organizationId,
       linearTeamId: body!.linear_team_id as string,
       linearTeamName: (body!.linear_team_name as string) ?? "",
       repoUrl: body!.repo_url as string,
@@ -42,18 +56,15 @@ export function buildDashboardApiRouter() {
       systemPromptOverride: (body!.system_prompt_override as string) || null,
     });
 
-    const created = await store.get(body!.linear_team_id as string);
-    return c.json({ project: created }, 201);
+    return c.json({ project }, 201);
   });
 
   app.put("/dashboard/api/projects/:id", async (c) => {
-    const user = await requireDashboardAuth(c);
+    const user = await requireOrg(c);
     if (!user) return c.json({ error: "unauthorized" }, 401);
 
-    const id = parseInt(c.req.param("id"), 10);
-    if (!Number.isFinite(id)) {
-      return c.json({ error: "invalid_id" }, 400);
-    }
+    const id = c.req.param("id");
+    if (!id) return c.json({ error: "invalid_id" }, 400);
 
     const body = await c.req.json<Record<string, unknown>>().catch(() => null);
     if (!body) return c.json({ error: "invalid_body" }, 400);
@@ -72,34 +83,35 @@ export function buildDashboardApiRouter() {
       );
     }
 
-    const store = new ProjectStore(c.env.DB);
-    const project = await store.update(id, user.organizationId, {
-      linearTeamId: body.linear_team_id as string | undefined,
-      linearTeamName: body.linear_team_name as string | undefined,
-      repoUrl: body.repo_url as string | undefined,
-      defaultBranch: body.default_branch as string | undefined,
-      engine: body.engine as string | undefined,
-      model: body.model as string | null | undefined,
-      maxTurns: body.max_turns as number | undefined,
-      scope: body.scope as string | null | undefined,
-      systemPromptOverride: body.system_prompt_override as
-        | string
-        | null
-        | undefined,
-    });
+    const project = await new ProjectStore(c.env.DB).update(
+      id,
+      user.organizationId,
+      {
+        linearTeamId: body.linear_team_id as string | undefined,
+        linearTeamName: body.linear_team_name as string | undefined,
+        repoUrl: body.repo_url as string | undefined,
+        defaultBranch: body.default_branch as string | undefined,
+        engine: body.engine as string | undefined,
+        model: body.model as string | null | undefined,
+        maxTurns: body.max_turns as number | undefined,
+        scope: body.scope as string | null | undefined,
+        systemPromptOverride: body.system_prompt_override as
+          | string
+          | null
+          | undefined,
+      },
+    );
 
     if (!project) return c.json({ error: "not_found" }, 404);
     return c.json({ project });
   });
 
   app.delete("/dashboard/api/projects/:id", async (c) => {
-    const user = await requireDashboardAuth(c);
+    const user = await requireOrg(c);
     if (!user) return c.json({ error: "unauthorized" }, 401);
 
-    const id = parseInt(c.req.param("id"), 10);
-    if (!Number.isFinite(id)) {
-      return c.json({ error: "invalid_id" }, 400);
-    }
+    const id = c.req.param("id");
+    if (!id) return c.json({ error: "invalid_id" }, 400);
 
     const deleted = await new ProjectStore(c.env.DB).deleteById(
       id,
@@ -109,25 +121,33 @@ export function buildDashboardApiRouter() {
     return c.json({ ok: true });
   });
 
-  // --- Integrations API routes ---
+  // ── Integrations ────────────────────────────────────────────────
 
   app.get("/dashboard/api/integrations", async (c) => {
-    const user = await requireDashboardAuth(c);
+    const user = await requireOrg(c);
     if (!user) return c.json({ error: "unauthorized" }, 401);
 
     const orgId = user.organizationId;
-    const installation = await new InstallationStore(c.env.DB).get(orgId);
+    const install = await new LinearAgentInstallStore(c.env.DB).getByOrgId(orgId);
+    const github = await new GitHubInstallStore(c.env.DB).getByOrgId(orgId);
     const configuredKinds = await new CredentialStore(c.env.DB).listKinds(orgId);
     const configuredSet = new Set(configuredKinds);
 
     return c.json({
       linear: {
-        connected: !!installation,
-        email: user.email ?? null,
+        connected: !!install,
+        email: user.email,
       },
       github: {
-        connected: !!installation?.github_app_installation_id,
-        repo_count: 0,
+        connected: !!github,
+        repo_selection: github?.repo_selection ?? null,
+        repo_count: github
+          ? github.repo_selection === "all"
+            ? null
+            : github.selected_repos
+              ? (JSON.parse(github.selected_repos) as unknown[]).length
+              : 0
+          : 0,
       },
       anthropic: { configured: configuredSet.has("anthropic") },
       openai: { configured: configuredSet.has("openai") },
@@ -137,7 +157,7 @@ export function buildDashboardApiRouter() {
   });
 
   app.put("/dashboard/api/integrations/credentials", async (c) => {
-    const user = await requireDashboardAuth(c);
+    const user = await requireOrg(c);
     if (!user) return c.json({ error: "unauthorized" }, 401);
 
     const body = await c.req.json<{ provider?: string; api_key?: string }>();
@@ -150,7 +170,10 @@ export function buildDashboardApiRouter() {
       body.api_key.trim().length === 0
     ) {
       return c.json(
-        { error: "invalid_request", message: "provider and api_key are required" },
+        {
+          error: "invalid_request",
+          message: "provider and api_key are required",
+        },
         400,
       );
     }
@@ -158,19 +181,228 @@ export function buildDashboardApiRouter() {
     const kek = c.env.CREDENTIAL_KEK;
     if (!kek) {
       return c.json(
-        { error: "server_error", message: "Credential encryption not configured" },
+        {
+          error: "server_error",
+          message: "Credential encryption not configured",
+        },
         500,
       );
     }
 
-    const credStore = new CredentialStore(c.env.DB);
-    await credStore.encryptForOrg(
+    await new CredentialStore(c.env.DB).encryptForOrg(
       user.organizationId,
       body.provider,
       body.api_key.trim(),
       kek,
     );
     return c.json({ ok: true });
+  });
+
+  // ── Linear projects search ──────────────────────────────────────
+
+  app.get("/dashboard/api/linear/projects", async (c) => {
+    const user = await requireOrg(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
+
+    const install = await new LinearAgentInstallStore(c.env.DB).getByOrgId(
+      user.organizationId,
+    );
+    if (!install) return c.json({ error: "linear_not_connected" }, 503);
+
+    // Linear has a per-query complexity cap of 10000. Each nested
+    // connection multiplies its parent's complexity by its page size
+    // (default 50), so we bound the teams subselection to one item —
+    // we only use the first team in the response mapping anyway.
+    const query = `
+      query ListProjects($filter: ProjectFilter, $first: Int!) {
+        projects(filter: $filter, first: $first) {
+          nodes {
+            id
+            name
+            slugId
+            url
+            state
+            teams(first: 1) {
+              nodes {
+                id
+                key
+                organization { urlKey }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    // Active states only. Cancelled/completed clutter the picker; an
+    // unfiltered call appears to trigger Linear-side errors for
+    // actor=app tokens.
+    const filter = {
+      state: { in: ["backlog", "planned", "started", "paused"] },
+    };
+
+    const res = await fetch("https://api.linear.app/graphql", {
+      method: "POST",
+      headers: {
+        Authorization: install.access_token.startsWith("Bearer ")
+          ? install.access_token
+          : `Bearer ${install.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        query,
+        operationName: "ListProjects",
+        variables: { filter, first: 100 },
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return c.json(
+        {
+          error: "linear_api_error",
+          status: res.status,
+          message: body.slice(0, 500),
+        },
+        502,
+      );
+    }
+
+    const json = (await res.json()) as {
+      data?: {
+        projects?: {
+          nodes?: Array<{
+            id: string;
+            name: string;
+            slugId: string;
+            url: string;
+            state: string;
+            teams?: {
+              nodes?: Array<{
+                id: string;
+                key: string;
+                organization?: { urlKey?: string | null };
+              }>;
+            };
+          }>;
+        };
+      };
+      errors?: Array<{ message: string }>;
+    };
+
+    if (json.errors && json.errors.length > 0) {
+      return c.json(
+        {
+          error: "linear_graphql_error",
+          message: json.errors[0]?.message ?? "Unknown Linear GraphQL error",
+        },
+        502,
+      );
+    }
+
+    const nodes = json.data?.projects?.nodes ?? [];
+
+    const projects = nodes.map((n) => {
+      const team = n.teams?.nodes?.[0] ?? null;
+      return {
+        id: n.id,
+        name: n.name,
+        slug_id: n.slugId,
+        slug: buildLinearProjectSlug(n.name, n.slugId),
+        url: n.url,
+        state: n.state,
+        organization_slug: team?.organization?.urlKey ?? null,
+        team_id: team?.id ?? null,
+        team_key: team?.key ?? null,
+      };
+    });
+
+    return c.json({ projects });
+  });
+
+  // ── GitHub repos search ─────────────────────────────────────────
+
+  app.get("/dashboard/api/github/repos", async (c) => {
+    const user = await requireOrg(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
+
+    const install = await new GitHubInstallStore(c.env.DB).getByOrgId(
+      user.organizationId,
+    );
+    if (!install) return c.json({ error: "github_not_installed" }, 503);
+
+    const appId = c.env.GITHUB_APP_ID;
+    const privateKey = c.env.GITHUB_APP_PRIVATE_KEY;
+    if (!appId || !privateKey) {
+      return c.json({ error: "github_app_not_configured" }, 503);
+    }
+
+    let installToken: string;
+    try {
+      installToken = await mintInstallationToken(
+        install.install_id,
+        appId,
+        privateKey,
+      );
+    } catch (e) {
+      return c.json(
+        {
+          error: "github_token_mint_failed",
+          message: e instanceof Error ? e.message : String(e),
+        },
+        503,
+      );
+    }
+
+    const res = await fetch(
+      "https://api.github.com/installation/repositories?per_page=100",
+      {
+        headers: {
+          Authorization: `Bearer ${installToken}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+          "User-Agent": "symphony-linear-agent",
+        },
+      },
+    );
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return c.json(
+        {
+          error: "github_api_error",
+          status: res.status,
+          message: body.slice(0, 500),
+        },
+        502,
+      );
+    }
+
+    const json = (await res.json()) as {
+      repositories?: Array<{
+        id: number;
+        name: string;
+        full_name: string;
+        owner: { login: string };
+        description: string | null;
+        private: boolean;
+        default_branch: string;
+        html_url: string;
+      }>;
+    };
+
+    const repos = (json.repositories ?? []).map((r) => ({
+      id: r.id,
+      full_name: r.full_name,
+      name: r.name,
+      owner: r.owner.login,
+      description: r.description,
+      private: r.private,
+      default_branch: r.default_branch,
+      url: r.html_url,
+    }));
+
+    return c.json({ repos });
   });
 
   return app;

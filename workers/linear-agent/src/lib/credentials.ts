@@ -14,14 +14,14 @@ const DEK_LENGTH = 256;
 export const CURRENT_KEK_VERSION = 1;
 
 export interface OrgCredentialRecord {
-  id: number;
-  org_id: string;
+  id: string;
+  organization_id: string;
   kind: string;
   ciphertext: ArrayBuffer;
   dek_ciphertext: ArrayBuffer;
   kek_version: number;
-  created_at: string;
-  updated_at: string;
+  created_at: number;
+  updated_at: number;
 }
 
 async function importKek(rawBase64: string): Promise<CryptoKey> {
@@ -132,22 +132,27 @@ export class CredentialStore {
     const ciphertext = await encryptWithDek(plaintext, dek);
     const dekCiphertext = await wrapDek(dek, kek);
 
+    const now = Math.floor(Date.now() / 1000);
     await this.db
       .prepare(
-        `INSERT INTO org_credentials (org_id, kind, ciphertext, dek_ciphertext, kek_version)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(org_id, kind) DO UPDATE SET
+        `INSERT INTO org_credentials
+           (id, organization_id, kind, ciphertext, dek_ciphertext, kek_version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(organization_id, kind) DO UPDATE SET
            ciphertext     = excluded.ciphertext,
            dek_ciphertext = excluded.dek_ciphertext,
            kek_version    = excluded.kek_version,
-           updated_at     = datetime('now')`,
+           updated_at     = excluded.updated_at`,
       )
       .bind(
+        crypto.randomUUID(),
         orgId,
         kind,
         ciphertext.buffer as ArrayBuffer,
         dekCiphertext.buffer as ArrayBuffer,
         kekVersion,
+        now,
+        now,
       )
       .run();
   }
@@ -159,10 +164,10 @@ export class CredentialStore {
   ): Promise<string | null> {
     const row = await this.db
       .prepare(
-        `SELECT id, org_id, kind, ciphertext, dek_ciphertext, kek_version,
+        `SELECT id, organization_id, kind, ciphertext, dek_ciphertext, kek_version,
                 created_at, updated_at
          FROM org_credentials
-         WHERE org_id = ? AND kind = ?`,
+         WHERE organization_id = ? AND kind = ?`,
       )
       .bind(orgId, kind)
       .first<OrgCredentialRecord>();
@@ -176,7 +181,9 @@ export class CredentialStore {
 
   async delete(orgId: string, kind: string): Promise<boolean> {
     const result = await this.db
-      .prepare("DELETE FROM org_credentials WHERE org_id = ? AND kind = ?")
+      .prepare(
+        "DELETE FROM org_credentials WHERE organization_id = ? AND kind = ?",
+      )
       .bind(orgId, kind)
       .run();
     return (result.meta.changes ?? 0) > 0;
@@ -185,7 +192,7 @@ export class CredentialStore {
   async listKinds(orgId: string): Promise<string[]> {
     const result = await this.db
       .prepare(
-        `SELECT kind FROM org_credentials WHERE org_id = ? ORDER BY kind`,
+        `SELECT kind FROM org_credentials WHERE organization_id = ? ORDER BY kind`,
       )
       .bind(orgId)
       .all<{ kind: string }>();

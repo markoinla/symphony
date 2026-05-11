@@ -27,7 +27,7 @@ import {
   DispatcherError,
   type NormalizedEvent,
 } from "../lib/dispatcher";
-import { InstallationStore, ProjectStore } from "../lib/store";
+import { LinearAgentInstallStore, ProjectStore } from "../lib/store";
 
 const AUTH_HEADER = "authorization";
 
@@ -47,7 +47,7 @@ export function buildAdminRouter() {
   });
 
   app.get("/admin/projects", async (c) => {
-    const orgId = c.req.query("org_id");
+    const orgId = c.req.query("organization_id") ?? c.req.query("org_id");
     const store = new ProjectStore(c.env.DB);
     const rows = orgId ? await store.listByOrg(orgId) : await store.list();
     return c.json({ projects: rows });
@@ -65,6 +65,7 @@ export function buildAdminRouter() {
   app.post("/admin/projects", async (c) => {
     const body = (await c.req.json().catch(() => null)) as
       | {
+          organization_id?: string;
           org_id?: string;
           linear_team_id?: string;
           repo_url?: string;
@@ -76,8 +77,9 @@ export function buildAdminRouter() {
           system_prompt_override?: string | null;
         }
       | null;
-    if (!body || typeof body.org_id !== "string" || body.org_id.length === 0) {
-      return c.json({ error: "invalid_org_id" }, 400);
+    const orgId = body?.organization_id ?? body?.org_id;
+    if (!body || typeof orgId !== "string" || orgId.length === 0) {
+      return c.json({ error: "invalid_organization_id" }, 400);
     }
     if (typeof body.linear_team_id !== "string" || body.linear_team_id.length === 0) {
       return c.json({ error: "invalid_linear_team_id" }, 400);
@@ -85,8 +87,8 @@ export function buildAdminRouter() {
     if (typeof body.repo_url !== "string" || !/^https?:\/\//.test(body.repo_url)) {
       return c.json({ error: "invalid_repo_url" }, 400);
     }
-    await new ProjectStore(c.env.DB).upsert({
-      orgId: body.org_id,
+    const stored = await new ProjectStore(c.env.DB).upsert({
+      organizationId: orgId,
       linearTeamId: body.linear_team_id,
       repoUrl: body.repo_url,
       defaultBranch: body.default_branch,
@@ -96,7 +98,6 @@ export function buildAdminRouter() {
       scope: body.scope ?? null,
       systemPromptOverride: body.system_prompt_override ?? null,
     });
-    const stored = await new ProjectStore(c.env.DB).getByTeamId(body.org_id, body.linear_team_id);
     return c.json({ ok: true, project: stored });
   });
 
@@ -110,31 +111,20 @@ export function buildAdminRouter() {
 
   app.get("/admin/installations", async (c) => {
     // Don't leak access tokens here — return scopes + timestamps only.
-    // We SELECT just the safe columns AND strip the token field in JS
-    // as defense-in-depth, so an accidental SELECT * elsewhere can't
-    // leak credentials.
     const result = await c.env.DB
       .prepare(
-        `SELECT org_id, scopes, status, github_app_installation_id, installed_at, refreshed_at
-         FROM installations ORDER BY installed_at DESC`,
+        `SELECT organization_id, linear_organization_id, scopes, status, installed_at, refreshed_at
+         FROM linear_agent_installs ORDER BY installed_at DESC`,
       )
       .all<{
-        org_id: string;
+        organization_id: string;
+        linear_organization_id: string;
         scopes: string;
         status: string;
-        github_app_installation_id: number | null;
-        installed_at: string;
-        refreshed_at: string;
+        installed_at: number;
+        refreshed_at: number;
       }>();
-    const installations = result.results.map((row) => ({
-      org_id: row.org_id,
-      scopes: row.scopes,
-      status: row.status,
-      github_app_installation_id: row.github_app_installation_id,
-      installed_at: row.installed_at,
-      refreshed_at: row.refreshed_at,
-    }));
-    return c.json({ installations });
+    return c.json({ installations: result.results });
   });
 
   /**
@@ -206,4 +196,4 @@ export function buildAdminRouter() {
 }
 
 // Re-export so consumers can read installation tokens for tests etc.
-export { InstallationStore };
+export { LinearAgentInstallStore };

@@ -1,49 +1,21 @@
 import { Hono } from "hono";
+
 import type { Env } from "../index";
-import { AgentSessionStore, SessionStore } from "../lib/store";
-
-function parseCookie(header: string | undefined, name: string): string | null {
-  if (!header) return null;
-  const match = header.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
-  return match?.[1] ? decodeURIComponent(match[1]) : null;
-}
-
-function sessionCookie(
-  token: string,
-  maxAgeSec: number,
-  secure: boolean,
-): string {
-  const parts = [
-    `dashboard_session=${token}`,
-    `Path=/dashboard`,
-    `HttpOnly`,
-    `SameSite=Strict`,
-    `Max-Age=${maxAgeSec}`,
-  ];
-  if (secure) parts.push("Secure");
-  return parts.join("; ");
-}
-
-export function clearSessionCookie(secure: boolean): string {
-  return sessionCookie("deleted", 0, secure);
-}
-
-export function setSessionCookie(
-  token: string,
-  ttlDays: number,
-  secure: boolean,
-): string {
-  return sessionCookie(token, ttlDays * 86_400, secure);
-}
+import { AgentSessionStore } from "../lib/store";
+import { requireDashboardAuth, requireOrg } from "../lib/dashboard-auth";
 
 export function buildDashboardRouter() {
   const router = new Hono<{ Bindings: Env }>();
 
-  // --- Dashboard API routes (must be registered before the asset catch-all) ---
+  // ── Dashboard API routes (must precede the asset catch-all) ─────
 
   router.get("/dashboard/api/sessions", async (c) => {
+    const user = await requireOrg(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
+
     const store = new AgentSessionStore(c.env.DB);
     const sessions = await store.list({
+      organizationId: user.organizationId,
       team: c.req.query("team") || undefined,
       repo: c.req.query("repo") || undefined,
       status: c.req.query("status") || undefined,
@@ -68,6 +40,10 @@ export function buildDashboardRouter() {
   });
 
   router.get("/dashboard/api/sessions/live", async (c) => {
+    const user = await requireOrg(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
+
+    const orgId = user.organizationId;
     const store = new AgentSessionStore(c.env.DB);
     const encoder = new TextEncoder();
 
@@ -88,7 +64,7 @@ export function buildDashboardRouter() {
         const poll = async () => {
           while (!closed) {
             try {
-              const running = await store.listRunning();
+              const running = await store.listRunning(orgId);
               for (const session of running) {
                 sendEvent({
                   type: "session_update",
@@ -112,10 +88,7 @@ export function buildDashboardRouter() {
               );
             }
 
-            // Wait 5 seconds between polls
             await new Promise((r) => setTimeout(r, 5000));
-
-            // Send heartbeat every 30s (6 poll cycles)
             sendHeartbeat();
           }
         };
@@ -127,11 +100,8 @@ export function buildDashboardRouter() {
           }
         });
 
-        // Cloudflare Workers have a 30s execution limit for streaming
-        // responses. We rely on the client to reconnect. Send an initial
-        // snapshot immediately.
         try {
-          const running = await store.listRunning();
+          const running = await store.listRunning(orgId);
           for (const session of running) {
             sendEvent({
               type: "session_update",
@@ -162,9 +132,12 @@ export function buildDashboardRouter() {
   });
 
   router.get("/dashboard/api/sessions/:id/debug", async (c) => {
+    const user = await requireOrg(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
+
     const store = new AgentSessionStore(c.env.DB);
     const session = await store.get(c.req.param("id"));
-    if (!session) {
+    if (!session || session.organization_id !== user.organizationId) {
       return c.json({ error: "not_found" }, 404);
     }
 
@@ -196,29 +169,28 @@ export function buildDashboardRouter() {
   });
 
   router.post("/dashboard/api/sessions/:id/rerun", async (c) => {
+    const user = await requireOrg(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
+
     const store = new AgentSessionStore(c.env.DB);
     const session = await store.get(c.req.param("id"));
-    if (!session) {
+    if (!session || session.organization_id !== user.organizationId) {
       return c.json({ error: "not_found" }, 404);
     }
 
-    const body = (await c.req.json().catch(() => ({}))) as {
-      prompt?: string;
-    };
+    const body = (await c.req.json().catch(() => ({}))) as { prompt?: string };
     const prompt = body.prompt || session.prompt;
-    if (!prompt) {
-      return c.json({ error: "no_prompt" }, 400);
-    }
+    if (!prompt) return c.json({ error: "no_prompt" }, 400);
 
     const newSessionId = crypto.randomUUID();
-
-    // Create the new session record
     const configSnapshot = session.config_snapshot
       ? JSON.parse(session.config_snapshot)
       : null;
 
     await store.create({
       id: newSessionId,
+      organizationId: user.organizationId,
+      projectId: session.project_id,
       linearIssueId: session.linear_issue_id,
       linearIssueTitle: session.linear_issue_title,
       status: "running",
@@ -229,8 +201,6 @@ export function buildDashboardRouter() {
       configSnapshot,
     });
 
-    // Re-dispatch through the webhook path by creating a synthetic
-    // AgentSessionEvent and scheduling the workflow.
     try {
       await c.env.SESSION_RUNNER.create({
         id: newSessionId,
@@ -262,7 +232,7 @@ export function buildDashboardRouter() {
         .update(newSessionId, {
           status: "error",
           error: msg,
-          completedAt: new Date().toISOString().replace("T", " ").replace(/\.\d{3}Z$/, ""),
+          completedAt: Math.floor(Date.now() / 1000),
         })
         .catch(() => {});
       return c.json({ error: "workflow_create_failed", message: msg }, 500);
@@ -271,82 +241,44 @@ export function buildDashboardRouter() {
     return c.json({ ok: true, new_session_id: newSessionId });
   });
 
-  // --- Auth API routes ---
-
+  // ── User info ───────────────────────────────────────────────────
+  // Better Auth exposes /api/auth/get-session — this stays as a thin
+  // shim for the legacy dashboard client which expects /dashboard/api/me.
   router.get("/dashboard/api/me", async (c) => {
-    const cookieHeader = c.req.header("cookie");
-    const token = parseCookie(cookieHeader, "dashboard_session");
-    if (!token) {
-      return c.json({ error: "unauthenticated" }, 401);
-    }
-    const user = await new SessionStore(c.env.DB).validate(token);
-    if (!user) {
-      return c.json({ error: "unauthenticated" }, 401);
-    }
+    const user = await requireDashboardAuth(c);
+    if (!user) return c.json({ error: "unauthenticated" }, 401);
     return c.json({
-      id: user.linear_user_id,
+      id: user.userId,
       email: user.email,
       name: user.name,
-      avatarUrl: null,
+      image: user.image,
+      organizationId: user.organizationId,
     });
   });
 
-  router.post("/dashboard/logout", async (c) => {
-    const cookieHeader = c.req.header("cookie");
-    const token = parseCookie(cookieHeader, "dashboard_session");
-    if (token) {
-      await new SessionStore(c.env.DB).delete(token);
-    }
-    const secure = new URL(c.req.url).protocol === "https:";
-    return new Response(null, {
-      status: 302,
-      headers: {
-        Location: "/dashboard/login",
-        "Set-Cookie": clearSessionCookie(secure),
-      },
-    });
-  });
+  // ── Static asset serving with auth gate ────────────────────────
 
-  // --- Static asset serving with auth gate ---
-
-  router.get("/dashboard/login", async (c) => {
-    return serveAsset(c);
-  });
-
-  router.get("/dashboard/login/*", async (c) => {
-    return serveAsset(c);
-  });
+  router.get("/dashboard/login", (c) => serveIndex(c));
+  router.get("/dashboard/login/*", (c) => serveIndex(c));
+  router.get("/dashboard/signup", (c) => serveIndex(c));
+  router.get("/dashboard/signup/*", (c) => serveIndex(c));
 
   router.get("/dashboard/*", async (c) => {
     const url = new URL(c.req.url);
     const path = url.pathname;
 
-    // Allow static assets through without auth (JS, CSS, images, fonts)
     if (/\.(js|css|svg|png|jpg|ico|woff2?|ttf|map)$/i.test(path)) {
       return serveAsset(c);
     }
 
-    const cookieHeader = c.req.header("cookie");
-    const token = parseCookie(cookieHeader, "dashboard_session");
-    if (token) {
-      const user = await new SessionStore(c.env.DB).validate(token);
-      if (user) {
-        return serveAsset(c);
-      }
-    }
-
+    const user = await requireDashboardAuth(c);
+    if (user) return serveIndex(c);
     return c.redirect("/dashboard/login", 302);
   });
 
   router.get("/dashboard", async (c) => {
-    const cookieHeader = c.req.header("cookie");
-    const token = parseCookie(cookieHeader, "dashboard_session");
-    if (token) {
-      const user = await new SessionStore(c.env.DB).validate(token);
-      if (user) {
-        return serveAsset(c);
-      }
-    }
+    const user = await requireDashboardAuth(c);
+    if (user) return serveIndex(c);
     return c.redirect("/dashboard/login", 302);
   });
 
@@ -358,10 +290,20 @@ async function serveAsset(c: {
   env: { ASSETS: Fetcher };
 }) {
   const response = await c.env.ASSETS.fetch(c.req.raw);
-  if (response.status === 404) {
-    const url = new URL(c.req.url);
-    url.pathname = "/dashboard/index.html";
-    return c.env.ASSETS.fetch(new Request(url.toString(), c.req.raw));
+  if (
+    response.status === 404 ||
+    (response.status >= 300 && response.status < 400)
+  ) {
+    return serveIndex(c);
   }
   return response;
+}
+
+async function serveIndex(c: {
+  req: { raw: Request; url: string };
+  env: { ASSETS: Fetcher };
+}) {
+  const url = new URL(c.req.url);
+  url.pathname = "/dashboard/index.html";
+  return c.env.ASSETS.fetch(new Request(url.toString(), c.req.raw));
 }

@@ -1,139 +1,121 @@
 import { describe, expect, it } from "vitest";
-import { InstallationStore, ProjectStore, SessionStore, UserStore } from "../src/lib/store";
+import {
+  AgentSessionStore,
+  GitHubInstallStore,
+  InstallationStore,
+  LinearAgentInstallStore,
+  ProjectStore,
+} from "../src/lib/store";
 import { FakeD1 } from "./helpers/fake-d1";
 
-describe("InstallationStore", () => {
-  it("upserts and reads a row by org_id", async () => {
+// LinearAgentInstallStore is re-exported as InstallationStore for
+// callers migrating from the v1 schema — both names are tested below
+// to lock in that compatibility alias.
+
+describe("LinearAgentInstallStore", () => {
+  it("upserts and reads a row by organization_id", async () => {
     const db = new FakeD1();
-    const store = new InstallationStore(db as unknown as D1Database);
+    const store = new LinearAgentInstallStore(db as unknown as D1Database);
 
-    await store.upsert("org-1", "token-abc", "read,write,app:assignable", "oauth");
+    await store.upsert({
+      organizationId: "org-1",
+      linearOrganizationId: "linear-org-1",
+      accessToken: "token-abc",
+      scopes: "read,write,app:assignable",
+      installedByUserId: "user-1",
+    });
 
-    const row = await store.get("org-1");
-    expect(row?.org_id).toBe("org-1");
+    const row = await store.getByOrgId("org-1");
+    expect(row?.organization_id).toBe("org-1");
+    expect(row?.linear_organization_id).toBe("linear-org-1");
     expect(row?.access_token).toBe("token-abc");
     expect(row?.scopes).toBe("read,write,app:assignable");
+    expect(row?.installed_by_user_id).toBe("user-1");
+    expect(row?.status).toBe("active");
+    expect(typeof row?.installed_at).toBe("number");
   });
 
-  it("overwrites an existing row on conflict", async () => {
+  it("looks up by linear_organization_id for webhook routing", async () => {
     const db = new FakeD1();
-    const store = new InstallationStore(db as unknown as D1Database);
+    const store = new LinearAgentInstallStore(db as unknown as D1Database);
 
-    await store.upsert("org-1", "old-token", "read", "oauth");
-    await store.upsert("org-1", "new-token", "read,write", "oauth");
+    await store.upsert({
+      organizationId: "org-1",
+      linearOrganizationId: "linear-org-abc",
+      accessToken: "tok",
+      scopes: "read",
+      installedByUserId: "user-1",
+    });
 
-    const row = await store.get("org-1");
+    const row = await store.getByLinearOrgId("linear-org-abc");
+    expect(row?.organization_id).toBe("org-1");
+    expect(row?.access_token).toBe("tok");
+    expect(await store.getByLinearOrgId("nope")).toBeNull();
+  });
+
+  it("overwrites an existing row on conflict (by linear_organization_id)", async () => {
+    const db = new FakeD1();
+    const store = new LinearAgentInstallStore(db as unknown as D1Database);
+
+    await store.upsert({
+      organizationId: "org-1",
+      linearOrganizationId: "linear-org-1",
+      accessToken: "old-token",
+      scopes: "read",
+      installedByUserId: "user-1",
+    });
+    await store.upsert({
+      organizationId: "org-1",
+      linearOrganizationId: "linear-org-1",
+      accessToken: "new-token",
+      scopes: "read,write",
+      installedByUserId: "user-1",
+    });
+
+    const row = await store.getByOrgId("org-1");
     expect(row?.access_token).toBe("new-token");
     expect(row?.scopes).toBe("read,write");
   });
 
-  it("returns the only install when exactly one exists", async () => {
+  it("refreshToken updates access_token (+ optional refresh_token) by id", async () => {
     const db = new FakeD1();
-    const store = new InstallationStore(db as unknown as D1Database);
+    const store = new LinearAgentInstallStore(db as unknown as D1Database);
 
-    await store.upsert("org-only", "tok", "read", "oauth");
-    const single = await store.getOnlyInstallation();
-    expect(single?.org_id).toBe("org-only");
-  });
+    await store.upsert({
+      organizationId: "org-1",
+      linearOrganizationId: "linear-org-1",
+      accessToken: "tok",
+      refreshToken: "refresh-1",
+      scopes: "read",
+      installedByUserId: "user-1",
+    });
+    const row = await store.getByOrgId("org-1");
+    expect(row).not.toBeNull();
 
-  it("returns null when multiple installs exist (ambiguous)", async () => {
-    const db = new FakeD1();
-    const store = new InstallationStore(db as unknown as D1Database);
+    await store.refreshToken(row!.id, "fresh-token", "fresh-refresh");
 
-    await store.upsert("org-a", "tok-a", "read", "oauth");
-    await store.upsert("org-b", "tok-b", "read", "oauth");
-    expect(await store.getOnlyInstallation()).toBeNull();
+    const after = await store.getByOrgId("org-1");
+    expect(after?.access_token).toBe("fresh-token");
+    expect(after?.refresh_token).toBe("fresh-refresh");
   });
 
   it("delete returns true only when a row was removed", async () => {
     const db = new FakeD1();
-    const store = new InstallationStore(db as unknown as D1Database);
+    const store = new LinearAgentInstallStore(db as unknown as D1Database);
 
-    await store.upsert("org-1", "tok", "read", "oauth");
+    await store.upsert({
+      organizationId: "org-1",
+      linearOrganizationId: "linear-org-1",
+      accessToken: "tok",
+      scopes: "read",
+      installedByUserId: "user-1",
+    });
     expect(await store.delete("org-1")).toBe(true);
     expect(await store.delete("org-1")).toBe(false);
   });
-});
 
-describe("UserStore", () => {
-  it("upserts and reads a user by linear_user_id", async () => {
-    const db = new FakeD1();
-    const store = new UserStore(db as unknown as D1Database);
-
-    await store.upsert({
-      linearUserId: "user-1",
-      organizationId: "org-1",
-      accessToken: "tok-abc",
-      email: "alice@example.com",
-      name: "Alice",
-    });
-
-    const row = await store.getByLinearUserId("user-1");
-    expect(row?.linear_user_id).toBe("user-1");
-    expect(row?.organization_id).toBe("org-1");
-    expect(row?.access_token).toBe("tok-abc");
-    expect(row?.email).toBe("alice@example.com");
-    expect(row?.name).toBe("Alice");
-    expect(row?.refresh_token).toBeNull();
-    expect(row?.expires_at).toBeNull();
-  });
-
-  it("overwrites token on re-auth", async () => {
-    const db = new FakeD1();
-    const store = new UserStore(db as unknown as D1Database);
-
-    await store.upsert({
-      linearUserId: "user-1",
-      organizationId: "org-1",
-      accessToken: "old-tok",
-    });
-    await store.upsert({
-      linearUserId: "user-1",
-      organizationId: "org-1",
-      accessToken: "new-tok",
-      refreshToken: "refresh-1",
-      expiresAt: "2026-06-01T00:00:00Z",
-    });
-
-    const row = await store.getByLinearUserId("user-1");
-    expect(row?.access_token).toBe("new-tok");
-    expect(row?.refresh_token).toBe("refresh-1");
-    expect(row?.expires_at).toBe("2026-06-01T00:00:00Z");
-  });
-
-  it("returns null for unknown user", async () => {
-    const db = new FakeD1();
-    const store = new UserStore(db as unknown as D1Database);
-    expect(await store.getByLinearUserId("nope")).toBeNull();
-  });
-
-  it("lists users scoped by organization_id", async () => {
-    const db = new FakeD1();
-    const store = new UserStore(db as unknown as D1Database);
-
-    await store.upsert({
-      linearUserId: "u-a",
-      organizationId: "org-1",
-      accessToken: "t1",
-    });
-    await store.upsert({
-      linearUserId: "u-b",
-      organizationId: "org-1",
-      accessToken: "t2",
-    });
-    await store.upsert({
-      linearUserId: "u-c",
-      organizationId: "org-2",
-      accessToken: "t3",
-    });
-
-    const org1Users = await store.listByOrg("org-1");
-    expect(org1Users).toHaveLength(2);
-    expect(org1Users.map((u) => u.linear_user_id).sort()).toEqual(["u-a", "u-b"]);
-
-    const org2Users = await store.listByOrg("org-2");
-    expect(org2Users).toHaveLength(1);
-    expect(org2Users[0]!.linear_user_id).toBe("u-c");
+  it("exports InstallationStore as an alias for migration compatibility", () => {
+    expect(InstallationStore).toBe(LinearAgentInstallStore);
   });
 });
 
@@ -143,14 +125,14 @@ describe("ProjectStore", () => {
     const store = new ProjectStore(db as unknown as D1Database);
 
     await store.upsert({
-      orgId: "org-1",
+      organizationId: "org-1",
       linearTeamId: "team-abc",
       repoUrl: "https://github.com/x/y.git",
     });
 
-    const row = await store.get("team-abc");
+    const row = await store.getByTeamId("org-1", "team-abc");
     expect(row).toMatchObject({
-      org_id: "org-1",
+      organization_id: "org-1",
       linear_team_id: "team-abc",
       repo_url: "https://github.com/x/y.git",
       default_branch: "main",
@@ -160,6 +142,8 @@ describe("ProjectStore", () => {
       scope: null,
       system_prompt_override: null,
     });
+    expect(typeof row?.id).toBe("string");
+    expect(row?.id.length).toBeGreaterThan(0);
   });
 
   it("respects explicit engine/model/max_turns/scope values", async () => {
@@ -167,7 +151,7 @@ describe("ProjectStore", () => {
     const store = new ProjectStore(db as unknown as D1Database);
 
     await store.upsert({
-      orgId: "org-1",
+      organizationId: "org-1",
       linearTeamId: "team-claude",
       repoUrl: "https://github.com/x/y.git",
       engine: "claude",
@@ -178,7 +162,7 @@ describe("ProjectStore", () => {
       systemPromptOverride: "Be concise.",
     });
 
-    const row = await store.get("team-claude");
+    const row = await store.getByTeamId("org-1", "team-claude");
     expect(row).toMatchObject({
       engine: "claude",
       model: "claude-sonnet-4-6",
@@ -189,12 +173,12 @@ describe("ProjectStore", () => {
     });
   });
 
-  it("getByTeamId resolves with composite key", async () => {
+  it("getByTeamId is scoped by organization_id", async () => {
     const db = new FakeD1();
     const store = new ProjectStore(db as unknown as D1Database);
 
     await store.upsert({
-      orgId: "org-1",
+      organizationId: "org-1",
       linearTeamId: "team-abc",
       repoUrl: "https://github.com/x/y.git",
     });
@@ -204,12 +188,54 @@ describe("ProjectStore", () => {
     expect(await store.getByTeamId("org-2", "team-abc")).toBeNull();
   });
 
-  it("delete requires both org_id and linear_team_id", async () => {
+  it("getById resolves a project by its UUID id and organization_id", async () => {
+    const db = new FakeD1();
+    const store = new ProjectStore(db as unknown as D1Database);
+
+    const created = await store.upsert({
+      organizationId: "org-1",
+      linearTeamId: "team-abc",
+      repoUrl: "https://github.com/x/y.git",
+    });
+    expect(created).not.toBeNull();
+
+    const byId = await store.getById(created!.id, "org-1");
+    expect(byId?.linear_team_id).toBe("team-abc");
+    // Cross-org lookup must miss.
+    expect(await store.getById(created!.id, "org-2")).toBeNull();
+  });
+
+  it("listByOrg filters to the requested organization_id", async () => {
     const db = new FakeD1();
     const store = new ProjectStore(db as unknown as D1Database);
 
     await store.upsert({
-      orgId: "org-1",
+      organizationId: "org-1",
+      linearTeamId: "team-a",
+      repoUrl: "https://github.com/x/a.git",
+    });
+    await store.upsert({
+      organizationId: "org-1",
+      linearTeamId: "team-b",
+      repoUrl: "https://github.com/x/b.git",
+    });
+    await store.upsert({
+      organizationId: "org-2",
+      linearTeamId: "team-c",
+      repoUrl: "https://github.com/x/c.git",
+    });
+
+    const org1Rows = await store.listByOrg("org-1");
+    expect(org1Rows).toHaveLength(2);
+    expect(org1Rows.map((r) => r.linear_team_id).sort()).toEqual(["team-a", "team-b"]);
+  });
+
+  it("delete requires both organization_id and linear_team_id", async () => {
+    const db = new FakeD1();
+    const store = new ProjectStore(db as unknown as D1Database);
+
+    await store.upsert({
+      organizationId: "org-1",
       linearTeamId: "team-abc",
       repoUrl: "https://github.com/x/y.git",
     });
@@ -219,68 +245,110 @@ describe("ProjectStore", () => {
   });
 });
 
-describe("SessionStore", () => {
-  function seedUser(db: FakeD1, id = "user-1") {
-    const users = new UserStore(db as unknown as D1Database);
-    return users.upsert({
-      linearUserId: id,
+describe("GitHubInstallStore", () => {
+  it("upserts and reads a row keyed by organization_id", async () => {
+    const db = new FakeD1();
+    const store = new GitHubInstallStore(db as unknown as D1Database);
+
+    await store.upsert({
       organizationId: "org-1",
-      accessToken: "tok",
-      email: "alice@example.com",
-      name: "Alice",
+      installId: 99999,
+      accountLogin: "acme-corp",
     });
-  }
 
-  it("creates a session and validates it", async () => {
-    const db = new FakeD1();
-    await seedUser(db);
-    const store = new SessionStore(db as unknown as D1Database);
-
-    const token = await store.create("user-1");
-    expect(token).toHaveLength(64);
-
-    const user = await store.validate(token);
-    expect(user).not.toBeNull();
-    expect(user?.linear_user_id).toBe("user-1");
-    expect(user?.email).toBe("alice@example.com");
+    const row = await store.getByOrgId("org-1");
+    expect(row?.organization_id).toBe("org-1");
+    expect(row?.install_id).toBe(99999);
+    expect(row?.account_login).toBe("acme-corp");
+    expect(row?.account_type).toBe("Organization");
+    expect(row?.repo_selection).toBe("all");
   });
 
-  it("returns null for unknown token", async () => {
+  it("delete removes by organization_id", async () => {
     const db = new FakeD1();
-    const store = new SessionStore(db as unknown as D1Database);
-    expect(await store.validate("bogus")).toBeNull();
+    const store = new GitHubInstallStore(db as unknown as D1Database);
+
+    await store.upsert({
+      organizationId: "org-1",
+      installId: 123,
+      accountLogin: "acme",
+    });
+    expect(await store.delete("org-1")).toBe(true);
+    expect(await store.getByOrgId("org-1")).toBeNull();
+    expect(await store.delete("org-1")).toBe(false);
+  });
+});
+
+describe("AgentSessionStore", () => {
+  it("creates a row with organization_id and round-trips via get()", async () => {
+    const db = new FakeD1();
+    const store = new AgentSessionStore(db as unknown as D1Database);
+
+    await store.create({
+      id: "session-1",
+      organizationId: "org-1",
+      linearIssueId: "issue-1",
+      linearIssueTitle: "Add date to README",
+      triggeredBy: "created",
+      team: "SYM",
+      repo: "https://github.com/x/y.git",
+      prompt: "do the thing",
+      configSnapshot: { model: "claude", max_turns: 5 },
+    });
+
+    const row = await store.get("session-1");
+    expect(row).not.toBeNull();
+    expect(row?.organization_id).toBe("org-1");
+    expect(row?.linear_issue_id).toBe("issue-1");
+    expect(row?.status).toBe("running");
+    expect(row?.team).toBe("SYM");
+    expect(JSON.parse(row?.config_snapshot ?? "{}")).toMatchObject({
+      model: "claude",
+      max_turns: 5,
+    });
   });
 
-  it("returns null for expired session", async () => {
+  it("update applies status/completedAt/error in a single statement", async () => {
     const db = new FakeD1();
-    await seedUser(db);
-    const store = new SessionStore(db as unknown as D1Database);
+    const store = new AgentSessionStore(db as unknown as D1Database);
 
-    const token = await store.create("user-1", 0);
-    const user = await store.validate(token);
-    expect(user).toBeNull();
+    await store.create({ id: "session-2", organizationId: "org-1" });
+    await store.update("session-2", {
+      status: "complete",
+      completedAt: 1700000000,
+      error: null,
+    });
+
+    const row = await store.get("session-2");
+    expect(row?.status).toBe("complete");
+    expect(row?.completed_at).toBe(1700000000);
+    expect(row?.error).toBeNull();
   });
 
-  it("deletes a session by token", async () => {
+  it("list() filters by organizationId", async () => {
     const db = new FakeD1();
-    await seedUser(db);
-    const store = new SessionStore(db as unknown as D1Database);
+    const store = new AgentSessionStore(db as unknown as D1Database);
 
-    const token = await store.create("user-1");
-    expect(await store.delete(token)).toBe(true);
-    expect(await store.validate(token)).toBeNull();
-    expect(await store.delete(token)).toBe(false);
+    await store.create({ id: "s-a", organizationId: "org-1" });
+    await store.create({ id: "s-b", organizationId: "org-1" });
+    await store.create({ id: "s-c", organizationId: "org-2" });
+
+    const org1 = await store.list({ organizationId: "org-1" });
+    expect(org1.map((r) => r.id).sort()).toEqual(["s-a", "s-b"]);
   });
 
-  it("deletes all sessions for a user", async () => {
+  it("listRunning() filters by status='running' (and optional org)", async () => {
     const db = new FakeD1();
-    await seedUser(db);
-    const store = new SessionStore(db as unknown as D1Database);
+    const store = new AgentSessionStore(db as unknown as D1Database);
 
-    const t1 = await store.create("user-1");
-    const t2 = await store.create("user-1");
-    await store.deleteByUser("user-1");
-    expect(await store.validate(t1)).toBeNull();
-    expect(await store.validate(t2)).toBeNull();
+    await store.create({ id: "running-1", organizationId: "org-1" });
+    await store.create({ id: "done-1", organizationId: "org-1" });
+    await store.update("done-1", { status: "complete" });
+
+    const running = await store.listRunning("org-1");
+    expect(running.map((r) => r.id)).toEqual(["running-1"]);
+
+    const allRunning = await store.listRunning();
+    expect(allRunning.map((r) => r.id)).toEqual(["running-1"]);
   });
 });

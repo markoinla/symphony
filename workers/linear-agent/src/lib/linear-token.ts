@@ -1,19 +1,43 @@
-/**
- * Token selection and aggressive refresh for Linear MCP credentials.
- *
- * Before each `/run`, picks the "best" user token for the org:
- *   1. The user who triggered the session (if they've logged into the dashboard)
- *   2. The installer (always present after install flow)
- *   3. null (omit Linear MCP — pi runs without Linear tools)
- *
- * For the chosen token, refreshes aggressively if it expires within
- * `run_timeout_ms + safety_margin` so the token stays valid for the
- * entire run window.
- */
+// Linear MCP credential resolver.
+//
+// When a Linear Agent Session dispatches to the sandbox, we want to
+// attach a user-scoped Linear OAuth token so the agent's MCP can act
+// on behalf of a real human (full Linear API surface) rather than
+// falling back to the app-scoped install token.
+//
+// Per-user Linear OAuth tokens are written by Better Auth's
+// `genericOAuth` plugin (configured in src/lib/auth.ts) into the
+// `accounts` table with `providerId = 'linear'`. To pick the right
+// token for an org we:
+//
+//   1. Join `accounts` ↔ `members` on userId, filtered to the
+//      requested organizationId and providerId='linear'.
+//   2. Order candidates with the triggering user first, then anyone
+//      else (today's heuristic — see "Limitations" below).
+//   3. For each candidate, if the access token will expire inside the
+//      run window (+ small safety margin) and we have a refresh
+//      token, refresh via `refreshOAuthToken` and persist the new
+//      tokens back to the row. Otherwise return as-is.
+//   4. Return the first candidate that yields a usable token.
+//
+// Returns null if no member in the org has linked Linear (the agent
+// then runs without the Linear MCP attached — the dispatcher falls
+// back to the install's app-scoped token for activity posting, which
+// is enough for the basic workflow).
+//
+// Limitations:
+//   - Multi-member orgs are not round-robin'd. We always prefer the
+//     triggering user, then fall through to anyone in insertion order
+//     from D1. Picking a less-stale token / load-balancing across
+//     members can come later if rate limits bite.
 
-import type { UserRecord, UserStore } from "./store";
+import type { D1Database } from "@cloudflare/workers-types";
+import { and, eq } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/d1";
+
+import { accounts, members } from "../db/auth.schema";
+import { schema } from "../db/schema";
 import {
-  type OAuthRefreshResult,
   OAuthRefreshError,
   refreshOAuthToken,
   tokenNeedsRefresh,
@@ -25,148 +49,144 @@ export interface LinearTokenResult {
   refreshed: boolean;
 }
 
-interface ResolveParams {
-  orgId: string;
+export interface ResolveLinearMcpTokenEnv {
+  DB: D1Database;
+  LINEAR_CLIENT_ID?: string;
+  LINEAR_CLIENT_SECRET?: string;
+}
+
+export interface ResolveParams {
+  env: ResolveLinearMcpTokenEnv;
+  organizationId: string;
   triggeringUserId: string | null;
-  userStore: UserStore;
-  clientId: string;
-  clientSecret: string;
   runTimeoutMs: number;
+}
+
+interface Candidate {
+  accountRowId: string;
+  userId: string;
+  accessToken: string | null;
+  refreshToken: string | null;
+  accessTokenExpiresAt: Date | null;
 }
 
 export async function resolveLinearMcpToken(
   params: ResolveParams,
 ): Promise<LinearTokenResult | null> {
-  const {
-    orgId,
-    triggeringUserId,
-    userStore,
-    clientId,
-    clientSecret,
-    runTimeoutMs,
-  } = params;
+  const { env, organizationId, triggeringUserId, runTimeoutMs } = params;
 
-  const candidates = await buildCandidateList(
-    userStore,
-    orgId,
-    triggeringUserId,
+  const db = drizzle(env.DB, { schema });
+
+  const rows = await db
+    .select({
+      accountRowId: accounts.id,
+      userId: accounts.userId,
+      accessToken: accounts.accessToken,
+      refreshToken: accounts.refreshToken,
+      accessTokenExpiresAt: accounts.accessTokenExpiresAt,
+    })
+    .from(accounts)
+    .innerJoin(members, eq(members.userId, accounts.userId))
+    .where(
+      and(
+        eq(accounts.providerId, "linear"),
+        eq(members.organizationId, organizationId),
+      ),
+    )
+    .all();
+
+  if (rows.length === 0) return null;
+
+  const candidates: Candidate[] = rows.filter(
+    (r): r is Candidate => typeof r.accessToken === "string" || r.refreshToken !== null,
   );
 
-  for (const user of candidates) {
-    const result = await tryUserToken(user, {
-      userStore,
-      clientId,
-      clientSecret,
-      runTimeoutMs,
-    });
+  // Triggering user first, then everyone else in insertion order.
+  candidates.sort((a, b) => {
+    if (triggeringUserId) {
+      if (a.userId === triggeringUserId && b.userId !== triggeringUserId)
+        return -1;
+      if (b.userId === triggeringUserId && a.userId !== triggeringUserId)
+        return 1;
+    }
+    return 0;
+  });
+
+  for (const candidate of candidates) {
+    const result = await tryCandidate(db, env, candidate, runTimeoutMs);
     if (result) return result;
   }
 
-  console.warn(
-    "linear_mcp_token_unavailable",
-    JSON.stringify({
-      orgId,
-      triggeringUserId,
-      candidateCount: candidates.length,
-    }),
-  );
   return null;
 }
 
-async function buildCandidateList(
-  userStore: UserStore,
-  orgId: string,
-  triggeringUserId: string | null,
-): Promise<UserRecord[]> {
-  const candidates: UserRecord[] = [];
-
-  if (triggeringUserId) {
-    const triggeringUser =
-      await userStore.getByLinearUserId(triggeringUserId);
-    if (triggeringUser && triggeringUser.organization_id === orgId) {
-      candidates.push(triggeringUser);
-    }
-  }
-
-  const orgUsers = await userStore.listByOrg(orgId);
-  for (const user of orgUsers) {
-    if (
-      candidates.length > 0 &&
-      candidates[0]!.linear_user_id === user.linear_user_id
-    ) {
-      continue;
-    }
-    candidates.push(user);
-  }
-
-  return candidates;
-}
-
-async function tryUserToken(
-  user: UserRecord,
-  ctx: {
-    userStore: UserStore;
-    clientId: string;
-    clientSecret: string;
-    runTimeoutMs: number;
-  },
+async function tryCandidate(
+  db: ReturnType<typeof drizzle<typeof schema>>,
+  env: ResolveLinearMcpTokenEnv,
+  candidate: Candidate,
+  runTimeoutMs: number,
 ): Promise<LinearTokenResult | null> {
-  if (!tokenNeedsRefresh(user.expires_at, ctx.runTimeoutMs)) {
+  const expiresIso = candidate.accessTokenExpiresAt
+    ? candidate.accessTokenExpiresAt.toISOString()
+    : null;
+
+  const stale = tokenNeedsRefresh(expiresIso, runTimeoutMs);
+
+  if (!stale && candidate.accessToken) {
     return {
-      accessToken: user.access_token,
-      userId: user.linear_user_id,
+      accessToken: candidate.accessToken,
+      userId: candidate.userId,
       refreshed: false,
     };
   }
 
-  if (!user.refresh_token) {
-    console.warn(
-      "linear_token_expiring_no_refresh_token",
-      JSON.stringify({
-        userId: user.linear_user_id,
-        expiresAt: user.expires_at,
-      }),
-    );
-    return null;
-  }
+  // Stale or missing access token — try a refresh.
+  if (!candidate.refreshToken) return null;
+  if (!env.LINEAR_CLIENT_ID || !env.LINEAR_CLIENT_SECRET) return null;
 
   try {
     const refreshed = await refreshOAuthToken({
-      refreshToken: user.refresh_token,
-      clientId: ctx.clientId,
-      clientSecret: ctx.clientSecret,
+      refreshToken: candidate.refreshToken,
+      clientId: env.LINEAR_CLIENT_ID,
+      clientSecret: env.LINEAR_CLIENT_SECRET,
     });
 
-    await ctx.userStore.upsert({
-      linearUserId: user.linear_user_id,
-      organizationId: user.organization_id,
-      accessToken: refreshed.accessToken,
-      refreshToken: refreshed.refreshToken,
-      expiresAt: refreshed.expiresAt,
-      email: user.email,
-      name: user.name,
-    });
+    const newExpiresAt = refreshed.expiresAt
+      ? new Date(refreshed.expiresAt)
+      : null;
+
+    await db
+      .update(accounts)
+      .set({
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken ?? candidate.refreshToken,
+        accessTokenExpiresAt: newExpiresAt,
+        updatedAt: new Date(),
+      })
+      .where(eq(accounts.id, candidate.accountRowId))
+      .run();
 
     return {
       accessToken: refreshed.accessToken,
-      userId: user.linear_user_id,
+      userId: candidate.userId,
       refreshed: true,
     };
-  } catch (e) {
-    const detail =
-      e instanceof OAuthRefreshError
-        ? `${e.status}: ${e.body.slice(0, 200)}`
-        : e instanceof Error
-          ? e.message
-          : String(e);
-    console.warn(
-      "linear_token_refresh_failed",
-      JSON.stringify({
-        userId: user.linear_user_id,
-        orgId: user.organization_id,
-        error: detail,
-      }),
-    );
+  } catch (err) {
+    if (err instanceof OAuthRefreshError) {
+      console.warn(
+        "linear_token_refresh_failed",
+        JSON.stringify({
+          userId: candidate.userId,
+          status: err.status,
+          body: err.body.slice(0, 200),
+        }),
+      );
+    } else {
+      console.warn(
+        "linear_token_refresh_error",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
     return null;
   }
 }

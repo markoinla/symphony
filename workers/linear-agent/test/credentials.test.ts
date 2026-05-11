@@ -6,12 +6,15 @@ import {
 import { FakeD1 } from "./helpers/fake-d1";
 
 async function generateKekBase64(): Promise<string> {
-  const key = await crypto.subtle.generateKey(
+  const key = (await crypto.subtle.generateKey(
     { name: "AES-GCM", length: 256 },
     true,
     ["wrapKey", "unwrapKey"],
-  ) as CryptoKey;
-  const raw = await crypto.subtle.exportKey("raw", key);
+  )) as CryptoKey;
+  // exportKey('raw', …) returns ArrayBuffer for a symmetric key. The
+  // lib.dom typings widen the return to `ArrayBuffer | JsonWebKey`, so
+  // we narrow with a cast before constructing the Uint8Array view.
+  const raw = (await crypto.subtle.exportKey("raw", key)) as ArrayBuffer;
   return btoa(String.fromCharCode(...new Uint8Array(raw)));
 }
 
@@ -43,10 +46,11 @@ describe("CredentialStore", () => {
 
     await store.encryptForOrg("org-1", "openai_api_key", "sk-openai-secret", kek);
 
-    const row = db.orgCredentials.get("org-1:openai_api_key")!;
-    const tampered = new Uint8Array(row.ciphertext);
-    tampered[tampered.length - 1] ^= 0xff;
-    row.ciphertext = tampered.buffer;
+    const row = db.orgCredentials.get("org-1:openai_api_key");
+    expect(row).toBeDefined();
+    const tampered = new Uint8Array(row!.ciphertext);
+    tampered[tampered.length - 1] = (tampered[tampered.length - 1]! ^ 0xff) & 0xff;
+    row!.ciphertext = tampered.buffer;
 
     await expect(
       store.decryptForOrg("org-1", "openai_api_key", kek),
@@ -60,10 +64,11 @@ describe("CredentialStore", () => {
 
     await store.encryptForOrg("org-1", "cf_token", "my-cf-token", kek);
 
-    const row = db.orgCredentials.get("org-1:cf_token")!;
-    const tampered = new Uint8Array(row.dek_ciphertext);
-    tampered[tampered.length - 1] ^= 0xff;
-    row.dek_ciphertext = tampered.buffer;
+    const row = db.orgCredentials.get("org-1:cf_token");
+    expect(row).toBeDefined();
+    const tampered = new Uint8Array(row!.dek_ciphertext);
+    tampered[tampered.length - 1] = (tampered[tampered.length - 1]! ^ 0xff) & 0xff;
+    row!.dek_ciphertext = tampered.buffer;
 
     await expect(
       store.decryptForOrg("org-1", "cf_token", kek),
@@ -103,8 +108,8 @@ describe("CredentialStore", () => {
 
     await store.encryptForOrg("org-1", "test_key", "value", kek, 3);
 
-    const row = db.orgCredentials.get("org-1:test_key")!;
-    expect(row.kek_version).toBe(3);
+    const row = db.orgCredentials.get("org-1:test_key");
+    expect(row?.kek_version).toBe(3);
   });
 
   it("defaults kek_version to CURRENT_KEK_VERSION", async () => {
@@ -114,8 +119,8 @@ describe("CredentialStore", () => {
 
     await store.encryptForOrg("org-1", "test_key", "value", kek);
 
-    const row = db.orgCredentials.get("org-1:test_key")!;
-    expect(row.kek_version).toBe(CURRENT_KEK_VERSION);
+    const row = db.orgCredentials.get("org-1:test_key");
+    expect(row?.kek_version).toBe(CURRENT_KEK_VERSION);
   });
 
   it("overwrites credential on re-encrypt (upsert)", async () => {

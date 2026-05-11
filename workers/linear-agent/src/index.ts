@@ -1,5 +1,7 @@
 import { Hono } from "hono";
+import type { IncomingRequestCfProperties } from "@cloudflare/workers-types";
 
+import { createAuth } from "./lib/auth";
 import { buildAdminRouter } from "./routes/admin";
 import { buildDashboardApiRouter } from "./routes/dashboard-api";
 import { buildDashboardRouter } from "./routes/dashboard";
@@ -76,6 +78,19 @@ export interface Env {
   // of per-org credentials in the org_credentials table. Set with:
   //   wrangler secret put CREDENTIAL_KEK
   CREDENTIAL_KEK?: string;
+
+  // ── Better Auth ────────────────────────────────────────────────
+  // Random 32+ char string used to sign session cookies and CSRF
+  // tokens. Set with: wrangler secret put BETTER_AUTH_SECRET.
+  BETTER_AUTH_SECRET?: string;
+
+  // GitHub OAuth for user login (separate from the Symphony GitHub
+  // App used for PRs). Register a GitHub OAuth App with callback
+  // `${URL}/api/auth/callback/github`. Set with:
+  //   wrangler secret put GITHUB_CLIENT_ID
+  //   wrangler secret put GITHUB_CLIENT_SECRET
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
 }
 
 // Re-export the Workflow class so wrangler's class_name resolution finds
@@ -94,6 +109,27 @@ export function buildApp() {
   );
 
   app.get("/health", (c) => c.json({ ok: true }));
+
+  // Better Auth — sign-in, sign-up, social, organization, session.
+  // Mount before the dashboard routes so /api/auth/* is owned by it.
+  app.on(["GET", "POST"], "/api/auth/*", async (c) => {
+    const auth = createAuth(
+      c.env,
+      (c.req.raw as { cf?: IncomingRequestCfProperties }).cf,
+      c.env.URL,
+    );
+    try {
+      return await auth.handler(c.req.raw);
+    } catch (e) {
+      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      const stack = e instanceof Error ? (e.stack ?? "") : "";
+      console.error("better_auth_error", c.req.method, new URL(c.req.url).pathname, msg, "\n", stack);
+      return new Response(
+        JSON.stringify({ error: "internal_error", message: msg }),
+        { status: 500, headers: { "content-type": "application/json" } },
+      );
+    }
+  });
 
   app.route("/", buildDashboardApiRouter());
   app.route("/", buildDashboardRouter());
