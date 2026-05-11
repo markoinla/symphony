@@ -151,8 +151,12 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           webhookEvent.agentSession.issue?.team?.id ??
           null;
 
+        const orgId = webhookEvent.organizationId;
+        const projects = new ProjectStore(this.env.DB);
         const projectRow = teamId
-          ? await new ProjectStore(this.env.DB).get(teamId)
+          ? (orgId
+              ? await projects.getByTeamId(orgId, teamId)
+              : await projects.get(teamId))
           : null;
 
         const repoUrl = projectRow?.repo_url ?? null;
