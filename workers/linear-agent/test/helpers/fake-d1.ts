@@ -54,6 +54,17 @@ interface OrgCredentialRow {
   updated_at: string;
 }
 
+interface GitHubInstallRow {
+  org_id: string;
+  install_id: number;
+  account_login: string;
+  account_type: string;
+  repo_selection: string;
+  selected_repos: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface DashboardSessionRow {
   token: string;
   linear_user_id: string;
@@ -70,6 +81,7 @@ export class FakeD1 {
   projects = new Map<string, ProjectRow>();
   users = new Map<string, UserRow>();
   orgCredentials = new Map<string, OrgCredentialRow>();
+  githubInstalls = new Map<string, GitHubInstallRow>();
   dashboardSessions = new Map<string, DashboardSessionRow>();
 
   prepare(sql: string) {
@@ -176,6 +188,28 @@ class FakeStatement {
       this.db.orgCredentials.delete(key);
       return { success: true, meta: { changes: had ? 1 : 0 } };
     }
+    if (/^INSERT INTO github_installs/i.test(sql)) {
+      const [orgId, installId, accountLogin, accountType, repoSelection, selectedRepos] =
+        this.bindings as [string, number, string, string, string, string | null];
+      const now = new Date().toISOString();
+      this.db.githubInstalls.set(orgId, {
+        org_id: orgId,
+        install_id: installId,
+        account_login: accountLogin,
+        account_type: accountType,
+        repo_selection: repoSelection,
+        selected_repos: selectedRepos,
+        created_at: this.db.githubInstalls.get(orgId)?.created_at ?? now,
+        updated_at: now,
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (/^DELETE FROM github_installs/i.test(sql)) {
+      const [orgId] = this.bindings as [string];
+      const had = this.db.githubInstalls.has(orgId);
+      this.db.githubInstalls.delete(orgId);
+      return { success: true, meta: { changes: had ? 1 : 0 } };
+    }
     if (/^INSERT INTO dashboard_sessions/i.test(sql)) {
       const [token, linearUserId, expiresAt] = this.bindings as [string, string, string];
       this.db.dashboardSessions.set(token, {
@@ -258,6 +292,10 @@ class FakeStatement {
       const user = this.db.users.get(session.linear_user_id);
       return (user as unknown as T) ?? null;
     }
+    if (/^SELECT .* FROM github_installs WHERE org_id/i.test(sql)) {
+      const [orgId] = this.bindings as [string];
+      return (this.db.githubInstalls.get(orgId) as unknown as T) ?? null;
+    }
     throw new Error(`FakeD1.first: unsupported SQL: ${sql}`);
   }
 
@@ -300,6 +338,12 @@ class FakeStatement {
         (u) => u.organization_id === orgId,
       );
       return { success: true, results: filtered as unknown as T[] };
+    }
+    if (/^SELECT .* FROM github_installs ORDER BY created_at/i.test(sql)) {
+      return {
+        success: true,
+        results: Array.from(this.db.githubInstalls.values()) as unknown as T[],
+      };
     }
     throw new Error(`FakeD1.all: unsupported SQL: ${sql}`);
   }

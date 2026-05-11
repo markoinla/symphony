@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { buildAdminRouter } from "./routes/admin";
 import { buildDashboardApiRouter } from "./routes/dashboard-api";
 import { buildDashboardRouter } from "./routes/dashboard";
+import { buildGitHubRouter } from "./routes/github";
 import { buildOAuthRouter } from "./routes/oauth";
 import { buildWebhookRouter } from "./routes/webhook";
 
@@ -63,6 +64,10 @@ export interface Env {
   GITHUB_APP_ID?: string;
   GITHUB_APP_PRIVATE_KEY?: string;
 
+  // GitHub App slug for constructing the install URL. Set with:
+  //   wrangler secret put GITHUB_APP_SLUG
+  GITHUB_APP_SLUG?: string;
+
   // URL to the GitHub App installation settings page. Shown on the
   // dashboard Integrations tab as the "Manage" link for GitHub.
   GITHUB_APP_SETTINGS_URL?: string;
@@ -95,6 +100,7 @@ export function buildApp() {
   app.route("/", buildOAuthRouter());
   app.route("/", buildWebhookRouter());
   app.route("/", buildAdminRouter());
+  app.route("/", buildGitHubRouter());
 
   return app;
 }
