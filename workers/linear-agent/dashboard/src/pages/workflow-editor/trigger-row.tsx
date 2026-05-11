@@ -1,0 +1,247 @@
+import { Trash2 } from 'lucide-react'
+
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Input } from '@/components/ui/input'
+import { Button } from '@/components/ui/button'
+import { ChipInput } from '@/components/chip-input'
+import { Field } from '@/components/field'
+import type {
+  EventType,
+  Trigger,
+  TriggerAction,
+} from '@/lib/api/workflow-types'
+
+const eventTypeOptions: { value: EventType; label: string }[] = [
+  { value: 'state_entered', label: 'State entered' },
+  { value: 'state_exited', label: 'State exited' },
+  { value: 'comment_added', label: 'Comment added' },
+  { value: 'label_added', label: 'Label added' },
+  { value: 'label_removed', label: 'Label removed' },
+  { value: 'assignee_changed', label: 'Assignee changed' },
+  { value: 'session_started', label: 'Session started' },
+]
+
+const actionOptions: { value: TriggerAction; label: string }[] = [
+  { value: 'start_session', label: 'Start session' },
+  { value: 'continue_session', label: 'Continue session' },
+  { value: 'reset_session', label: 'Reset session' },
+  { value: 'stop_session', label: 'Stop session' },
+  { value: 'post_comment', label: 'Post comment' },
+  { value: 'transition_to', label: 'Transition to' },
+]
+
+export function TriggerRow({
+  trigger,
+  onChange,
+  onDelete,
+  isDirty,
+  isSaving,
+  onSave,
+}: {
+  trigger: Trigger
+  onChange: (patch: Partial<Trigger>) => void
+  onDelete: () => void
+  isDirty: boolean
+  isSaving: boolean
+  onSave: () => void
+}) {
+  return (
+    <div className="rounded-lg border border-th-border bg-th-surface p-4">
+      <div className="grid gap-4 sm:grid-cols-[1fr_1fr_auto]">
+        <Field label="Event">
+          <Select
+            value={trigger.event_type}
+            onValueChange={(value) =>
+              onChange({
+                event_type: value as EventType,
+                // Reset event-specific match columns when type changes.
+                from_state: null,
+                to_state: null,
+                label_match: null,
+                assignee_match: null,
+              })
+            }
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {eventTypeOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+
+        <Field label="Action">
+          <Select
+            value={trigger.action}
+            onValueChange={(value) =>
+              onChange({ action: value as TriggerAction })
+            }
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {actionOptions.map((opt) => (
+                <SelectItem key={opt.value} value={opt.value}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+
+        <div className="flex items-end gap-1.5">
+          <Button
+            disabled={!isDirty || isSaving}
+            onClick={onSave}
+            size="sm"
+            type="button"
+          >
+            {isSaving ? 'Saving…' : isDirty ? 'Save' : 'Saved'}
+          </Button>
+          <Button
+            aria-label="Delete trigger"
+            onClick={onDelete}
+            size="icon-sm"
+            type="button"
+            variant="ghost"
+          >
+            <Trash2 className="h-3.5 w-3.5 text-th-danger" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Event-type-specific match fields */}
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        {(trigger.event_type === 'state_entered' ||
+          trigger.event_type === 'state_exited') && (
+          <>
+            <Field label="From state" hint="Match only when leaving this state">
+              <Input
+                onChange={(event) =>
+                  onChange({ from_state: event.target.value || null })
+                }
+                placeholder="In Progress"
+                value={trigger.from_state ?? ''}
+              />
+            </Field>
+            <Field label="To state" hint="Match only when entering this state">
+              <Input
+                onChange={(event) =>
+                  onChange({ to_state: event.target.value || null })
+                }
+                placeholder="Todo"
+                value={trigger.to_state ?? ''}
+              />
+            </Field>
+          </>
+        )}
+
+        {(trigger.event_type === 'label_added' ||
+          trigger.event_type === 'label_removed') && (
+          <Field label="Label name">
+            <Input
+              onChange={(event) =>
+                onChange({ label_match: event.target.value || null })
+              }
+              placeholder="rework"
+              value={trigger.label_match ?? ''}
+            />
+          </Field>
+        )}
+
+        {trigger.event_type === 'assignee_changed' && (
+          <Field label="Assignee" hint="Linear user id or username">
+            <Input
+              onChange={(event) =>
+                onChange({ assignee_match: event.target.value || null })
+              }
+              placeholder="@marko"
+              value={trigger.assignee_match ?? ''}
+            />
+          </Field>
+        )}
+      </div>
+
+      {/* Scope filters */}
+      <div className="mt-4 grid gap-4">
+        <p className="text-[11px] font-semibold uppercase tracking-wider text-th-text-4">
+          Scope filters (AND)
+        </p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field label="Team filter" hint="Linear team keys, e.g. ENG">
+            <ChipInput
+              onChange={(team_filter) => onChange({ team_filter })}
+              placeholder="Add team…"
+              value={trigger.team_filter}
+            />
+          </Field>
+          <Field label="Project filter" hint="Linear project ids or slugs">
+            <ChipInput
+              onChange={(project_filter) => onChange({ project_filter })}
+              placeholder="Add project…"
+              value={trigger.project_filter}
+            />
+          </Field>
+          <Field label="Label filter" hint="Only fire when these labels present">
+            <ChipInput
+              onChange={(label_filter) => onChange({ label_filter })}
+              placeholder="Add label…"
+              value={trigger.label_filter}
+            />
+          </Field>
+          <Field label="Skip labels" hint="Bypass when any of these are present">
+            <ChipInput
+              onChange={(skip_label_filter) => onChange({ skip_label_filter })}
+              placeholder="Add label…"
+              value={trigger.skip_label_filter}
+            />
+          </Field>
+          <Field label="Assignee filter">
+            <ChipInput
+              onChange={(assignee_filter) => onChange({ assignee_filter })}
+              placeholder="Add assignee…"
+              value={trigger.assignee_filter}
+            />
+          </Field>
+        </div>
+      </div>
+
+      <div className="mt-4 flex items-center justify-between gap-4 border-t border-th-border pt-3">
+        <div className="flex items-center gap-4">
+          <Field label="Priority" className="w-24">
+            <Input
+              onChange={(event) =>
+                onChange({
+                  priority: Number.parseInt(event.target.value, 10) || 0,
+                })
+              }
+              type="number"
+              value={String(trigger.priority)}
+            />
+          </Field>
+          <label className="flex items-center gap-2 text-sm text-th-text-2">
+            <input
+              checked={trigger.enabled}
+              className="h-4 w-4 rounded border-th-border"
+              onChange={(event) => onChange({ enabled: event.target.checked })}
+              type="checkbox"
+            />
+            Enabled
+          </label>
+        </div>
+      </div>
+    </div>
+  )
+}
