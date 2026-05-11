@@ -135,6 +135,70 @@ fine for the activity timeline but Worker invocation cost / CPU limits
 make this *not* a sustainable shape for production. Step 4 of the build
 plan replaces the inline `runSession` body with a Cloudflare Workflow.
 
+## Credential encryption
+
+Per-org secrets (BYO API keys for Anthropic, OpenAI, Cloudflare Workers AI,
+and custom MCP credentials) are stored in the `org_credentials` D1 table
+using envelope encryption:
+
+- A random **DEK** (AES-GCM-256) encrypts the plaintext.
+- A master **KEK** (AES-GCM-256, stored in Workers Secrets) wraps the DEK.
+- Both ciphertext and wrapped-DEK blobs are prefixed with a 12-byte random IV.
+- The `kek_version` column tracks which KEK version was used to wrap each DEK.
+
+Decryption happens only in `workers/linear-agent` — the dispatcher never
+sees plaintext credentials.
+
+### Setting up the KEK
+
+Generate a 256-bit base64-encoded key and store it as a Workers secret:
+
+```bash
+# Generate a random 256-bit key
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+
+# Store it (both dev and prod)
+wrangler secret put CREDENTIAL_KEK
+wrangler secret put CREDENTIAL_KEK --env production
+```
+
+### KEK rotation procedure
+
+1. **Generate a new KEK** and note the new version number (current + 1).
+
+2. **Store the new KEK** alongside the old one. During rollout, the worker
+   must be able to decrypt rows wrapped with the old KEK. The simplest
+   approach: set `CREDENTIAL_KEK` to the new key and keep the old key
+   available as `CREDENTIAL_KEK_PREV` (add to `Env` when implementing
+   rotation support).
+
+3. **Re-wrap existing DEKs**: run a migration script that, for each row
+   where `kek_version < new_version`:
+   - Unwraps the DEK with the old KEK
+   - Re-wraps the DEK with the new KEK
+   - Updates `dek_ciphertext` and `kek_version` in the row
+   - The plaintext and per-row DEK do **not** change — only the DEK wrapper
+
+   ```ts
+   // Pseudocode for the migration
+   const rows = await db.prepare(
+     "SELECT * FROM org_credentials WHERE kek_version < ?"
+   ).bind(newVersion).all();
+
+   for (const row of rows.results) {
+     const dek = await unwrapDek(row.dek_ciphertext, oldKek);
+     const newWrappedDek = await wrapDek(dek, newKek);
+     await db.prepare(
+       "UPDATE org_credentials SET dek_ciphertext = ?, kek_version = ?, updated_at = datetime('now') WHERE id = ?"
+     ).bind(newWrappedDek, newVersion, row.id).run();
+   }
+   ```
+
+4. **Verify**: confirm all rows now have `kek_version = new_version`.
+
+5. **Remove the old KEK** secret once all rows are re-wrapped and the
+   deploy is stable.
+
 ## Wire compat with the dispatcher
 
 `lib/dispatcher.ts` implements the same HMAC contract as
