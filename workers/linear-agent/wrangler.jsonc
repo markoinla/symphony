@@ -33,10 +33,9 @@
     }
   ],
 
-  // D1 holds multi-tenant config: one `installations` row per Linear
-  // workspace OAuth, one `projects` row per Linear team. Replaces the
-  // single KV `access_token` and the `PROJECT_MAPPINGS_JSON` env var.
-  // Create the DB once with:
+  // D1 holds multi-tenant config: organizations, installations, users,
+  // projects, org_credentials, sessions, and usage. See migrations/ for
+  // the full schema. Create the DB once with:
   //   wrangler d1 create symphony-linear-agent
   // then paste the printed `database_id` below and run:
   //   wrangler d1 migrations apply symphony-linear-agent --remote
