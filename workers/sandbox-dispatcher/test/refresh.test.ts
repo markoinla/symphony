@@ -18,8 +18,7 @@ import { buildApp, type Env } from "../src/index";
 import { computeSignature } from "../src/hmac";
 import {
   DEFAULT_REFRESH_AGE_SECONDS,
-  refreshSandboxId,
-  refreshStaleSnapshots,
+  refreshStaleBaselines,
 } from "../src/refresh";
 
 const SECRET = "refresh-test-secret";
@@ -31,7 +30,6 @@ class FakeSandbox {
   restoredBackups: Array<{ id: string; dir: string }> = [];
   createdBackups: Array<{ dir: string; name?: string }> = [];
 
-  // Tests can override these to simulate failures.
   restoreBackupImpl: (handle: { id: string; dir: string }) => Promise<void> =
     async () => {};
   createBackupImpl: (opts: {
@@ -63,7 +61,7 @@ class FakeSandbox {
 class FakeD1 {
   rows = new Map<
     string,
-    { handle: string; created_at: number; refreshed_at: number | null }
+    { handle: string; version: string | null; created_at: number; refreshed_at: number | null }
   >();
 
   prepare(sql: string) {
@@ -83,28 +81,29 @@ class FakeStatement {
 
   async run() {
     const sql = this.sql.trim();
-    if (sql.startsWith("INSERT INTO auth_backups")) {
-      const [scope, handle, created_at, refreshed_at] = this.bindings as [
+    if (sql.startsWith("INSERT INTO engine_baselines")) {
+      const [engine, handle, version, created_at, refreshed_at] = this.bindings as [
         string,
         string,
+        string | null,
         number,
         number,
       ];
-      this.db.rows.set(scope, { handle, created_at, refreshed_at });
+      this.db.rows.set(engine, { handle, version, created_at, refreshed_at });
       return { success: true, meta: { changes: 1 } };
     }
-    if (sql.startsWith("UPDATE auth_backups")) {
-      const [refreshedAt, scope] = this.bindings as [number, string];
-      const row = this.db.rows.get(scope);
+    if (sql.startsWith("UPDATE engine_baselines")) {
+      const [refreshedAt, engine] = this.bindings as [number, string];
+      const row = this.db.rows.get(engine);
       if (row) {
-        this.db.rows.set(scope, { ...row, refreshed_at: refreshedAt });
+        this.db.rows.set(engine, { ...row, refreshed_at: refreshedAt });
       }
       return { success: true, meta: { changes: row ? 1 : 0 } };
     }
-    if (sql.startsWith("DELETE FROM auth_backups")) {
-      const [scope] = this.bindings as [string];
-      const had = this.db.rows.has(scope);
-      this.db.rows.delete(scope);
+    if (sql.startsWith("DELETE FROM engine_baselines")) {
+      const [engine] = this.bindings as [string];
+      const had = this.db.rows.has(engine);
+      this.db.rows.delete(engine);
       return { success: true, meta: { changes: had ? 1 : 0 } };
     }
     throw new Error(`Unsupported SQL.run in fake D1: ${sql}`);
@@ -115,10 +114,10 @@ class FakeStatement {
     if (!sql.startsWith("SELECT")) {
       throw new Error(`first() called on non-SELECT: ${sql}`);
     }
-    const [scope] = this.bindings as [string];
-    const row = this.db.rows.get(scope);
+    const [key] = this.bindings as [string];
+    const row = this.db.rows.get(key);
     if (!row) return null;
-    return { scope, ...row } as unknown as T;
+    return { engine: key, ...row } as unknown as T;
   }
 
   async all<T>(): Promise<{ success: true; results: T[] }> {
@@ -128,7 +127,7 @@ class FakeStatement {
     }
     const results = Array.from(this.db.rows.entries())
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([scope, row]) => ({ scope, ...row }) as unknown as T);
+      .map(([engine, row]) => ({ engine, ...row }) as unknown as T);
     return { success: true, results };
   }
 }
@@ -144,12 +143,13 @@ function makeEnv(db: FakeD1): Env {
 
 function seedRow(
   db: FakeD1,
-  scope: string,
+  engine: string,
   refreshedAt: number,
   backupId: string,
 ): void {
-  db.rows.set(scope, {
+  db.rows.set(engine, {
     handle: JSON.stringify({ id: backupId, dir: "/home/symphony" }),
+    version: null,
     created_at: refreshedAt,
     refreshed_at: refreshedAt,
   });
@@ -177,115 +177,98 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe("refreshSandboxId", () => {
-  it("sanitizes scope chars to keep DNS labels valid", () => {
-    expect(refreshSandboxId("alice")).toBe("refresh-alice");
-    expect(refreshSandboxId("alice:proj-42")).toBe("refresh-alice-proj-42");
-    expect(refreshSandboxId("Alice@Co")).toBe("refresh-alice-co");
-  });
-});
-
-describe("refreshStaleSnapshots", () => {
+describe("refreshStaleBaselines", () => {
   const now = 1_700_000_000;
 
-  it("skips rows whose refreshed_at is younger than the threshold", async () => {
+  it("skips baselines whose refreshed_at is younger than the threshold", async () => {
     const db = new FakeD1();
-    seedRow(db, "alice", now - 60, "backup-young");
+    seedRow(db, "pi", now - 60, "baseline-young");
 
-    const results = await refreshStaleSnapshots(makeEnv(db), now);
+    const results = await refreshStaleBaselines(makeEnv(db), now);
 
     expect(results).toHaveLength(1);
     expect(results[0]?.outcome).toBe("skipped");
-    expect(results[0]?.scope).toBe("alice");
+    expect(results[0]?.engine).toBe("pi");
     expect(results[0]?.new_backup_id).toBeUndefined();
-    // No sandbox spun up for skipped rows.
-    expect(sandboxHandles[refreshSandboxId("alice")]).toBeUndefined();
-    // D1 row untouched.
-    expect(db.rows.get("alice")?.refreshed_at).toBe(now - 60);
+    expect(sandboxHandles["refresh-baseline-pi"]).toBeUndefined();
+    expect(db.rows.get("pi")?.refreshed_at).toBe(now - 60);
   });
 
-  it("refreshes rows older than the threshold via restore + recreate", async () => {
+  it("refreshes baselines older than the threshold via restore + recreate", async () => {
     const db = new FakeD1();
     const old = now - DEFAULT_REFRESH_AGE_SECONDS - 86_400;
-    seedRow(db, "alice", old, "backup-old");
+    seedRow(db, "pi", old, "baseline-old");
 
-    const results = await refreshStaleSnapshots(makeEnv(db), now);
+    const results = await refreshStaleBaselines(makeEnv(db), now);
 
     expect(results).toHaveLength(1);
     const result = results[0]!;
     expect(result.outcome).toBe("refreshed");
-    expect(result.scope).toBe("alice");
-    expect(result.old_backup_id).toBe("backup-old");
-    expect(result.new_backup_id).toMatch(/^backup-refresh-alice-/);
+    expect(result.engine).toBe("pi");
+    expect(result.old_backup_id).toBe("baseline-old");
+    expect(result.new_backup_id).toMatch(/^backup-refresh-baseline-pi-/);
     expect(result.age_seconds_at_refresh).toBeGreaterThan(
       DEFAULT_REFRESH_AGE_SECONDS,
     );
 
-    const sandbox = sandboxHandles[refreshSandboxId("alice")]!;
-    // Restore the existing handle, then immediately recreate against the
-    // snapshot dir so R2 gets a fresh object with today's timestamp.
+    const sandbox = sandboxHandles["refresh-baseline-pi"]!;
     expect(sandbox.restoredBackups).toEqual([
-      { id: "backup-old", dir: "/home/symphony" },
+      { id: "baseline-old", dir: "/home/symphony" },
     ]);
     expect(sandbox.createdBackups).toHaveLength(1);
     expect(sandbox.createdBackups[0]?.dir).toBe("/home/symphony");
     expect(sandbox.destroyed).toBe(true);
 
-    // D1 row carries the new handle and refreshed_at.
-    const row = db.rows.get("alice")!;
+    const row = db.rows.get("pi")!;
     expect(row.refreshed_at).toBe(now);
     expect(JSON.parse(row.handle).id).toBe(result.new_backup_id);
   });
 
   it("force=true ignores the age threshold and refreshes everything", async () => {
     const db = new FakeD1();
-    seedRow(db, "alice", now - 60, "backup-young");
+    seedRow(db, "pi", now - 60, "baseline-young");
 
-    const results = await refreshStaleSnapshots(makeEnv(db), now, {
+    const results = await refreshStaleBaselines(makeEnv(db), now, {
       force: true,
     });
 
     expect(results[0]?.outcome).toBe("refreshed");
-    expect(db.rows.get("alice")?.refreshed_at).toBe(now);
+    expect(db.rows.get("pi")?.refreshed_at).toBe(now);
   });
 
-  it("isolates per-scope failures so other scopes still refresh", async () => {
+  it("isolates per-engine failures so other engines still refresh", async () => {
     const db = new FakeD1();
     const old = now - DEFAULT_REFRESH_AGE_SECONDS - 1;
-    seedRow(db, "alice", old, "backup-alice");
-    seedRow(db, "bob", old, "backup-bob");
+    seedRow(db, "codex", old, "baseline-codex");
+    seedRow(db, "pi", old, "baseline-pi");
 
-    // Pre-create alice's sandbox with a failing restoreBackup.
-    const failing = new FakeSandbox(refreshSandboxId("alice"));
+    const failing = new FakeSandbox("refresh-baseline-codex");
     failing.restoreBackupImpl = async () => {
       throw new Error("restore-blew-up");
     };
-    sandboxHandles[refreshSandboxId("alice")] = failing;
+    sandboxHandles["refresh-baseline-codex"] = failing;
 
-    const results = await refreshStaleSnapshots(makeEnv(db), now);
+    const results = await refreshStaleBaselines(makeEnv(db), now);
 
-    const alice = results.find((r) => r.scope === "alice")!;
-    const bob = results.find((r) => r.scope === "bob")!;
+    const codex = results.find((r) => r.engine === "codex")!;
+    const pi = results.find((r) => r.engine === "pi")!;
 
-    expect(alice.outcome).toBe("failed");
-    expect(alice.error_message).toBe("restore-blew-up");
-    // alice's D1 row is unchanged on failure.
-    expect(db.rows.get("alice")?.refreshed_at).toBe(old);
+    expect(codex.outcome).toBe("failed");
+    expect(codex.error_message).toBe("restore-blew-up");
+    expect(db.rows.get("codex")?.refreshed_at).toBe(old);
 
-    expect(bob.outcome).toBe("refreshed");
-    expect(db.rows.get("bob")?.refreshed_at).toBe(now);
+    expect(pi.outcome).toBe("refreshed");
+    expect(db.rows.get("pi")?.refreshed_at).toBe(now);
   });
 
-  it("returns an empty array when there are no rows", async () => {
+  it("returns an empty array when there are no baselines", async () => {
     const db = new FakeD1();
-    const results = await refreshStaleSnapshots(makeEnv(db), now);
+    const results = await refreshStaleBaselines(makeEnv(db), now);
     expect(results).toEqual([]);
   });
 });
 
-describe("POST /auth/refresh", () => {
-  // The HTTP handler reads `Math.floor(Date.now() / 1000)` for "now". Pin
-  // it so the test's seed timestamps stay relative to a known epoch.
+describe("POST /baselines/refresh", () => {
   const now = 1_700_000_000;
 
   beforeEach(() => {
@@ -297,14 +280,14 @@ describe("POST /auth/refresh", () => {
     vi.useRealTimers();
   });
 
-  it("returns aggregate counts and per-scope outcomes", async () => {
+  it("returns aggregate counts and per-engine outcomes", async () => {
     const db = new FakeD1();
-    seedRow(db, "alice", now - DEFAULT_REFRESH_AGE_SECONDS - 1, "backup-old");
-    seedRow(db, "bob", now - 60, "backup-young");
+    seedRow(db, "pi", now - DEFAULT_REFRESH_AGE_SECONDS - 1, "baseline-old");
+    seedRow(db, "codex", now - 60, "baseline-young");
 
     const app = buildApp();
     const res = await app.fetch(
-      await signedRequest("https://example/auth/refresh", {
+      await signedRequest("https://example/baselines/refresh", {
         method: "POST",
         body: JSON.stringify({}),
       }),
@@ -320,14 +303,14 @@ describe("POST /auth/refresh", () => {
     expect(json.failed).toBe(0);
   });
 
-  it("force=true via body refreshes every scope regardless of age", async () => {
+  it("force=true refreshes every engine regardless of age", async () => {
     const db = new FakeD1();
-    seedRow(db, "alice", now - 60, "backup-young");
-    seedRow(db, "bob", now - 60, "backup-bob-young");
+    seedRow(db, "pi", now - 60, "baseline-young");
+    seedRow(db, "codex", now - 60, "baseline-codex-young");
 
     const app = buildApp();
     const res = await app.fetch(
-      await signedRequest("https://example/auth/refresh", {
+      await signedRequest("https://example/baselines/refresh", {
         method: "POST",
         body: JSON.stringify({ force: true }),
       }),
@@ -340,40 +323,39 @@ describe("POST /auth/refresh", () => {
     expect(json.skipped).toBe(0);
   });
 
-  it("scope filter operates on a single row", async () => {
+  it("engine filter operates on a single engine", async () => {
     const db = new FakeD1();
-    seedRow(db, "alice", now - DEFAULT_REFRESH_AGE_SECONDS - 1, "backup-old");
-    seedRow(db, "bob", now - DEFAULT_REFRESH_AGE_SECONDS - 1, "backup-old-bob");
+    seedRow(db, "pi", now - DEFAULT_REFRESH_AGE_SECONDS - 1, "baseline-old");
+    seedRow(db, "codex", now - DEFAULT_REFRESH_AGE_SECONDS - 1, "baseline-old-codex");
 
     const app = buildApp();
     const res = await app.fetch(
-      await signedRequest("https://example/auth/refresh", {
+      await signedRequest("https://example/baselines/refresh", {
         method: "POST",
-        body: JSON.stringify({ scope: "alice" }),
+        body: JSON.stringify({ engine: "pi" }),
       }),
       makeEnv(db),
     );
 
     expect(res.status).toBe(200);
     const json = (await res.json()) as {
-      results: Array<{ scope: string; outcome: string }>;
+      results: Array<{ engine: string; outcome: string }>;
     };
     expect(json.results).toHaveLength(1);
-    expect(json.results[0]?.scope).toBe("alice");
+    expect(json.results[0]?.engine).toBe("pi");
     expect(json.results[0]?.outcome).toBe("refreshed");
-    // bob untouched.
-    expect(db.rows.get("bob")?.refreshed_at).toBe(
+    expect(db.rows.get("codex")?.refreshed_at).toBe(
       now - DEFAULT_REFRESH_AGE_SECONDS - 1,
     );
   });
 
-  it("returns 412 when scope filter targets a missing row", async () => {
+  it("returns 412 when engine filter targets a missing baseline", async () => {
     const db = new FakeD1();
     const app = buildApp();
     const res = await app.fetch(
-      await signedRequest("https://example/auth/refresh", {
+      await signedRequest("https://example/baselines/refresh", {
         method: "POST",
-        body: JSON.stringify({ scope: "ghost" }),
+        body: JSON.stringify({ engine: "ghost" }),
       }),
       makeEnv(db),
     );
@@ -382,10 +364,10 @@ describe("POST /auth/refresh", () => {
 
   it("requires a valid HMAC", async () => {
     const db = new FakeD1();
-    seedRow(db, "alice", now - 60, "backup");
+    seedRow(db, "pi", now - 60, "baseline");
     const app = buildApp();
     const res = await app.fetch(
-      new Request("https://example/auth/refresh", {
+      new Request("https://example/baselines/refresh", {
         method: "POST",
         body: JSON.stringify({}),
         headers: { "Content-Type": "application/json" },

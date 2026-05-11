@@ -1,15 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-/**
- * Streaming branch tests for POST /run with `Accept: text/event-stream`.
- *
- * Strategy: stub `@cloudflare/sandbox` so `execStream` returns a
- * synthetic SSE stream of `ExecEvent`s (matching what the real sandbox
- * emits when running pi `--mode json`). Assert that the dispatcher
- * line-buffers stdout chunks, runs them through the pi adapter, and
- * emits normalized events terminated by exactly one `result` frame.
- */
-
 const sandboxHandles: Record<string, FakeSandbox> = {};
 
 vi.mock("@cloudflare/sandbox", () => {
@@ -59,11 +49,6 @@ class FakeSandbox {
     return { exitCode: 0, stdout: "", stderr: "" };
   }
 
-  /**
-   * Returns a ReadableStream<Uint8Array> shaped like the real sandbox's
-   * execStream output: SSE frames with `data: <ExecEvent JSON>\n\n`
-   * separators. The encoded events come from `this.streamScript`.
-   */
   async execStream(
     _cmd: string,
     _opts?: { timeout?: number },
@@ -85,13 +70,6 @@ class FakeSandbox {
   }
 }
 
-/**
- * Minimal SSE parser used by the test mock. Reads `data: ...` lines
- * separated by blank lines and yields the parsed JSON objects. The
- * production code uses `@cloudflare/sandbox`'s own helper; we
- * replicate its semantics inside the test mock so we don't depend on
- * unknown internals.
- */
 async function* parseSSEStreamImpl<T>(
   stream: ReadableStream<Uint8Array>,
 ): AsyncIterable<T> {
@@ -125,7 +103,7 @@ async function* parseSSEStreamImpl<T>(
 class FakeD1 {
   rows = new Map<
     string,
-    { handle: string; created_at: number; refreshed_at: number | null }
+    { handle: string; version: string | null; created_at: number; refreshed_at: number | null }
   >();
   prepare(sql: string) {
     return new FakeStatement(this, sql);
@@ -143,10 +121,10 @@ class FakeStatement {
     return { success: true, meta: { changes: 0 } };
   }
   async first<T>() {
-    const [scope] = this.bindings as [string];
-    const row = this.db.rows.get(scope);
+    const [key] = this.bindings as [string];
+    const row = this.db.rows.get(key);
     if (!row) return null;
-    return { scope, ...row } as unknown as T;
+    return { engine: key, ...row } as unknown as T;
   }
   async all<T>() {
     return { success: true, results: [] as T[] };
@@ -178,9 +156,10 @@ async function signedRequest(
   return new Request(url, { ...init, headers });
 }
 
-function seedBackup(db: FakeD1, scope: string) {
-  db.rows.set(scope, {
-    handle: JSON.stringify({ id: `backup-${scope}`, dir: "/root" }),
+function seedBaseline(db: FakeD1, engine: string) {
+  db.rows.set(engine, {
+    handle: JSON.stringify({ id: `baseline-${engine}`, dir: "/home/symphony" }),
+    version: null,
     created_at: 1_700_000_000,
     refreshed_at: 1_700_000_000,
   });
@@ -211,15 +190,12 @@ describe("POST /run (Accept: text/event-stream)", () => {
   it("emits normalized events for pi stdout and terminates with a result frame", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-200"));
     sandbox.streamScript = [
-      // Lifecycle events pi emits but the adapter drops:
       { type: "stdout", data: '{"type":"session","id":"x"}\n' },
       { type: "stdout", data: '{"type":"agent_start"}\n' },
-      // Assistant message split across two stdout chunks to verify
-      // the line buffer reassembles partial lines.
       {
         type: "stdout",
         data:
@@ -232,7 +208,6 @@ describe("POST /run (Accept: text/event-stream)", () => {
     sandboxHandles[runSandboxId("SYM-200")] = sandbox;
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-200",
       repo_url: "https://github.com/x/y.git",
       prompt: "hi",
@@ -249,10 +224,6 @@ describe("POST /run (Accept: text/event-stream)", () => {
 
     const events = await consumeSseFrames(res);
 
-    // The dispatcher prefixes each successful run with three progress
-    // `thought` events so the Linear timeline shows what's happening
-    // during the cold-start window (snapshot restore + clone +
-    // engine startup).
     expect(events.map((e) => e.type)).toEqual([
       "thought",
       "thought",
@@ -263,7 +234,7 @@ describe("POST /run (Accept: text/event-stream)", () => {
     ]);
     expect(events[0]).toMatchObject({
       type: "thought",
-      text: expect.stringContaining("Restoring sandbox"),
+      text: expect.stringContaining("baseline"),
     });
     expect(events[1]).toMatchObject({
       type: "thought",
@@ -286,14 +257,14 @@ describe("POST /run (Accept: text/event-stream)", () => {
   it("writes MCP config and injects env vars in streaming mode", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-310"));
     sandbox.execQueue = [
-      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
-      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
-      { exitCode: 0, stdout: "", stderr: "" }, // git clone
-      { exitCode: 0, stdout: "", stderr: "" }, // writeMcpConfig
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
     ];
     sandbox.streamScript = [
       { type: "stdout", data: '{"type":"agent_start"}\n' },
@@ -303,7 +274,6 @@ describe("POST /run (Accept: text/event-stream)", () => {
     sandboxHandles[runSandboxId("SYM-310")] = sandbox;
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-310",
       repo_url: "https://github.com/x/y.git",
       prompt: "hi",
@@ -341,7 +311,7 @@ describe("POST /run (Accept: text/event-stream)", () => {
   it("redacts repo URL in clone thought when it contains a token", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-311"));
     sandbox.execQueue = [
@@ -356,7 +326,6 @@ describe("POST /run (Accept: text/event-stream)", () => {
     sandboxHandles[runSandboxId("SYM-311")] = sandbox;
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-311",
       repo_url: "https://github.com/x/y.git",
       prompt: "hi",
@@ -374,17 +343,14 @@ describe("POST /run (Accept: text/event-stream)", () => {
       (e) => e.type === "thought" && typeof e.text === "string" && e.text.includes("Cloning"),
     );
     expect(cloneThought).toBeDefined();
-    // Regular URL should not be redacted
     expect((cloneThought as { text: string }).text).toContain("github.com/x/y.git");
   });
 
-  it("emits an error event then result when the snapshot is missing", async () => {
+  it("emits an error event then result when the baseline is missing", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    // No seedBackup — scope is unknown.
 
     const body = JSON.stringify({
-      scope: "ghost",
       issue_id: "SYM-X",
       repo_url: "https://github.com/x/y.git",
       prompt: "hi",
@@ -400,7 +366,7 @@ describe("POST /run (Accept: text/event-stream)", () => {
     const events = await consumeSseFrames(res);
     expect(events.map((e) => e.type)).toEqual(["error", "result"]);
     expect((events[0] as { message: string }).message).toContain(
-      "missing_auth_backup",
+      "missing_baseline",
     );
     expect((events[1] as { exit_code: number }).exit_code).not.toBe(0);
   });
@@ -408,18 +374,17 @@ describe("POST /run (Accept: text/event-stream)", () => {
   it("emits an error event then result when git clone fails", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-99"));
     sandbox.execQueue = [
-      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
-      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
       { exitCode: 128, stdout: "", stderr: "fatal: repository not found" },
     ];
     sandboxHandles[runSandboxId("SYM-99")] = sandbox;
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-99",
       repo_url: "https://github.com/x/y.git",
       prompt: "hi",
@@ -433,8 +398,6 @@ describe("POST /run (Accept: text/event-stream)", () => {
 
     expect(res.status).toBe(200);
     const events = await consumeSseFrames(res);
-    // The "Restoring sandbox" and "Cloning" thoughts emit before the
-    // clone error; "Starting pi" never fires because we abort first.
     expect(events.map((e) => e.type)).toEqual([
       "thought",
       "thought",
@@ -449,20 +412,19 @@ describe("POST /run (Accept: text/event-stream)", () => {
   it("emits error and result when MCP config write fails", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-312"));
     sandbox.execQueue = [
-      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
-      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
-      { exitCode: 0, stdout: "", stderr: "" }, // git clone
-      { exitCode: 1, stdout: "", stderr: "Permission denied" }, // writeMcpConfig fails
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 1, stdout: "", stderr: "Permission denied" },
     ];
     sandbox.streamScript = [];
     sandboxHandles[runSandboxId("SYM-312")] = sandbox;
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-312",
       repo_url: "https://github.com/x/y.git",
       prompt: "hi",
