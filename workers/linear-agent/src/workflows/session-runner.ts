@@ -40,10 +40,12 @@ import {
   DispatcherClient,
   DispatcherError,
   type NormalizedEvent,
+  type RunCredentials,
 } from "../lib/dispatcher";
 import { lastAssistantText, mapToActivity } from "../lib/event-mapper";
+import { resolveLinearMcpToken } from "../lib/linear-token";
 import { resolvePrompt, truncate } from "../lib/session-helpers";
-import { AgentSessionStore, InstallationStore, ProjectStore } from "../lib/store";
+import { AgentSessionStore, InstallationStore, ProjectStore, UserStore } from "../lib/store";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
 
 export interface SessionRunnerParams {
@@ -94,6 +96,7 @@ interface EventSummaryItem {
 
 const DEFAULT_MAX_TURNS = 10;
 const STDERR_TRUNCATE = 2000;
+const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> {
   override async run(
@@ -298,10 +301,49 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       turnsRun = turn;
       const turnLabel = `turn-${turn}`;
       const captured = prompt;
-      // Per-turn step: retries=0 because re-running pi is expensive.
-      // An eviction re-runs this turn from the start, re-posting any
-      // activities emitted before the eviction. That's the documented
-      // tradeoff for the live timeline.
+
+      // Resolve a fresh Linear OAuth token before each /run so
+      // multi-turn sessions never dispatch with an expired credential.
+      const linearMcpCredentials: RunCredentials | null = await step.do(
+        `resolve-linear-mcp-token-${turn}`,
+        async () => {
+          const orgId = webhookEvent.organizationId;
+          if (!orgId) return null;
+
+          const triggeringUserId =
+            webhookEvent.agentSession.comment?.userId ?? null;
+
+          try {
+            const result = await resolveLinearMcpToken({
+              orgId,
+              triggeringUserId,
+              userStore: new UserStore(this.env.DB),
+              clientId: this.env.LINEAR_CLIENT_ID,
+              clientSecret: this.env.LINEAR_CLIENT_SECRET,
+              runTimeoutMs: DEFAULT_TIMEOUT_MS,
+            });
+
+            if (!result) return null;
+
+            return {
+              mcp_servers: [
+                {
+                  name: "linear",
+                  url: "https://mcp.linear.app/sse",
+                  token: result.accessToken,
+                },
+              ],
+            } as RunCredentials;
+          } catch (e) {
+            console.error(
+              "resolve_linear_mcp_token_failed",
+              e instanceof Error ? e.message : String(e),
+            );
+            return null;
+          }
+        },
+      );
+
       const outcome: TurnOutcome = await step.do(
         turnLabel,
         { retries: { limit: 0, delay: "1 second", backoff: "constant" } },
@@ -314,6 +356,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
             engine: resolved.engine,
             model: resolved.model,
             githubToken,
+            credentials: linearMcpCredentials,
             turn,
           }),
       );
@@ -552,6 +595,7 @@ async function runTurn(
     engine: "pi";
     model: string | null;
     githubToken: string | null;
+    credentials: RunCredentials | null;
     turn: number;
   },
 ): Promise<TurnOutcome> {
@@ -575,6 +619,7 @@ async function runTurn(
       engine: args.engine,
       model: args.model,
       githubToken: args.githubToken,
+      credentials: args.credentials,
     })) {
       events.push(ev);
 

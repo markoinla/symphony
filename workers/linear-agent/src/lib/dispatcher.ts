@@ -20,6 +20,21 @@
  * (Elixir, dispatcher worker, this client) wire-compatible.
  */
 
+export interface McpServerCredential {
+  name: string;
+  url: string;
+  token: string;
+}
+
+export interface RunCredentials {
+  cloudflare_account_id?: string;
+  cloudflare_api_token?: string;
+  anthropic_api_key?: string;
+  openai_api_key?: string;
+  github_token?: string;
+  mcp_servers?: McpServerCredential[];
+}
+
 export interface RunArgs {
   scope: string;
   issueId: string;
@@ -29,6 +44,7 @@ export interface RunArgs {
   model?: string | null;
   timeoutMs?: number;
   githubToken?: string | null;
+  credentials?: RunCredentials | null;
 }
 
 export interface RunResult {
@@ -110,16 +126,7 @@ export class DispatcherClient {
   }
 
   async run(args: RunArgs): Promise<RunResult> {
-    const body = JSON.stringify({
-      scope: args.scope,
-      issue_id: args.issueId,
-      repo_url: args.repoUrl,
-      prompt: args.prompt,
-      engine: args.engine,
-      ...(args.model ? { model: args.model } : {}),
-      ...(args.timeoutMs ? { timeout_ms: args.timeoutMs } : {}),
-      ...(args.githubToken ? { github_token: args.githubToken } : {}),
-    });
+    const body = JSON.stringify(serializeRunArgs(args));
 
     const sig = await computeSignature(this.secret, body);
 
@@ -159,16 +166,7 @@ export class DispatcherClient {
    * events followed by a non-zero `result` and are NOT thrown.
    */
   async *runStream(args: RunArgs): AsyncIterable<NormalizedEvent> {
-    const body = JSON.stringify({
-      scope: args.scope,
-      issue_id: args.issueId,
-      repo_url: args.repoUrl,
-      prompt: args.prompt,
-      engine: args.engine,
-      ...(args.model ? { model: args.model } : {}),
-      ...(args.timeoutMs ? { timeout_ms: args.timeoutMs } : {}),
-      ...(args.githubToken ? { github_token: args.githubToken } : {}),
-    });
+    const body = JSON.stringify(serializeRunArgs(args));
 
     const sig = await computeSignature(this.secret, body);
 
@@ -278,6 +276,22 @@ export async function computeSignature(
   let out = "";
   for (const byte of sig) out += byte.toString(16).padStart(2, "0");
   return out;
+}
+
+function serializeRunArgs(
+  args: RunArgs,
+): Record<string, unknown> {
+  return {
+    scope: args.scope,
+    issue_id: args.issueId,
+    repo_url: args.repoUrl,
+    prompt: args.prompt,
+    engine: args.engine,
+    ...(args.model ? { model: args.model } : {}),
+    ...(args.timeoutMs ? { timeout_ms: args.timeoutMs } : {}),
+    ...(args.githubToken ? { github_token: args.githubToken } : {}),
+    ...(args.credentials ? { credentials: args.credentials } : {}),
+  };
 }
 
 function stripTrailingSlash(s: string): string {
