@@ -219,7 +219,6 @@ describe("SessionStore", () => {
     const store = new SessionStore(db as unknown as D1Database);
 
     const token = await store.create("user-1", 0);
-    // FakeD1 checks expiry; ttlDays=0 means expires_at is ~now
     const user = await store.validate(token);
     expect(user).toBeNull();
   });
