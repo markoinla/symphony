@@ -45,6 +45,27 @@ interface RunBody {
   timeout_ms?: unknown;
   max_turns?: unknown;
   github_token?: unknown;
+  credentials?: unknown;
+}
+
+interface CredentialsBody {
+  cloudflare_account_id?: unknown;
+  cloudflare_api_token?: unknown;
+  anthropic_api_key?: unknown;
+  openai_api_key?: unknown;
+  github_token?: unknown;
+  mcp_servers?: unknown;
+}
+
+interface McpServerBody {
+  name?: unknown;
+  url?: unknown;
+  token?: unknown;
+}
+
+export interface ParsedCredentials {
+  envVars: Array<{ name: string; value: string }>;
+  mcpServers: Array<{ name: string; url: string; token: string }>;
 }
 
 interface ParsedRun {
@@ -56,6 +77,7 @@ interface ParsedRun {
   model: string | null;
   timeoutMs: number;
   githubToken: string | null;
+  credentials: ParsedCredentials | null;
 }
 
 export function buildRunRouter() {
@@ -121,15 +143,23 @@ export function buildRunRouter() {
         );
       }
 
+      if (parsed.credentials) {
+        const mcpResult = await writeMcpConfig(sandbox, parsed.credentials);
+        if (mcpResult && mcpResult.exitCode !== 0) {
+          return c.json(
+            {
+              error: "mcp_config_write_failed",
+              exit_code: mcpResult.exitCode,
+              stderr: mcpResult.stderr,
+            },
+            502,
+          );
+        }
+      }
+
       const cmd = buildEngineCommand(parsed, workspaceDir);
       const result = await sandbox.exec(cmd, { timeout: parsed.timeoutMs });
 
-      // Item 4: try to push the agent's commits to GitHub if a token
-      // is configured AND the engine exited cleanly. Push failures are
-      // surfaced as a `push_error` field on the response, not as an
-      // HTTP failure — the engine work itself still succeeded.
-      // SYM-269: prefer the per-run token from the body (minted by
-      // linear-agent via GitHub App) over the org-wide env var.
       let branch: string | null = null;
       let commitSha: string | null = null;
       let pushError: string | null = null;
@@ -272,7 +302,7 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
       );
       await emit({
         type: "thought",
-        text: `Cloning ${parsed.repoUrl}…`,
+        text: `Cloning ${redactRepoUrl(parsed.repoUrl)}…`,
       });
       const cloneResult = await sandbox.exec(
         `cd ${shellQuote(workspaceDir)} && git clone ${shellQuote(parsed.repoUrl)} .`,
@@ -282,6 +312,16 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
           message: `clone_failed: ${cloneResult.stderr.slice(0, 500)}`,
         });
         return;
+      }
+
+      if (parsed.credentials) {
+        const mcpResult = await writeMcpConfig(sandbox, parsed.credentials);
+        if (mcpResult && mcpResult.exitCode !== 0) {
+          await emitTerminal(mcpResult.exitCode, {
+            message: `mcp_config_write_failed: ${mcpResult.stderr.slice(0, 500)}`,
+          });
+          return;
+        }
       }
 
       const cmd = buildEngineCommand(parsed, workspaceDir);
@@ -424,6 +464,9 @@ function parseRun(body: RunBody): ParsedRun | string {
       ? body.github_token
       : null;
 
+  const credentials = parseCredentials(body.credentials);
+  if (typeof credentials === "string") return credentials;
+
   return {
     scope,
     issueId,
@@ -433,6 +476,7 @@ function parseRun(body: RunBody): ParsedRun | string {
     model,
     timeoutMs,
     githubToken,
+    credentials,
   };
 }
 
@@ -475,6 +519,69 @@ function parseTimeout(value: unknown): number {
   return Math.min(Math.floor(value), MAX_TIMEOUT_MS);
 }
 
+const CREDENTIAL_ENV_MAP: Array<{
+  field: keyof CredentialsBody;
+  envName: string;
+}> = [
+  { field: "cloudflare_account_id", envName: "CLOUDFLARE_ACCOUNT_ID" },
+  { field: "cloudflare_api_token", envName: "CLOUDFLARE_API_TOKEN" },
+  { field: "anthropic_api_key", envName: "ANTHROPIC_API_KEY" },
+  { field: "openai_api_key", envName: "OPENAI_API_KEY" },
+  { field: "github_token", envName: "GITHUB_TOKEN" },
+];
+
+function parseCredentials(
+  value: unknown,
+): ParsedCredentials | null | string {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return "invalid_credentials";
+  }
+
+  const creds = value as CredentialsBody;
+  const envVars: Array<{ name: string; value: string }> = [];
+
+  for (const { field, envName } of CREDENTIAL_ENV_MAP) {
+    const v = creds[field];
+    if (v === undefined || v === null) continue;
+    if (typeof v !== "string" || v.length === 0) {
+      return `invalid_credentials.${field}`;
+    }
+    envVars.push({ name: envName, value: v });
+  }
+
+  const mcpServers: Array<{ name: string; url: string; token: string }> = [];
+  if (creds.mcp_servers !== undefined && creds.mcp_servers !== null) {
+    if (!Array.isArray(creds.mcp_servers)) {
+      return "invalid_credentials.mcp_servers";
+    }
+    for (let i = 0; i < creds.mcp_servers.length; i++) {
+      const srv = creds.mcp_servers[i] as McpServerBody | undefined;
+      if (!srv || typeof srv !== "object" || Array.isArray(srv)) {
+        return `invalid_credentials.mcp_servers[${i}]`;
+      }
+      if (typeof srv.name !== "string" || srv.name.length === 0) {
+        return `invalid_credentials.mcp_servers[${i}].name`;
+      }
+      if (typeof srv.url !== "string" || srv.url.length === 0) {
+        return `invalid_credentials.mcp_servers[${i}].url`;
+      }
+      if (typeof srv.token !== "string" || srv.token.length === 0) {
+        return `invalid_credentials.mcp_servers[${i}].token`;
+      }
+      mcpServers.push({
+        name: srv.name,
+        url: srv.url,
+        token: srv.token,
+      });
+    }
+  }
+
+  if (envVars.length === 0 && mcpServers.length === 0) return null;
+
+  return { envVars, mcpServers };
+}
+
 /**
  * Build the shell command that invokes the engine with the user's prompt.
  *
@@ -498,17 +605,20 @@ function buildEngineCommand(parsed: ParsedRun, workspaceDir: string): string {
       if (parsed.model) {
         flags.push("--model", shellQuote(parsed.model));
       }
-      // sandbox.exec runs a non-login shell, so the .bashrc that
-      // /auth/bootstrap writes (which sets HOME, NPM_CONFIG_PREFIX, PATH)
-      // does NOT load. Reproduce its essentials here so pi (and the
-      // co-installed gh / claude / codex CLIs in the snapshot) resolve.
-      // SANDBOX_HOME mirrors auth.ts.
-      return [
+      const parts = [
         `export HOME=${SANDBOX_HOME}`,
         `export PATH=${SANDBOX_HOME}/.npm-global/bin:${SANDBOX_HOME}/.local/bin:$PATH`,
+      ];
+      if (parsed.credentials) {
+        for (const { name, value } of parsed.credentials.envVars) {
+          parts.push(`export ${name}=${shellQuote(value)}`);
+        }
+      }
+      parts.push(
         `cd ${shellQuote(workspaceDir)}`,
         `pi ${flags.join(" ")} ${shellQuote(parsed.prompt)}`,
-      ].join(" && ");
+      );
+      return parts.join(" && ");
     }
   }
 }
@@ -520,6 +630,38 @@ function buildEngineCommand(parsed: ParsedRun, workspaceDir: string): string {
  */
 export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+async function writeMcpConfig(
+  sandbox: { exec(cmd: string): Promise<{ exitCode: number; stdout: string; stderr: string }> },
+  credentials: ParsedCredentials,
+): Promise<{ exitCode: number; stdout: string; stderr: string } | null> {
+  if (credentials.mcpServers.length === 0) return null;
+
+  const mcpConfig = {
+    mcpServers: Object.fromEntries(
+      credentials.mcpServers.map((srv) => [
+        srv.name,
+        {
+          type: "sse" as const,
+          url: srv.url,
+          headers: { Authorization: `Bearer ${srv.token}` },
+        },
+      ]),
+    ),
+  };
+
+  const configDir = `${SANDBOX_HOME}/.config/pi`;
+  const configPath = `${configDir}/mcp.json`;
+  const configJson = JSON.stringify(mcpConfig);
+
+  return sandbox.exec(
+    `mkdir -p ${shellQuote(configDir)} && printf '%s' ${shellQuote(configJson)} > ${shellQuote(configPath)}`,
+  );
+}
+
+function redactRepoUrl(url: string): string {
+  return url.replace(/(https?:\/\/)[^@]+@/, "$1***@");
 }
 
 async function readJsonBody<T>(req: Request): Promise<T> {

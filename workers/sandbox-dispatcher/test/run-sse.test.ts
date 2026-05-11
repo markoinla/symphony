@@ -283,6 +283,101 @@ describe("POST /run (Accept: text/event-stream)", () => {
     expect(sandbox.destroyed).toBe(true);
   });
 
+  it("writes MCP config and injects env vars in streaming mode", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-310"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      { exitCode: 0, stdout: "", stderr: "" }, // writeMcpConfig
+    ];
+    sandbox.streamScript = [
+      { type: "stdout", data: '{"type":"agent_start"}\n' },
+      { type: "stdout", data: '{"type":"agent_end"}\n' },
+      { type: "complete", exitCode: 0 },
+    ];
+    sandboxHandles[runSandboxId("SYM-310")] = sandbox;
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-310",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+      credentials: {
+        anthropic_api_key: "sk-ant-stream",
+        mcp_servers: [
+          { name: "test-mcp", url: "https://mcp.example.com", token: "tok_abc" },
+        ],
+      },
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+    expect(events.map((e) => e.type)).toEqual([
+      "thought",
+      "thought",
+      "thought",
+      "turn_end",
+      "result",
+    ]);
+
+    const mcpCall = sandbox.execCalls.find((c) => c.includes("mcp.json"));
+    expect(mcpCall).toBeDefined();
+    expect(mcpCall).toContain("test-mcp");
+
+    expect(sandbox.destroyed).toBe(true);
+  });
+
+  it("redacts repo URL in clone thought when it contains a token", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-311"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+    ];
+    sandbox.streamScript = [
+      { type: "stdout", data: '{"type":"agent_end"}\n' },
+      { type: "complete", exitCode: 0 },
+    ];
+    sandboxHandles[runSandboxId("SYM-311")] = sandbox;
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-311",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+    const cloneThought = events.find(
+      (e) => e.type === "thought" && typeof e.text === "string" && e.text.includes("Cloning"),
+    );
+    expect(cloneThought).toBeDefined();
+    // Regular URL should not be redacted
+    expect((cloneThought as { text: string }).text).toContain("github.com/x/y.git");
+  });
+
   it("emits an error event then result when the snapshot is missing", async () => {
     const app = buildApp();
     const db = new FakeD1();
@@ -348,6 +443,54 @@ describe("POST /run (Accept: text/event-stream)", () => {
     ]);
     expect((events[2] as { message: string }).message).toContain("clone_failed");
     expect((events[3] as { exit_code: number }).exit_code).toBe(128);
+    expect(sandbox.destroyed).toBe(true);
+  });
+
+  it("emits error and result when MCP config write fails", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-312"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      { exitCode: 1, stdout: "", stderr: "Permission denied" }, // writeMcpConfig fails
+    ];
+    sandbox.streamScript = [];
+    sandboxHandles[runSandboxId("SYM-312")] = sandbox;
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-312",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+      credentials: {
+        mcp_servers: [
+          { name: "test-mcp", url: "https://mcp.example.com", token: "tok_abc" },
+        ],
+      },
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+    expect(events.map((e) => e.type)).toEqual([
+      "thought",
+      "thought",
+      "error",
+      "result",
+    ]);
+    expect((events[2] as { message: string }).message).toContain(
+      "mcp_config_write_failed",
+    );
+    expect((events[3] as { exit_code: number }).exit_code).toBe(1);
     expect(sandbox.destroyed).toBe(true);
   });
 });
