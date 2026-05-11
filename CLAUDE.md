@@ -111,6 +111,32 @@ curl localhost:4000/api/v1/sessions?issue_identifier=SYM-162
 
 Logger metadata includes `workflow_name`, `issue_id`, `issue_identifier`, and `session_id` for log correlation.
 
+## Cloudflare Workers ops
+
+Two Workers under `workers/` share a `DISPATCH_HMAC_SECRET`:
+`sandbox-dispatcher` (verifies) and `linear-agent` (signs). They drift
+silently when `wrangler secret put` is run on one but not the other,
+or when a deploy that touches `wrangler.jsonc` resets the prod secret.
+Symptom: every Linear session 401s with `invalid_signature`.
+
+Always go through the helper scripts — they bake in `--env=""`, push
+to both Workers in one shot, and run a smoke gate after every deploy:
+
+```bash
+scripts/deploy-workers.sh                 # deploy both + smoke gate (use instead of `npm run deploy`)
+scripts/deploy-workers.sh dispatcher      # just sandbox-dispatcher
+scripts/deploy-workers.sh linear-agent    # just linear-agent
+scripts/rotate-dispatch-secret.sh         # recover from a 401 storm (rotates + verifies)
+scripts/smoke-dispatch.sh                 # standalone HMAC + SSE wire check
+```
+
+The smoke check needs the linear-agent's `ADMIN_TOKEN`. Either
+`export LINEAR_AGENT_ADMIN_TOKEN=…` or write it to `.secrets/admin-token`
+(gitignored). Without it the smoke step skips with a warning rather
+than failing the deploy.
+
+Full failure-mode postmortem: `docs/cloudflare_sandbox_integration.md:486-501`.
+
 ## Code Conventions
 
 - All public functions (`def`) must have an adjacent `@spec`. Private (`defp`) specs are optional. `@impl` callbacks are exempt.

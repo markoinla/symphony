@@ -65,6 +65,7 @@ symphony_elixir-*.tar
 # Cloudflare Workers.
 workers/*/node_modules/
 workers/*/.wrangler/
+workers/*/dist/
 
 # Root-level Wrangler/miniflare state (from running wrangler dev at repo root).
 .wrangler/

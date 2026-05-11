@@ -124,8 +124,11 @@ defmodule SymphonyElixir.Config.Schema do
     use Ecto.Schema
     import Ecto.Changeset
 
+    @backends [:auto, :local, :ssh_static]
+
     @primary_key false
     embedded_schema do
+      field(:backend, Ecto.Enum, values: @backends, default: :auto)
       field(:ssh_hosts, {:array, :string}, default: [])
       field(:max_concurrent_agents_per_host, :integer)
     end
@@ -133,7 +136,7 @@ defmodule SymphonyElixir.Config.Schema do
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:ssh_hosts, :max_concurrent_agents_per_host], empty_values: [])
+      |> cast(attrs, [:backend, :ssh_hosts, :max_concurrent_agents_per_host], empty_values: [])
       |> validate_number(:max_concurrent_agents_per_host, greater_than: 0)
     end
   end

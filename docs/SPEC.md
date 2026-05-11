@@ -559,6 +559,9 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `tracker.terminal_states`: list of strings, default `["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]`
 - `polling.interval_ms`: integer, default `30000`
 - `workspace.root`: path, default `<system-temp>/symphony_workspaces`
+- `worker.backend` (extension): `:auto` (default), `:local`, or `:ssh_static`. `:auto` picks
+  `:local` when `worker.ssh_hosts` is empty and `:ssh_static` otherwise (preserving the
+  pre-extension default). `:local` forces local execution even if SSH hosts are configured.
 - `worker.ssh_hosts` (extension): list of SSH host strings, optional; when omitted, work runs
   locally
 - `worker.max_concurrent_agents_per_host` (extension): positive integer, optional; shared per-host

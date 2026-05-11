@@ -211,7 +211,7 @@ function ProjectFormDialog({
     setError(null)
     if (editingProject) {
       setDraft(projectToDraft(editingProject))
-      setSelectedLinearName(null)
+      setSelectedLinearName(editingProject.linear_project_slug)
       setSelectedGitHubName(editingProject.github_repo)
       // Show advanced if any advanced fields are populated
       setShowAdvanced(

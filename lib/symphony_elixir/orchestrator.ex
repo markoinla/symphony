@@ -25,6 +25,7 @@ defmodule SymphonyElixir.Orchestrator do
   }
 
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.Worker.{Backend, Lease}
   alias SymphonyElixirWeb.ObservabilityPubSub
   @registry SymphonyElixir.OrchestratorRegistry
 
@@ -407,6 +408,7 @@ defmodule SymphonyElixir.Orchestrator do
       running_entry ->
         updated_running_entry =
           running_entry
+          |> maybe_put_runtime_value(:lease, runtime_info[:lease])
           |> maybe_put_runtime_value(:worker_host, runtime_info[:worker_host])
           |> maybe_put_runtime_value(:workspace_path, runtime_info[:workspace_path])
           |> maybe_put_runtime_value(:stderr_file, runtime_info[:stderr_file])
@@ -638,6 +640,12 @@ defmodule SymphonyElixir.Orchestrator do
   @spec select_worker_host_for_test(term(), String.t() | nil) :: String.t() | nil | :no_worker_capacity
   def select_worker_host_for_test(%State{} = state, preferred_worker_host) do
     select_worker_host(state, preferred_worker_host)
+  end
+
+  @doc false
+  @spec build_dispatch_lease_for_test(map(), String.t() | nil) :: Lease.t()
+  def build_dispatch_lease_for_test(issue, worker_host) do
+    build_dispatch_lease(issue, worker_host)
   end
 
   defp reconcile_running_issue_states([], state, _active_states, _terminal_states), do: state
@@ -1106,6 +1114,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host, comment_watch_state) do
+    lease = build_dispatch_lease(issue, worker_host)
+
     case Task.Supervisor.start_child(
            SymphonyElixir.TaskSupervisor,
            fn ->
@@ -1115,8 +1125,8 @@ defmodule SymphonyElixir.Orchestrator do
                recipient,
                attempt,
                worker_host,
+               lease,
                state.project_id,
-               state.project,
                comment_watch_state
              )
            end
@@ -1124,7 +1134,7 @@ defmodule SymphonyElixir.Orchestrator do
       {:ok, pid} ->
         ref = Process.monitor(pid)
 
-        Logger.info("Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"}")
+        Logger.info("Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} lease=#{lease.id}")
 
         running =
           Map.put(state.running, issue.id, %{
@@ -1133,6 +1143,7 @@ defmodule SymphonyElixir.Orchestrator do
             identifier: issue.identifier,
             issue: issue,
             worker_host: worker_host,
+            lease: lease,
             workspace_path: nil,
             session_id: nil,
             last_engine_message: nil,
@@ -1170,25 +1181,30 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp run_issue_task(workflow_name, issue, recipient, attempt, worker_host, fallback_project_id, _project, comment_watch_state)
+  defp run_issue_task(workflow_name, issue, recipient, attempt, worker_host, lease, fallback_project_id, comment_watch_state)
        when is_binary(workflow_name) do
     project = resolve_project_for_issue(issue, fallback_project_id)
     project_id = if project, do: project.id, else: fallback_project_id
     Settings.put_current_project(project)
 
+    runner_opts =
+      build_runner_opts(attempt, worker_host, lease, project_id, project, comment_watch_state)
+
     Workflow.with_workflow(workflow_name, fn ->
       maybe_create_proactive_agent_session(issue)
-
-      AgentRunner.run(
-        issue,
-        recipient,
-        attempt: attempt,
-        worker_host: worker_host,
-        project_id: project_id,
-        organization_id: if(project, do: project.organization_id),
-        comment_watch_state: comment_watch_state
-      )
+      AgentRunner.run(issue, recipient, runner_opts)
     end)
+  end
+
+  defp build_runner_opts(attempt, worker_host, lease, project_id, project, comment_watch_state) do
+    [
+      attempt: attempt,
+      worker_host: worker_host,
+      lease: lease,
+      project_id: project_id,
+      organization_id: if(project, do: project.organization_id),
+      comment_watch_state: comment_watch_state
+    ]
   end
 
   defp maybe_create_proactive_agent_session(%Issue{id: issue_id, identifier: identifier} = issue)
@@ -1620,6 +1636,24 @@ defmodule SymphonyElixir.Orchestrator do
     metadata[:worker_host] || Map.get(previous_retry, :worker_host)
   end
 
+  # Acquire a Lease for the dispatch from the configured backend. The lease's
+  # `host` field is the canonical display string; today's `worker_host` plumbing
+  # (nil for local, binary for SSH) is preserved by `lease_worker_host/1` in
+  # AgentRunner. Falls back to a Local lease if the configured backend can't
+  # acquire one (e.g. ssh_static with no host selected).
+  defp build_dispatch_lease(issue, worker_host) do
+    backend = Backend.current()
+
+    case backend.acquire(issue, host: worker_host) do
+      {:ok, %Lease{} = lease} ->
+        lease
+
+      {:error, _reason} ->
+        {:ok, lease} = Backend.Local.acquire(issue)
+        lease
+    end
+  end
+
   defp pick_retry_workspace_path(previous_retry, metadata) do
     metadata[:workspace_path] || Map.get(previous_retry, :workspace_path)
   end
@@ -1635,23 +1669,38 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp select_worker_host(%State{} = state, preferred_worker_host) do
+    # When `worker.backend: local` is set explicitly, always run locally even
+    # if `worker.ssh_hosts` is non-empty. This lets operators force a workflow
+    # to local execution without removing the SSH host pool from config.
+    if Backend.current() == Backend.Local do
+      nil
+    else
+      select_ssh_worker_host(state, preferred_worker_host)
+    end
+  end
+
+  defp select_ssh_worker_host(%State{} = state, preferred_worker_host) do
     case Config.settings!().worker.ssh_hosts do
       [] ->
         nil
 
       hosts ->
-        available_hosts = Enum.filter(hosts, &worker_host_slots_available?(state, &1))
+        pick_available_ssh_host(state, hosts, preferred_worker_host)
+    end
+  end
 
-        cond do
-          available_hosts == [] ->
-            :no_worker_capacity
+  defp pick_available_ssh_host(%State{} = state, hosts, preferred_worker_host) do
+    available_hosts = Enum.filter(hosts, &worker_host_slots_available?(state, &1))
 
-          preferred_worker_host_available?(preferred_worker_host, available_hosts) ->
-            preferred_worker_host
+    cond do
+      available_hosts == [] ->
+        :no_worker_capacity
 
-          true ->
-            least_loaded_worker_host(state, available_hosts)
-        end
+      preferred_worker_host_available?(preferred_worker_host, available_hosts) ->
+        preferred_worker_host
+
+      true ->
+        least_loaded_worker_host(state, available_hosts)
     end
   end
 

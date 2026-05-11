@@ -1,0 +1,107 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "linear-agent",
+  "main": "src/index.ts",
+  "compatibility_date": "2025-05-12",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": {
+    "enabled": true
+  },
+
+  // KV holds (a) the per-flow OAuth state nonce and (b) the agent's own
+  // installed `actor=app` access token. Single-org for the walking
+  // skeleton — multi-tenant config lives in D1 in a later phase.
+  // Create with: wrangler kv namespace create LINEAR_TOKENS
+  // Then paste the printed id below.
+  "kv_namespaces": [
+    {
+      "binding": "LINEAR_TOKENS",
+      "id": "a3703d4854224640baa2946e6b9a7ae8"
+    }
+  ],
+
+  // Cloudflare Workflow that drives a single Agent Session end-to-end.
+  // Each webhook delivery creates an instance keyed by `agentSession.id`
+  // so a Worker eviction mid-dispatch resumes from the last completed
+  // step instead of dropping the session. See src/workflows/session-runner.ts.
+  "workflows": [
+    {
+      "name": "linear-agent-session-runner",
+      "binding": "SESSION_RUNNER",
+      "class_name": "SessionRunner"
+    }
+  ],
+
+  // D1 holds multi-tenant config: one `installations` row per Linear
+  // workspace OAuth, one `projects` row per Linear team. Replaces the
+  // single KV `access_token` and the `PROJECT_MAPPINGS_JSON` env var.
+  // Create the DB once with:
+  //   wrangler d1 create symphony-linear-agent
+  // then paste the printed `database_id` below and run:
+  //   wrangler d1 migrations apply symphony-linear-agent --remote
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "symphony-linear-agent",
+      "database_id": "4453771e-e162-4c00-a014-52bf6152319e",
+      "migrations_dir": "migrations"
+    }
+  ],
+
+  // Public-facing vars. URL must be the deployed origin so the OAuth
+  // callback URL Linear redirects to matches what we register.
+  // PROJECT_MAPPINGS_JSON is a temporary stand-in for D1 project rows:
+  //   {"<linear-team-id>": "https://github.com/<owner>/<repo>.git"}
+  "vars": {
+    "URL": "https://linear-agent.m-6bb.workers.dev",
+    "DISPATCHER_URL": "https://sandbox.marko.la",
+    "DEFAULT_SCOPE": "marko",
+    "DEFAULT_MODEL": "cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6",
+    "DEFAULT_ENGINE": "pi",
+    "PROJECT_MAPPINGS_JSON": "{\"e6ff2862-1971-4b10-88a8-4aa16137fff0\":\"https://github.com/markoinla/symphony.git\"}"
+  },
+
+  // Secrets — set with `wrangler secret put <NAME>`:
+  //   LINEAR_CLIENT_ID         — OAuth app Client ID
+  //   LINEAR_CLIENT_SECRET     — OAuth app Client Secret
+  //   LINEAR_WEBHOOK_SECRET    — webhook signing secret from the OAuth app
+  //   DISPATCH_HMAC_SECRET     — must match the dispatcher's secret of the
+  //                              same name (this worker calls the dispatcher
+  //                              over HTTP and signs requests itself).
+
+  "env": {
+    "dev": {
+      "name": "linear-agent-dev",
+      "kv_namespaces": [
+        {
+          "binding": "LINEAR_TOKENS",
+          "id": "<replace-with-dev-kv-namespace-id>"
+        }
+      ],
+      "workflows": [
+        {
+          "name": "linear-agent-session-runner-dev",
+          "binding": "SESSION_RUNNER",
+          "class_name": "SessionRunner"
+        }
+      ],
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "symphony-linear-agent-dev",
+          "database_id": "<replace-with-dev-d1-id>",
+          "migrations_dir": "migrations"
+        }
+      ],
+      "vars": {
+        "URL": "http://localhost:8788",
+        "DISPATCHER_URL": "http://localhost:8787",
+        "DEFAULT_SCOPE": "default",
+        "DEFAULT_MODEL": "cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6",
+        "DEFAULT_ENGINE": "pi",
+        "PROJECT_MAPPINGS_JSON": "{}"
+      }
+    }
+  }
+}

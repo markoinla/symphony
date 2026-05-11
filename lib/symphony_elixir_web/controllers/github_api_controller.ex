@@ -21,6 +21,28 @@ defmodule SymphonyElixirWeb.GithubApiController do
     end
   end
 
+  @spec search_branches(Conn.t(), map()) :: Conn.t()
+  def search_branches(conn, params) do
+    repo = (params["repo"] || "") |> String.trim()
+
+    cond do
+      repo == "" ->
+        error_response(conn, 400, "missing_repo", "Missing required `repo` parameter")
+
+      not Regex.match?(~r{^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$}, repo) ->
+        error_response(conn, 400, "invalid_repo", "Repo must be in the form owner/name")
+
+      true ->
+        case OAuth.current_access_token() do
+          nil ->
+            error_response(conn, 401, "oauth_not_connected", "GitHub OAuth is not connected")
+
+          token ->
+            do_search_branches(conn, token, repo, params)
+        end
+    end
+  end
+
   defp do_search_repos(conn, token, params) do
     query = (params["q"] || "") |> String.trim() |> String.downcase()
 
@@ -60,6 +82,49 @@ defmodule SymphonyElixirWeb.GithubApiController do
       end)
     end)
     |> Enum.take(20)
+  end
+
+  defp do_search_branches(conn, token, repo, params) do
+    query = (params["q"] || "") |> String.trim() |> String.downcase()
+
+    case github_get(token, "#{@github_api_url}/repos/#{repo}/branches", %{
+           "per_page" => "100"
+         }) do
+      {:ok, branches} when is_list(branches) ->
+        filtered = filter_branches(branches, query)
+        json(conn, %{branches: Enum.map(filtered, &format_branch/1)})
+
+      {:error, {:github_api_status, 404, _body}} ->
+        error_response(conn, 404, "repo_not_found", "Repository not found or no access")
+
+      {:error, reason} ->
+        error_response(
+          conn,
+          502,
+          "github_error",
+          "GitHub API request failed: #{inspect(reason)}"
+        )
+    end
+  end
+
+  @doc false
+  @spec filter_branches(list(map()), String.t()) :: list(map())
+  def filter_branches(branches, ""), do: Enum.take(branches, 50)
+
+  def filter_branches(branches, query) do
+    branches
+    |> Enum.filter(fn branch ->
+      String.contains?(String.downcase(branch["name"] || ""), query)
+    end)
+    |> Enum.take(50)
+  end
+
+  defp format_branch(node) do
+    %{
+      name: node["name"],
+      protected: node["protected"] || false,
+      sha: get_in(node, ["commit", "sha"])
+    }
   end
 
   defp format_repo(node) do
