@@ -47,7 +47,7 @@ import {
   resolveRepoUrl,
   truncate,
 } from "../lib/session-helpers";
-import { InstallationStore, ProjectStore } from "../lib/store";
+import { AgentSessionStore, InstallationStore, ProjectStore } from "../lib/store";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
 
 export interface SessionRunnerParams {
@@ -79,13 +79,21 @@ type TurnOutcome =
       result: TurnResult;
       lastAssistant: string | null;
       inbandError: string | null;
+      eventSummary: EventSummaryItem[];
     }
   | {
       kind: "needs_continuation";
       result: TurnResult;
       lastAssistant: string | null;
+      eventSummary: EventSummaryItem[];
     }
   | { kind: "dispatch_error"; message: string };
+
+interface EventSummaryItem {
+  type: string;
+  timestamp: string;
+  body?: string;
+}
 
 const DEFAULT_MAX_TURNS = 10;
 const STDERR_TRUNCATE = 2000;
@@ -253,10 +261,40 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       },
     );
 
+    await step.do("record-session-start", async () => {
+      try {
+        await new AgentSessionStore(this.env.DB).create({
+          id: sessionId,
+          linearIssueId: issueGraphqlId,
+          linearIssueTitle:
+            webhookEvent.agentSession.issue?.title ?? null,
+          status: "running",
+          triggeredBy: webhookEvent.action,
+          team:
+            webhookEvent.agentSession.issue?.team?.key ??
+            webhookEvent.agentSession.issue?.teamId ??
+            null,
+          repo: resolved.repoUrl,
+          prompt: resolved.prompt,
+          configSnapshot: {
+            model: resolved.model,
+            max_turns: resolved.maxTurns,
+            engine: resolved.engine,
+          },
+        });
+      } catch (e) {
+        console.error(
+          "session_record_start_failed",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    });
+
     let prompt = resolved.prompt;
     let lastAssistant: string | null = null;
     let terminal: TurnOutcome | null = null;
     let turnsRun = 0;
+    const allEventSummaries: EventSummaryItem[] = [];
 
     for (let turn = 1; turn <= maxTurns; turn++) {
       turnsRun = turn;
@@ -286,6 +324,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         terminal = outcome;
         break;
       }
+      allEventSummaries.push(...outcome.eventSummary);
       if (outcome.lastAssistant) lastAssistant = outcome.lastAssistant;
 
       if (outcome.kind === "done") {
@@ -302,6 +341,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           result: outcome.result,
           lastAssistant: outcome.lastAssistant,
           inbandError: "max_turns_reached",
+          eventSummary: [],
         };
         break;
       }
@@ -452,6 +492,38 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       }
     });
 
+    await step.do("record-session-end", async () => {
+      try {
+        const finalStatus =
+          terminal!.kind === "dispatch_error"
+            ? "error"
+            : terminal!.kind === "done" &&
+                terminal!.result.exit_code === 0
+              ? "completed"
+              : "error";
+        const errorMsg =
+          terminal!.kind === "dispatch_error"
+            ? terminal!.message
+            : terminal!.kind === "done" && terminal!.inbandError
+              ? terminal!.inbandError
+              : null;
+        await new AgentSessionStore(this.env.DB).update(sessionId, {
+          status: finalStatus,
+          completedAt: new Date().toISOString(),
+          error: errorMsg,
+          messages:
+            allEventSummaries.length > 0
+              ? JSON.stringify(allEventSummaries)
+              : null,
+        });
+      } catch (e) {
+        console.error(
+          "session_record_end_failed",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    });
+
     return {
       status: terminal.kind === "dispatch_error" ? "error" : "ok",
       exit_code:
@@ -555,11 +627,12 @@ async function runTurn(
   }
 
   const lastAssistant = lastAssistantText(events);
+  const eventSummary = summarizeEvents(events);
 
   if (turnEndReason === "needs_continuation" && result.exit_code === 0) {
-    return { kind: "needs_continuation", result, lastAssistant };
+    return { kind: "needs_continuation", result, lastAssistant, eventSummary };
   }
-  return { kind: "done", result, lastAssistant, inbandError };
+  return { kind: "done", result, lastAssistant, inbandError, eventSummary };
 }
 
 function parseMaxTurns(raw: string | undefined): number {
@@ -583,6 +656,31 @@ function buildContinuationPrompt(
     ? `Previous turn's response:\n${previousAssistant}\n\n---\n`
     : "";
   return `${previous}Continuing the same task. Original request:\n\n${originalPrompt}`;
+}
+
+function summarizeEvents(events: NormalizedEvent[]): EventSummaryItem[] {
+  const now = new Date().toISOString();
+  return events
+    .filter((e) => e.type !== "turn_end")
+    .map((e) => {
+      const item: EventSummaryItem = { type: e.type, timestamp: now };
+      if (e.type === "thought" || e.type === "assistant_msg") {
+        item.body = truncate(e.text, 500);
+      } else if (e.type === "tool_call") {
+        const argStr =
+          typeof e.args === "string"
+            ? e.args
+            : JSON.stringify(e.args ?? "");
+        item.body = `${e.tool}(${truncate(argStr, 200)})`;
+      } else if (e.type === "tool_result") {
+        item.body = truncate(e.result ?? (e.ok ? "ok" : "error"), 200);
+      } else if (e.type === "error") {
+        item.body = e.message;
+      } else if (e.type === "result") {
+        item.body = `exit_code=${e.exit_code}`;
+      }
+      return item;
+    });
 }
 
 async function safe(fn: () => Promise<unknown>): Promise<void> {

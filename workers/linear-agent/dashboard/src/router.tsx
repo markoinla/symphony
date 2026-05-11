@@ -5,6 +5,7 @@ import {
   Outlet,
   Link,
 } from "@tanstack/react-router";
+import { SessionsPage } from "./components/SessionsPage";
 import { AuthContext, useAuth, useAuthProvider } from "./use-auth";
 
 const rootRoute = createRootRoute({
@@ -160,7 +161,7 @@ const projectsRoute = createRoute({
 const sessionsRoute = createRoute({
   getParentRoute: () => dashboardLayout,
   path: "/dashboard/sessions",
-  component: () => <h2>Sessions</h2>,
+  component: SessionsPage,
 });
 
 const routeTree = rootRoute.addChildren([

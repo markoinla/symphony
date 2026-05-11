@@ -1,12 +1,14 @@
 /**
  * D1-backed repository for the linear-agent worker.
  *
- * Three tables:
+ * Four tables:
  *   - `installations` — one row per Linear org OAuth (app install).
  *   - `projects`      — per-team config: repo URL, engine, model, max_turns.
  *   - `users`         — per-user OAuth tokens for dashboard login.
+ *   - `sessions`      — agent session runs with debug payload.
  *
- * Migrations: `migrations/0001_init.sql`, `migrations/0002_users.sql`.
+ * Migrations: `migrations/0001_init.sql`, `migrations/0002_users.sql`,
+ *             `migrations/0003_sessions.sql`.
  */
 
 export interface InstallationRecord {
@@ -297,5 +299,178 @@ export class ProjectStore {
       .bind(teamId)
       .run();
     return (result.meta.changes ?? 0) > 0;
+  }
+}
+
+export interface SessionRecord {
+  id: string;
+  linear_issue_id: string | null;
+  linear_issue_title: string | null;
+  status: string;
+  started_at: string;
+  completed_at: string | null;
+  triggered_by: string | null;
+  team: string | null;
+  repo: string | null;
+  prompt: string | null;
+  config_snapshot: string | null;
+  stderr: string | null;
+  dispatcher_logs: string | null;
+  messages: string | null;
+  error: string | null;
+}
+
+export interface SessionListFilter {
+  team?: string;
+  repo?: string;
+  status?: string;
+  triggered_by?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export class AgentSessionStore {
+  constructor(private readonly db: D1Database) {}
+
+  async create(input: {
+    id: string;
+    linearIssueId?: string | null;
+    linearIssueTitle?: string | null;
+    status?: string;
+    triggeredBy?: string | null;
+    team?: string | null;
+    repo?: string | null;
+    prompt?: string | null;
+    configSnapshot?: Record<string, unknown> | null;
+  }): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO sessions (id, linear_issue_id, linear_issue_title, status, triggered_by, team, repo, prompt, config_snapshot)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        input.id,
+        input.linearIssueId ?? null,
+        input.linearIssueTitle ?? null,
+        input.status ?? "running",
+        input.triggeredBy ?? null,
+        input.team ?? null,
+        input.repo ?? null,
+        input.prompt ?? null,
+        input.configSnapshot ? JSON.stringify(input.configSnapshot) : null,
+      )
+      .run();
+  }
+
+  async update(
+    id: string,
+    fields: {
+      status?: string;
+      completedAt?: string;
+      error?: string | null;
+      stderr?: string | null;
+      dispatcherLogs?: string | null;
+      messages?: string | null;
+    },
+  ): Promise<void> {
+    const sets: string[] = [];
+    const values: (string | null)[] = [];
+
+    if (fields.status !== undefined) {
+      sets.push("status = ?");
+      values.push(fields.status);
+    }
+    if (fields.completedAt !== undefined) {
+      sets.push("completed_at = ?");
+      values.push(fields.completedAt);
+    }
+    if (fields.error !== undefined) {
+      sets.push("error = ?");
+      values.push(fields.error ?? null);
+    }
+    if (fields.stderr !== undefined) {
+      sets.push("stderr = ?");
+      values.push(fields.stderr ?? null);
+    }
+    if (fields.dispatcherLogs !== undefined) {
+      sets.push("dispatcher_logs = ?");
+      values.push(fields.dispatcherLogs ?? null);
+    }
+    if (fields.messages !== undefined) {
+      sets.push("messages = ?");
+      values.push(fields.messages ?? null);
+    }
+
+    if (sets.length === 0) return;
+
+    await this.db
+      .prepare(`UPDATE sessions SET ${sets.join(", ")} WHERE id = ?`)
+      .bind(...values, id)
+      .run();
+  }
+
+  async get(id: string): Promise<SessionRecord | null> {
+    return await this.db
+      .prepare(
+        `SELECT id, linear_issue_id, linear_issue_title, status, started_at,
+                completed_at, triggered_by, team, repo, prompt,
+                config_snapshot, stderr, dispatcher_logs, messages, error
+         FROM sessions WHERE id = ?`,
+      )
+      .bind(id)
+      .first<SessionRecord>();
+  }
+
+  async list(filter?: SessionListFilter): Promise<SessionRecord[]> {
+    const conditions: string[] = [];
+    const values: string[] = [];
+
+    if (filter?.team) {
+      conditions.push("team = ?");
+      values.push(filter.team);
+    }
+    if (filter?.repo) {
+      conditions.push("repo = ?");
+      values.push(filter.repo);
+    }
+    if (filter?.status) {
+      conditions.push("status = ?");
+      values.push(filter.status);
+    }
+    if (filter?.triggered_by) {
+      conditions.push("triggered_by = ?");
+      values.push(filter.triggered_by);
+    }
+
+    const where =
+      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const limit = filter?.limit ?? 50;
+    const offset = filter?.offset ?? 0;
+
+    const result = await this.db
+      .prepare(
+        `SELECT id, linear_issue_id, linear_issue_title, status, started_at,
+                completed_at, triggered_by, team, repo, prompt,
+                config_snapshot, stderr, dispatcher_logs, messages, error
+         FROM sessions ${where}
+         ORDER BY started_at DESC
+         LIMIT ? OFFSET ?`,
+      )
+      .bind(...values, limit, offset)
+      .all<SessionRecord>();
+    return result.results;
+  }
+
+  async listRunning(): Promise<SessionRecord[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT id, linear_issue_id, linear_issue_title, status, started_at,
+                completed_at, triggered_by, team, repo, prompt,
+                config_snapshot, stderr, dispatcher_logs, messages, error
+         FROM sessions WHERE status = 'running'
+         ORDER BY started_at DESC`,
+      )
+      .all<SessionRecord>();
+    return result.results;
   }
 }
