@@ -183,25 +183,18 @@ export const workflowTemplates: WorkflowTemplate[] = [
     id: 'engineering_default',
     name: 'Engineering Default',
     description:
-      'Start a Codex session when an issue moves to Todo. Mirrors the six baseline triggers from the SYM-295 spec — add triggers separately on the Triggers tab.',
+      'Start an agent session when an issue moves to Todo. Add triggers on the Triggers tab after creating the workflow.',
     body: {
+      // Only the fields the runner actually consumes today (engine,
+      // model, max_turns, prompt_template). Tools / sandbox / hooks /
+      // MCP fields are deliberately omitted from the template so they
+      // don't silently activate when the dispatcher learns to wire
+      // them — that should be a deliberate per-workflow opt-in.
       name: 'Engineering Default',
       description:
-        'Start a Codex session when an issue moves to Todo. Posts result to Human Review.',
-      engine: 'codex',
-      model: 'claude-sonnet-4-6',
-      max_turns: 30,
-      max_continuations: 1,
-      allowed_tools: ['bash', 'edit', 'read', 'write'],
-      disallowed_tools: ['rm -rf'],
-      permission_mode: 'ask',
-      allowed_domains: ['github.com', 'linear.app'],
-      additional_read_paths: [],
-      additional_write_paths: [],
-      hook_after_create: null,
-      hook_before_remove: null,
-      hook_timeout_ms: 30_000,
-      mcp_servers: [],
+        'Start an agent session when an issue moves to Todo. Posts result to Human Review.',
+      engine: 'pi',
+      max_turns: 1,
       prompt_template: engineeringDefaultPromptTemplate,
     },
   },

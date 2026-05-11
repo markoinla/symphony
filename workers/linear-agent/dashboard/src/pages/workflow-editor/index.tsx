@@ -14,7 +14,6 @@ import {
 } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Field } from '@/components/field'
-import { ChipInput } from '@/components/chip-input'
 import {
   ErrorPanel,
   FeedbackBanner,
@@ -41,6 +40,16 @@ import { formatQueryError } from '@/lib/helpers'
 
 import { TriggerRow } from './trigger-row'
 import { PromptEditor } from './prompt-editor'
+
+// MVP — the Tools & sandbox tab is hidden because the fields it
+// surfaced (allowed_tools, mcp_servers, hooks, permission_mode,
+// allowed_domains, additional_*_paths) aren't yet plumbed through to
+// the sandbox-dispatcher / pi engine. The columns are still in D1
+// and round-trip through the API, but the editor doesn't pretend they
+// do something they don't. Re-enable the tab + the ToolsTab/
+// McpServerEditor components once those fields are wired (Layer 2 of
+// the SYM-295 follow-up plan — sandbox-dispatcher /run schema +
+// engine adapter changes).
 
 // Editor-local working copy of a workflow. We normalize all nullable
 // string fields to empty strings and nullable arrays to [] so form
@@ -114,67 +123,6 @@ function draftToBody(draft: Draft): WorkflowUpdateBody {
     hook_timeout_ms: draft.hook_timeout_ms,
     prompt_template: draft.prompt_template,
   }
-}
-
-function McpServerEditor({
-  servers,
-  onChange,
-}: {
-  servers: McpServer[]
-  onChange: (next: McpServer[]) => void
-}) {
-  // Mirrors the server's mcpServerSchema: name + url (HTTP/SSE
-  // endpoint) OR name + command + args (stdio launch). The UI keeps
-  // them in one row — only fill the relevant column.
-  function updateAt(idx: number, patch: Partial<McpServer>) {
-    onChange(servers.map((s, i) => (i === idx ? { ...s, ...patch } : s)))
-  }
-  function removeAt(idx: number) {
-    onChange(servers.filter((_, i) => i !== idx))
-  }
-  function add() {
-    onChange([...servers, { name: '' }])
-  }
-
-  return (
-    <div className="grid gap-3">
-      {servers.length === 0 ? (
-        <p className="text-xs text-th-text-4">No MCP servers configured.</p>
-      ) : null}
-      {servers.map((server, idx) => (
-        <div
-          key={idx}
-          className="grid gap-3 rounded-md border border-th-border bg-th-surface p-3 sm:grid-cols-[1fr_2fr_auto]"
-        >
-          <Input
-            onChange={(event) => updateAt(idx, { name: event.target.value })}
-            placeholder="name"
-            value={server.name}
-          />
-          <Input
-            onChange={(event) =>
-              updateAt(idx, { url: event.target.value || undefined })
-            }
-            placeholder="https://… (or leave blank for stdio)"
-            value={server.url ?? ''}
-          />
-          <Button
-            aria-label="Remove MCP server"
-            onClick={() => removeAt(idx)}
-            size="icon-sm"
-            type="button"
-            variant="ghost"
-          >
-            <Trash2 className="h-3.5 w-3.5 text-th-danger" />
-          </Button>
-        </div>
-      ))}
-      <Button onClick={add} size="sm" type="button" variant="outline">
-        <Plus className="mr-1 h-3 w-3" />
-        Add MCP server
-      </Button>
-    </div>
-  )
 }
 
 export function WorkflowEditorView() {
@@ -383,17 +331,12 @@ export function WorkflowEditorView() {
       <Tabs defaultValue="basics">
         <TabsList>
           <TabsTrigger value="basics">Basics</TabsTrigger>
-          <TabsTrigger value="tools">Tools & sandbox</TabsTrigger>
           <TabsTrigger value="triggers">Triggers</TabsTrigger>
           <TabsTrigger value="prompt">Prompt</TabsTrigger>
         </TabsList>
 
         <TabsContent value="basics">
           <BasicsTab draft={draft} patchDraft={patchDraft} />
-        </TabsContent>
-
-        <TabsContent value="tools">
-          <ToolsTab draft={draft} patchDraft={patchDraft} />
         </TabsContent>
 
         <TabsContent value="triggers">
@@ -488,7 +431,10 @@ function BasicsTab({
             value={draft.model}
           />
         </Field>
-        <Field label="Max turns">
+        <Field
+          label="Re-prompt budget"
+          hint="How many times to re-invoke the engine if it stops short. Default 1 — pi and claude-code self-manage their turn loops internally; raise only when the engine consistently quits with work left."
+        >
           <Input
             min={1}
             onChange={(event) =>
@@ -500,155 +446,6 @@ function BasicsTab({
             value={String(draft.max_turns)}
           />
         </Field>
-        <Field label="Max continuations">
-          <Input
-            min={0}
-            onChange={(event) =>
-              patchDraft({
-                max_continuations:
-                  Number.parseInt(event.target.value, 10) || 0,
-              })
-            }
-            type="number"
-            value={String(draft.max_continuations)}
-          />
-        </Field>
-      </div>
-    </div>
-  )
-}
-
-function ToolsTab({
-  draft,
-  patchDraft,
-}: {
-  draft: Draft
-  patchDraft: (patch: Partial<Draft>) => void
-}) {
-  return (
-    <div className="grid max-w-3xl gap-5">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Allowed tools">
-          <ChipInput
-            monospace
-            onChange={(allowed_tools) => patchDraft({ allowed_tools })}
-            placeholder="bash, edit, read…"
-            value={draft.allowed_tools}
-          />
-        </Field>
-        <Field label="Disallowed tools">
-          <ChipInput
-            monospace
-            onChange={(disallowed_tools) => patchDraft({ disallowed_tools })}
-            placeholder="rm -rf …"
-            value={draft.disallowed_tools}
-          />
-        </Field>
-      </div>
-
-      <Field label="Permission mode">
-        <Select
-          onValueChange={(value) => patchDraft({ permission_mode: value })}
-          value={draft.permission_mode}
-        >
-          <SelectTrigger className="w-full max-w-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="ask">ask</SelectItem>
-            <SelectItem value="auto">auto</SelectItem>
-            <SelectItem value="danger">danger</SelectItem>
-          </SelectContent>
-        </Select>
-      </Field>
-
-      <Field label="Allowed domains" hint="Host allow-list for outbound HTTP.">
-        <ChipInput
-          monospace
-          onChange={(allowed_domains) => patchDraft({ allowed_domains })}
-          placeholder="github.com"
-          value={draft.allowed_domains}
-        />
-      </Field>
-
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="Additional read paths">
-          <ChipInput
-            monospace
-            onChange={(additional_read_paths) =>
-              patchDraft({ additional_read_paths })
-            }
-            placeholder="/etc/config"
-            value={draft.additional_read_paths}
-          />
-        </Field>
-        <Field label="Additional write paths">
-          <ChipInput
-            monospace
-            onChange={(additional_write_paths) =>
-              patchDraft({ additional_write_paths })
-            }
-            placeholder="/tmp/scratch"
-            value={draft.additional_write_paths}
-          />
-        </Field>
-      </div>
-
-      <Field
-        label="Hook: after create"
-        hint="Shell run right after workspace creation."
-      >
-        <Textarea
-          className="font-mono"
-          onChange={(event) =>
-            patchDraft({ hook_after_create: event.target.value })
-          }
-          placeholder="bun install"
-          rows={4}
-          value={draft.hook_after_create}
-        />
-      </Field>
-
-      <Field
-        label="Hook: before remove"
-        hint="Cleanup before the workspace is torn down."
-      >
-        <Textarea
-          className="font-mono"
-          onChange={(event) =>
-            patchDraft({ hook_before_remove: event.target.value })
-          }
-          placeholder="rm -rf node_modules"
-          rows={4}
-          value={draft.hook_before_remove}
-        />
-      </Field>
-
-      <Field label="Hook timeout (ms)">
-        <Input
-          min={1000}
-          onChange={(event) =>
-            patchDraft({
-              hook_timeout_ms:
-                Number.parseInt(event.target.value, 10) || 30_000,
-            })
-          }
-          type="number"
-          value={String(draft.hook_timeout_ms)}
-        />
-      </Field>
-
-      <div>
-        <Field
-          label="MCP servers"
-          hint="Model Context Protocol endpoints the agent can call."
-        >
-          <span />
-        </Field>
-        <McpServerEditor
-          onChange={(mcp_servers) => patchDraft({ mcp_servers })}
-          servers={draft.mcp_servers}
-        />
       </div>
     </div>
   )
