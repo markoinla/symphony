@@ -43,6 +43,17 @@ interface UserRow {
   refreshed_at: string;
 }
 
+interface OrgCredentialRow {
+  id: number;
+  org_id: string;
+  kind: string;
+  ciphertext: ArrayBuffer;
+  dek_ciphertext: ArrayBuffer;
+  kek_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
 interface DashboardSessionRow {
   token: string;
   linear_user_id: string;
@@ -52,11 +63,13 @@ interface DashboardSessionRow {
 
 let nextInstallId = 1;
 let nextProjectId = 1;
+let nextCredentialId = 1;
 
 export class FakeD1 {
   installations = new Map<string, InstallationRow>();
   projects = new Map<string, ProjectRow>();
   users = new Map<string, UserRow>();
+  orgCredentials = new Map<string, OrgCredentialRow>();
   dashboardSessions = new Map<string, DashboardSessionRow>();
 
   prepare(sql: string) {
@@ -137,6 +150,32 @@ class FakeStatement {
       this.db.projects.delete(key);
       return { success: true, meta: { changes: had ? 1 : 0 } };
     }
+    if (/^INSERT INTO org_credentials/i.test(sql)) {
+      const [orgId, kind, ciphertext, dekCiphertext, kekVersion] = this.bindings as [
+        string, string, ArrayBuffer, ArrayBuffer, number,
+      ];
+      const key = `${orgId}:${kind}`;
+      const existing = this.db.orgCredentials.get(key);
+      const now = new Date().toISOString();
+      this.db.orgCredentials.set(key, {
+        id: existing?.id ?? nextCredentialId++,
+        org_id: orgId,
+        kind,
+        ciphertext,
+        dek_ciphertext: dekCiphertext,
+        kek_version: kekVersion,
+        created_at: existing?.created_at ?? now,
+        updated_at: now,
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (/^DELETE FROM org_credentials/i.test(sql)) {
+      const [orgId, kind] = this.bindings as [string, string];
+      const key = `${orgId}:${kind}`;
+      const had = this.db.orgCredentials.has(key);
+      this.db.orgCredentials.delete(key);
+      return { success: true, meta: { changes: had ? 1 : 0 } };
+    }
     if (/^INSERT INTO dashboard_sessions/i.test(sql)) {
       const [token, linearUserId, expiresAt] = this.bindings as [string, string, string];
       this.db.dashboardSessions.set(token, {
@@ -202,6 +241,11 @@ class FakeStatement {
       }
       return null;
     }
+    if (/^SELECT .* FROM org_credentials WHERE org_id = \? AND kind/i.test(sql)) {
+      const [orgId, kind] = this.bindings as [string, string];
+      const key = `${orgId}:${kind}`;
+      return (this.db.orgCredentials.get(key) as unknown as T) ?? null;
+    }
     if (/^SELECT .* FROM users WHERE linear_user_id/i.test(sql)) {
       const [userId] = this.bindings as [string];
       return (this.db.users.get(userId) as unknown as T) ?? null;
@@ -241,6 +285,14 @@ class FakeStatement {
         success: true,
         results: Array.from(this.db.projects.values()) as unknown as T[],
       };
+    }
+    if (/^SELECT kind FROM org_credentials WHERE org_id = \? ORDER BY kind/i.test(sql)) {
+      const [orgId] = this.bindings as [string];
+      const kinds = Array.from(this.db.orgCredentials.values())
+        .filter((r) => r.org_id === orgId)
+        .map((r) => ({ kind: r.kind }))
+        .sort((a, b) => a.kind.localeCompare(b.kind));
+      return { success: true, results: kinds as unknown as T[] };
     }
     if (/^SELECT .* FROM users WHERE organization_id .* ORDER BY created_at/i.test(sql)) {
       const [orgId] = this.bindings as [string];

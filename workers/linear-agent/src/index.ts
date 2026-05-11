@@ -61,6 +61,11 @@ export interface Env {
   //   wrangler secret put GITHUB_APP_PRIVATE_KEY
   GITHUB_APP_ID?: string;
   GITHUB_APP_PRIVATE_KEY?: string;
+
+  // Master KEK (base64-encoded AES-256 key) for envelope encryption
+  // of per-org credentials in the org_credentials table. Set with:
+  //   wrangler secret put CREDENTIAL_KEK
+  CREDENTIAL_KEK?: string;
 }
 
 // Re-export the Workflow class so wrangler's class_name resolution finds
