@@ -200,6 +200,12 @@ describe("GET /github/install/callback", () => {
 
     const row = db.installations.get("acme-corp")!;
     expect(row.github_app_installation_id).toBe(99999);
+
+    const ghInstall = db.githubInstalls.get("acme-corp")!;
+    expect(ghInstall.install_id).toBe(99999);
+    expect(ghInstall.account_login).toBe("acme-corp");
+    expect(ghInstall.account_type).toBe("Organization");
+    expect(ghInstall.repo_selection).toBe("all");
   });
 
   it("returns 502 when GitHub API verification fails", async () => {

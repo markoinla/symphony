@@ -15,7 +15,7 @@ import { Hono } from "hono";
 import type { Env } from "../index";
 import { CredentialStore } from "../lib/credentials";
 import { createAppJwt } from "../lib/github-app";
-import { InstallationStore } from "../lib/store";
+import { GitHubInstallStore, InstallationStore } from "../lib/store";
 
 const STATE_TTL_SECONDS = 600;
 
@@ -98,15 +98,28 @@ export function buildGitHubRouter() {
     }
 
     const data = (await ghRes.json()) as {
-      account?: { login?: string };
+      account?: { login?: string; type?: string };
+      repository_selection?: string;
     };
     const accountLogin = data.account?.login;
     if (!accountLogin) {
       return c.json({ error: "github_account_not_found" }, 502);
     }
 
+    const accountType = data.account?.type ?? "Organization";
+    const repoSelection = data.repository_selection ?? "all";
+
     const store = new InstallationStore(c.env.DB);
     await store.updateGitHubAppInstallation(accountLogin, ghInstallId);
+
+    const ghInstallStore = new GitHubInstallStore(c.env.DB);
+    await ghInstallStore.upsert({
+      orgId: accountLogin,
+      installId: ghInstallId,
+      accountLogin,
+      accountType,
+      repoSelection,
+    });
 
     return c.json({
       ok: true,
