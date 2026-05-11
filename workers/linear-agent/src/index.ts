@@ -1,8 +1,11 @@
 import { Hono } from "hono";
 
 import { buildAdminRouter } from "./routes/admin";
+import { buildDashboardApiRouter } from "./routes/dashboard-api";
+import { buildGitHubInstallRouter } from "./routes/github-install";
 import { buildOAuthRouter } from "./routes/oauth";
 import { buildWebhookRouter } from "./routes/webhook";
+import { readSessionFromRequest } from "./lib/session-cookie";
 
 export interface Env {
   // KV namespace storing OAuth state nonces and webhook delivery
@@ -50,7 +53,35 @@ export interface Env {
   // apply the `symphony` label. Set with
   // `wrangler secret put GITHUB_TOKEN`. When unset, the workflow
   // posts the branch info as a thought but skips PR creation.
+  // SYM-268: retired in favor of `github_app_installation_id` per-org
+  // + `mintInstallationToken`. Kept as a transitional fallback so
+  // single-org installs keep working while orgs install the App.
   GITHUB_TOKEN?: string;
+
+  // SYM-268 envelope encryption: master KEK used to wrap per-org
+  // DEKs in the `org_credentials` table. Bump to KEK_V2 when
+  // rotating. See `src/lib/crypto.ts`. 64-char hex string (32 bytes).
+  KEK_V1?: string;
+
+  // SYM-268 dashboard session cookies. Random 32+ byte string;
+  // signing key for `sym_dash_session`. Rotating this is a global
+  // session reset.
+  DASHBOARD_COOKIE_SECRET?: string;
+
+  // SYM-268 GitHub App — replaces the org-wide `GITHUB_TOKEN` PAT.
+  // `GITHUB_APP_ID` is the numeric App id; `GITHUB_APP_PRIVATE_KEY`
+  // is an RS256 PEM (PKCS#8 or PKCS#1) used to sign installation
+  // JWTs; `GITHUB_APP_INSTALL_URL` is the public install URL,
+  // e.g. https://github.com/apps/<slug>/installations/new.
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_PRIVATE_KEY?: string;
+  GITHUB_APP_INSTALL_URL?: string;
+
+  // SYM-268 (Phase 7) static assets binding for the dashboard SPA.
+  // Populated by wrangler's `assets` directive pointing at
+  // dashboard/dist. When unset, `/dashboard/*` returns 404 — the
+  // OAuth/install flows still work but there's no UI to land on.
+  ASSETS?: Fetcher;
 }
 
 // Re-export the Workflow class so wrangler's class_name resolution finds
@@ -73,6 +104,40 @@ export function buildApp() {
   app.route("/", buildOAuthRouter());
   app.route("/", buildWebhookRouter());
   app.route("/", buildAdminRouter());
+  app.route("/", buildGitHubInstallRouter());
+  app.route("/", buildDashboardApiRouter());
+
+  // Dashboard SPA. Auth-gated at the entry point so a logged-out user
+  // bounces straight into Linear instead of seeing an empty shell.
+  //
+  // Path layout:
+  //   /dashboard          → index.html (auth-gated)
+  //   /dashboard/<...>    → static assets (CSS/JS bundles, history routes)
+  //
+  // Vite builds with `base: "/dashboard/"` so the HTML references
+  // `/dashboard/assets/...`. The wrangler `assets` binding serves
+  // from the root of `dashboard/dist` (no path prefix support), so we
+  // strip `/dashboard` from the request before forwarding to ASSETS.
+  // `not_found_handling: "single-page-application"` in wrangler.jsonc
+  // makes ASSETS fall back to /index.html on unknown paths (for SPA
+  // history routes).
+  app.get("/dashboard", async (c) => {
+    const session = await readSessionFromRequest(c.env, c.req.raw);
+    if (!session) return c.redirect("/oauth/user/authorize");
+    if (!c.env.ASSETS) return c.json({ error: "assets_unbound" }, 500);
+    const url = new URL(c.req.url);
+    // The assets binding 307s `/index.html` → `/` so we fetch `/`
+    // directly. Returns the SPA shell with all asset paths
+    // (`/dashboard/assets/...`) intact for the browser to fetch.
+    url.pathname = "/";
+    return c.env.ASSETS.fetch(new Request(url.toString(), c.req.raw));
+  });
+  app.get("/dashboard/*", async (c) => {
+    if (!c.env.ASSETS) return c.json({ error: "assets_unbound" }, 500);
+    const url = new URL(c.req.url);
+    url.pathname = url.pathname.replace(/^\/dashboard/, "") || "/";
+    return c.env.ASSETS.fetch(new Request(url.toString(), c.req.raw));
+  });
 
   return app;
 }

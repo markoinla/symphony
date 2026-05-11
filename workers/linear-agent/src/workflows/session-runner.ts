@@ -34,6 +34,9 @@ import {
   postThought,
 } from "../lib/activities";
 import { GitHubError, addLabels, createPr } from "../lib/github";
+import { GitHubAppError, mintInstallationToken } from "../lib/github-app";
+import { assembleRunCredentials } from "../lib/credentials";
+import type { RunCredentials } from "../lib/dispatcher";
 import { transitionIssue } from "../lib/issues";
 import {
   DispatcherClient,
@@ -204,6 +207,42 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     const issueGraphqlId = webhookEvent.agentSession.issue?.id ?? null;
     const maxTurns = resolved.maxTurns;
 
+    // SYM-268 (Phase 5): assemble the per-tenant credentials block
+    // forwarded to the dispatcher on every /run. Mints a fresh GH App
+    // installation token, refreshes the best Linear user token,
+    // decrypts BYO API keys, and rewrites the repo URL with
+    // `x-access-token:<token>@` for the dispatcher's `git clone` step.
+    //
+    // Wrapped in its own step so credential acquisition is checkpointed
+    // independently of the turn loop — workflow eviction between this
+    // step and the first turn re-mints fresh tokens (Linear refresh
+    // tokens issue new pairs on each call, so re-mint is idempotent
+    // from the user's perspective; the previous token is silently
+    // invalidated by Linear).
+    const orgIdForCreds = webhookEvent.organizationId;
+    // Linear's AgentSessionEvent doesn't surface "who triggered" as a
+    // top-level field, but `agentSession.comment?.userId` captures the
+    // @-mention / assignment path. When absent (programmatic delivery),
+    // the picker falls back to the installer.
+    const actorLinearUserId =
+      webhookEvent.agentSession.comment?.userId ?? null;
+    // Pi's default timeout is 10min and we cap at 30min — use the
+    // upper bound so refresh-aggressively logic always covers the
+    // worst case.
+    const RUN_TIMEOUT_MS_FOR_REFRESH = 30 * 60 * 1000;
+    const assembled: { repoUrl: string; credentials: RunCredentials } =
+      orgIdForCreds
+        ? await step.do("assemble-credentials", async () =>
+            assembleRunCredentials({
+              env: this.env,
+              organizationId: orgIdForCreds,
+              triggeredByLinearUserId: actorLinearUserId,
+              runTimeoutMs: RUN_TIMEOUT_MS_FOR_REFRESH,
+              repoUrl: resolved.repoUrl,
+            }),
+          )
+        : { repoUrl: resolved.repoUrl, credentials: {} };
+
     // Item 5: move the issue to "In Progress" on `created` deliveries
     // when it's currently in "Todo". No-op on `prompted` events
     // (already in flight) and on issues that aren't in Todo (Rework,
@@ -244,11 +283,12 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           runTurn(this.env, sessionId, token, {
             scope: this.env.DEFAULT_SCOPE,
             issueId: issueIdentifier,
-            repoUrl: resolved.repoUrl,
+            repoUrl: assembled.repoUrl,
             prompt: captured,
             engine: resolved.engine,
             model: resolved.model,
             turn,
+            credentials: assembled.credentials,
           }),
       );
 
@@ -292,23 +332,48 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       };
     }
 
-    // Item 4: if the dispatch produced a branch AND the engine exited
-    // cleanly, create the GitHub PR and attach it to the Linear issue.
-    // Wrapped in its own step so the PR creation is checkpointed
-    // independently from the terminal activity post — a workflow
-    // restart after PR creation but before the Linear post won't make
-    // a duplicate PR (GitHub's 422 fallback uses the existing one),
-    // and a restart between the two ensures the attachment still
-    // lands.
+    // SYM-268: mint a short-lived GitHub App installation token per
+    // org instead of reading a single org-wide PAT. Falls back to the
+    // legacy `GITHUB_TOKEN` env secret when an org hasn't installed
+    // the App yet (transitional path so single-tenant installs keep
+    // working during cutover).
+    let githubToken: string | null = null;
+    if (terminal.kind === "done" && terminal.result.exit_code === 0 && terminal.result.branch) {
+      githubToken = await step.do("resolve-github-token", async () => {
+        const orgId = webhookEvent.organizationId;
+        const install = orgId
+          ? await new InstallationStore(this.env.DB).get(orgId)
+          : await new InstallationStore(this.env.DB).getOnlyInstallation();
+        if (install?.github_app_installation_id) {
+          try {
+            return await mintInstallationToken(
+              this.env,
+              install.github_app_installation_id,
+            );
+          } catch (e) {
+            console.error(
+              "github_app_token_mint_failed",
+              JSON.stringify({
+                org_id: install.organization_id,
+                installation_id: install.github_app_installation_id,
+                error: e instanceof GitHubAppError ? `${e.stage}:${e.message}` : String(e),
+              }),
+            );
+          }
+        }
+        return this.env.GITHUB_TOKEN ?? null;
+      });
+    }
+
     let prUrl: string | null = null;
     if (
       terminal.kind === "done" &&
       terminal.result.exit_code === 0 &&
       terminal.result.branch &&
-      this.env.GITHUB_TOKEN
+      githubToken
     ) {
       const branch = terminal.result.branch;
-      const githubToken = this.env.GITHUB_TOKEN;
+      const token_gh = githubToken;
       const issueIdent = issueIdentifier;
       const responseBody = lastAssistant ?? `Symphony agent run for ${issueIdent}`;
 
@@ -325,14 +390,14 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
               body:
                 responseBody.slice(0, 4000) +
                 (issueGraphqlId ? `\n\n_Linear: \`${issueIdent}\`_` : ""),
-              token: githubToken,
+              token: token_gh,
             });
             try {
               await addLabels({
                 repoUrl: resolved.repoUrl,
                 prNumber: pr.number,
                 labels: ["symphony"],
-                token: githubToken,
+                token: token_gh,
               });
             } catch (e) {
               // Label failure is non-fatal — the PR still exists.
@@ -452,6 +517,7 @@ async function runTurn(
     engine: "pi";
     model: string | null;
     turn: number;
+    credentials?: RunCredentials;
   },
 ): Promise<TurnOutcome> {
   const linear = buildActivityClient(token);
@@ -473,6 +539,7 @@ async function runTurn(
       prompt: args.prompt,
       engine: args.engine,
       model: args.model,
+      ...(args.credentials ? { credentials: args.credentials } : {}),
     })) {
       events.push(ev);
 

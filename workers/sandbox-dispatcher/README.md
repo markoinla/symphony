@@ -97,7 +97,42 @@ After the first deploy, confirm the container image built:
 wrangler containers list
 ```
 
-## Auth bootstrap flow
+## Baseline snapshots (SYM-268)
+
+Each engine has one baseline snapshot that every tenant's `/run`
+restores. The snapshot is **binaries-only** — `pi` / `codex` / `claude` /
+`gh` installed but unauthenticated. Per-tenant credentials arrive in
+the `/run` request body (`credentials` block) and are injected as env
+vars at exec time. This replaces the prior per-tenant snapshot model
+where credentials were baked into the filesystem.
+
+Build / rebuild a baseline (re-run when the engine version bumps):
+
+```bash
+# DISPATCH_HMAC_SECRET must match the dispatcher's secret of the same name.
+# Reads .secrets/dispatch-hmac-secret as a fallback.
+scripts/build-baseline.sh pi
+```
+
+The helper bootstraps a PTY sandbox tagged `scope=baseline-pi`,
+prints the PTY URL for you to open in a browser, waits while you
+`npm install -g <engine-cli>` (NO auth commands), then calls
+`/auth/snapshot { scope: "baseline-pi" }`.
+
+`/run` lookups now resolve `baseline-${engine}` first and fall back
+to `scope` for legacy single-tenant deploys that haven't been
+migrated yet. Once every tenant is on baselines, the fallback can
+be removed.
+
+The daily cron job (`triggers.crons` in `wrangler.jsonc`) refreshes
+all stored snapshots — including baselines — before R2's 14-day
+lifecycle GCs them.
+
+## Legacy per-tenant auth bootstrap (deprecated)
+
+> Deprecated by SYM-268. Kept here for transitional single-tenant
+> installs. New deploys should use `scripts/build-baseline.sh` and
+> ship credentials in the `/run` body.
 
 To capture an auth snapshot you log into each CLI inside a one-shot sandbox,
 then ask the dispatcher to persist `/home/node` as a `DirectoryBackup` in

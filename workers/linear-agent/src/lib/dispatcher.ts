@@ -20,6 +20,22 @@
  * (Elixir, dispatcher worker, this client) wire-compatible.
  */
 
+/**
+ * Per-tenant credentials sent inline on every /run. The dispatcher
+ * exports each defined env field as `NAME=<shell-quoted value>`
+ * before exec'ing the engine, writes `mcp_servers` as the engine's
+ * MCP config, and forwards `github_token` to `commitAndPush` for the
+ * post-engine push. SYM-268.
+ */
+export interface RunCredentials {
+  cloudflare_account_id?: string;
+  cloudflare_api_token?: string;
+  anthropic_api_key?: string;
+  openai_api_key?: string;
+  github_token?: string;
+  mcp_servers?: Array<{ name: string; url: string; token: string }>;
+}
+
 export interface RunArgs {
   scope: string;
   issueId: string;
@@ -28,6 +44,7 @@ export interface RunArgs {
   engine: "pi";
   model?: string | null;
   timeoutMs?: number;
+  credentials?: RunCredentials;
 }
 
 export interface RunResult {
@@ -117,6 +134,7 @@ export class DispatcherClient {
       engine: args.engine,
       ...(args.model ? { model: args.model } : {}),
       ...(args.timeoutMs ? { timeout_ms: args.timeoutMs } : {}),
+      ...(args.credentials ? { credentials: args.credentials } : {}),
     });
 
     const sig = await computeSignature(this.secret, body);
@@ -165,6 +183,7 @@ export class DispatcherClient {
       engine: args.engine,
       ...(args.model ? { model: args.model } : {}),
       ...(args.timeoutMs ? { timeout_ms: args.timeoutMs } : {}),
+      ...(args.credentials ? { credentials: args.credentials } : {}),
     });
 
     const sig = await computeSignature(this.secret, body);

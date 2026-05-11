@@ -235,6 +235,7 @@ describe("POST /run (engine: pi)", () => {
     expect(await res.json()).toEqual({
       error: "missing_auth_backup",
       scope: "ghost",
+      engine: "pi",
     });
     // No sandbox should have been created.
     expect(Object.keys(sandboxHandles)).toEqual([]);
@@ -363,6 +364,157 @@ describe("POST /run (engine: pi)", () => {
     expect(res.status).toBe(200);
     const piCall = sandbox.execCalls.find((c) => c.cmd.includes("pi --print"));
     expect(piCall?.opts?.timeout).toBe(30 * 60 * 1000);
+  });
+});
+
+describe("POST /run with credentials block (SYM-268)", () => {
+  it("prepends shell-quoted export lines for each defined env credential", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-200"));
+    sandboxHandles[runSandboxId("SYM-200")] = sandbox;
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-200",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "go",
+      engine: "pi",
+      credentials: {
+        anthropic_api_key: "sk-test-abc'def",      // includes a single quote
+        cloudflare_account_id: "acct-123",
+        cloudflare_api_token: "cf-tok-xyz",
+      },
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const piCall = sandbox.execCalls.find((c) => c.cmd.includes("pi --print"));
+    expect(piCall).toBeDefined();
+    // Sorted by env-var name so the assertion is stable.
+    expect(piCall!.cmd).toContain("export ANTHROPIC_API_KEY='sk-test-abc'\\''def'");
+    expect(piCall!.cmd).toContain("export CLOUDFLARE_ACCOUNT_ID='acct-123'");
+    expect(piCall!.cmd).toContain("export CLOUDFLARE_API_TOKEN='cf-tok-xyz'");
+    // github_token must never be exported as an env var.
+    expect(piCall!.cmd).not.toContain("GITHUB_TOKEN=");
+  });
+
+  it("passes credentials.github_token to commitAndPush in preference to env", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-201"));
+    // commitAndPush issues a sequence of git commands; we just need to
+    // observe that the auth_url contains the body-supplied token, not
+    // the env one.
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      { exitCode: 0, stdout: "", stderr: "" }, // pi
+      { exitCode: 0, stdout: "1\n", stderr: "" }, // git rev-list --count
+      { exitCode: 0, stdout: "", stderr: "" },   // git status --porcelain (empty = no uncommitted)
+      { exitCode: 0, stdout: "", stderr: "" },   // git checkout -B
+      { exitCode: 0, stdout: "", stderr: "" },   // git commit --amend
+      { exitCode: 0, stdout: "abc123\n", stderr: "" }, // git rev-parse HEAD
+      { exitCode: 0, stdout: "", stderr: "" },   // git push (auth_url)
+    ];
+    sandboxHandles[runSandboxId("SYM-201")] = sandbox;
+
+    const env = makeEnv(db);
+    env.DISPATCH_GITHUB_TOKEN = "env-fallback-pat";
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-201",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "do",
+      engine: "pi",
+      credentials: { github_token: "ghs_body_supplied" },
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    const pushCall = sandbox.execCalls.find((c) => c.cmd.includes("auth_url"));
+    expect(pushCall).toBeDefined();
+    expect(pushCall!.cmd).toContain("ghs_body_supplied");
+    expect(pushCall!.cmd).not.toContain("env-fallback-pat");
+  });
+
+  it("falls back to DISPATCH_GITHUB_TOKEN when credentials.github_token is absent", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-202"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      { exitCode: 0, stdout: "", stderr: "" }, // pi
+      { exitCode: 0, stdout: "1\n", stderr: "" }, // rev-list count
+      { exitCode: 0, stdout: "", stderr: "" }, // status
+      { exitCode: 0, stdout: "", stderr: "" }, // checkout
+      { exitCode: 0, stdout: "", stderr: "" }, // amend
+      { exitCode: 0, stdout: "abc\n", stderr: "" }, // rev-parse
+      { exitCode: 0, stdout: "", stderr: "" }, // push
+    ];
+    sandboxHandles[runSandboxId("SYM-202")] = sandbox;
+
+    const env = makeEnv(db);
+    env.DISPATCH_GITHUB_TOKEN = "env-fallback-pat";
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-202",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "do",
+      engine: "pi",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    const pushCall = sandbox.execCalls.find((c) => c.cmd.includes("auth_url"));
+    expect(pushCall!.cmd).toContain("env-fallback-pat");
+  });
+
+  it("rejects malformed credentials block with 400", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBackup(db, "alice");
+
+    const body = JSON.stringify({
+      scope: "alice",
+      issue_id: "SYM-203",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "p",
+      engine: "pi",
+      credentials: { anthropic_api_key: "" },
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json() as { error: string }).error).toMatch(
+      /invalid_credentials_anthropic_api_key/,
+    );
   });
 });
 

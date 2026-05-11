@@ -49,6 +49,18 @@
     }
   ],
 
+  // SYM-268 (Phase 7) — bundle the Vite-built SPA at `dashboard/dist`
+  // and serve it from `/dashboard/*`. Build first with
+  // `cd dashboard && npm install && npm run build` before
+  // `wrangler deploy`.
+  // `not_found_handling: single-page-application` lets TanStack-style
+  // history routes fall back to index.html on unknown paths.
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "dashboard/dist",
+    "not_found_handling": "single-page-application"
+  },
+
   // Public-facing vars. URL must be the deployed origin so the OAuth
   // callback URL Linear redirects to matches what we register.
   // PROJECT_MAPPINGS_JSON is a temporary stand-in for D1 project rows:
@@ -69,6 +81,21 @@
   //   DISPATCH_HMAC_SECRET     — must match the dispatcher's secret of the
   //                              same name (this worker calls the dispatcher
   //                              over HTTP and signs requests itself).
+  //   KEK_V1                   — SYM-268: 64-char hex string (32 bytes).
+  //                              Master KEK that wraps per-org DEKs in
+  //                              `org_credentials`. Generate with
+  //                              `openssl rand -hex 32`. Bump to KEK_V2
+  //                              when rotating.
+  //   DASHBOARD_COOKIE_SECRET  — SYM-268: random 32+ byte string. HMAC
+  //                              signing key for the `sym_dash_session`
+  //                              dashboard cookie. Rotating invalidates
+  //                              all live sessions.
+  //   GITHUB_APP_ID            — SYM-268 (Phase 3): numeric App id.
+  //   GITHUB_APP_PRIVATE_KEY   — SYM-268 (Phase 3): RS256 PEM from the
+  //                              Symphony GitHub App. Used to mint
+  //                              per-org installation tokens.
+  //   GITHUB_APP_INSTALL_URL   — SYM-268 (Phase 3): public install URL,
+  //                              e.g. https://github.com/apps/symphony-agent/installations/new
 
   "env": {
     "dev": {

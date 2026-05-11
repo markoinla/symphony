@@ -125,11 +125,14 @@ describe("/admin/projects CRUD", () => {
     const db = new FakeD1();
     db.projects.set("team-1", {
       team_id: "team-1",
+      organization_id: null,
       repo_url: "https://github.com/x/y.git",
       default_branch: "main",
       engine: "pi",
       model: null,
       max_turns: 10,
+      scope_override: null,
+      system_prompt_override: null,
       updated_at: "2026-01-01T00:00:00Z",
     });
     const res = await app.fetch(
@@ -148,11 +151,14 @@ describe("/admin/projects CRUD", () => {
     const db = new FakeD1();
     db.projects.set("team-1", {
       team_id: "team-1",
+      organization_id: null,
       repo_url: "https://github.com/x/y.git",
       default_branch: "main",
       engine: "pi",
       model: null,
       max_turns: 10,
+      scope_override: null,
+      system_prompt_override: null,
       updated_at: "2026-01-01T00:00:00Z",
     });
     const res = await app.fetch(
@@ -177,6 +183,12 @@ describe("/admin/installations", () => {
     db.installations.set("org-1", {
       organization_id: "org-1",
       access_token: "SUPER_SECRET",
+      refresh_token: null,
+      installed_by_linear_user_id: null,
+      status: "active",
+      github_app_installation_id: null,
+      expires_at: null,
+      organization_name: null,
       scopes: "read,write",
       installed_at: "2026-01-01T00:00:00Z",
       refreshed_at: "2026-01-01T00:00:00Z",
