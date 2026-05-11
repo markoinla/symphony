@@ -27,6 +27,7 @@ export interface ProjectRecord {
   id: number;
   org_id: string;
   linear_team_id: string;
+  linear_team_name: string;
   repo_url: string;
   default_branch: string;
   engine: string;
@@ -34,6 +35,7 @@ export interface ProjectRecord {
   max_turns: number;
   scope: string | null;
   system_prompt_override: string | null;
+  created_at: string;
   updated_at: string;
 }
 
@@ -96,20 +98,6 @@ export class InstallationStore {
       .bind(githubAppInstallationId, orgId)
       .run();
     return (result.meta.changes ?? 0) > 0;
-  }
-
-  async getByOrgId(organizationId: string): Promise<{
-    organization_id: string;
-    access_token: string;
-    github_app_installation_id: number | null;
-  } | null> {
-    return await this.db
-      .prepare(
-        `SELECT organization_id, access_token, github_app_installation_id
-         FROM installations WHERE organization_id = ?`,
-      )
-      .bind(organizationId)
-      .first();
   }
 
   async delete(orgId: string): Promise<boolean> {
@@ -257,7 +245,7 @@ export class ProjectStore {
   constructor(private readonly db: D1Database) {}
 
   private static readonly COLUMNS =
-    "id, org_id, linear_team_id, repo_url, default_branch, engine, model, max_turns, scope, system_prompt_override, updated_at";
+    "id, org_id, linear_team_id, linear_team_name, repo_url, default_branch, engine, model, max_turns, scope, system_prompt_override, created_at, updated_at";
 
   async upsert(input: {
     orgId: string;
@@ -267,14 +255,16 @@ export class ProjectStore {
     engine?: string;
     model?: string | null;
     maxTurns?: number;
+    linearTeamName?: string;
     scope?: string | null;
     systemPromptOverride?: string | null;
   }): Promise<void> {
     await this.db
       .prepare(
-        `INSERT INTO projects (org_id, linear_team_id, repo_url, default_branch, engine, model, max_turns, scope, system_prompt_override)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO projects (org_id, linear_team_id, linear_team_name, repo_url, default_branch, engine, model, max_turns, scope, system_prompt_override)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(org_id, linear_team_id) DO UPDATE SET
+           linear_team_name       = excluded.linear_team_name,
            repo_url               = excluded.repo_url,
            default_branch         = excluded.default_branch,
            engine                 = excluded.engine,
@@ -287,6 +277,7 @@ export class ProjectStore {
       .bind(
         input.orgId,
         input.linearTeamId,
+        input.linearTeamName ?? "",
         input.repoUrl,
         input.defaultBranch ?? "main",
         input.engine ?? "pi",
@@ -318,11 +309,21 @@ export class ProjectStore {
       .first<ProjectRecord>();
   }
 
+  async getById(id: number, orgId: string): Promise<ProjectRecord | null> {
+    return await this.db
+      .prepare(
+        `SELECT ${ProjectStore.COLUMNS}
+         FROM projects WHERE id = ? AND org_id = ?`,
+      )
+      .bind(id, orgId)
+      .first<ProjectRecord>();
+  }
+
   async listByOrg(orgId: string): Promise<ProjectRecord[]> {
     const result = await this.db
       .prepare(
         `SELECT ${ProjectStore.COLUMNS}
-         FROM projects WHERE org_id = ? ORDER BY linear_team_id`,
+         FROM projects WHERE org_id = ? ORDER BY created_at DESC`,
       )
       .bind(orgId)
       .all<ProjectRecord>();
@@ -339,10 +340,88 @@ export class ProjectStore {
     return result.results;
   }
 
+  async update(
+    id: number,
+    orgId: string,
+    input: {
+      linearTeamId?: string;
+      linearTeamName?: string;
+      repoUrl?: string;
+      defaultBranch?: string;
+      engine?: string;
+      model?: string | null;
+      maxTurns?: number;
+      scope?: string | null;
+      systemPromptOverride?: string | null;
+    },
+  ): Promise<ProjectRecord | null> {
+    const fields: string[] = [];
+    const values: unknown[] = [];
+
+    if (input.linearTeamId !== undefined) {
+      fields.push("linear_team_id = ?");
+      values.push(input.linearTeamId);
+    }
+    if (input.linearTeamName !== undefined) {
+      fields.push("linear_team_name = ?");
+      values.push(input.linearTeamName);
+    }
+    if (input.repoUrl !== undefined) {
+      fields.push("repo_url = ?");
+      values.push(input.repoUrl);
+    }
+    if (input.defaultBranch !== undefined) {
+      fields.push("default_branch = ?");
+      values.push(input.defaultBranch);
+    }
+    if (input.engine !== undefined) {
+      fields.push("engine = ?");
+      values.push(input.engine);
+    }
+    if (input.model !== undefined) {
+      fields.push("model = ?");
+      values.push(input.model);
+    }
+    if (input.maxTurns !== undefined) {
+      fields.push("max_turns = ?");
+      values.push(input.maxTurns);
+    }
+    if (input.scope !== undefined) {
+      fields.push("scope = ?");
+      values.push(input.scope);
+    }
+    if (input.systemPromptOverride !== undefined) {
+      fields.push("system_prompt_override = ?");
+      values.push(input.systemPromptOverride);
+    }
+
+    if (fields.length === 0) return this.getById(id, orgId);
+
+    fields.push("updated_at = datetime('now')");
+    values.push(id, orgId);
+
+    await this.db
+      .prepare(
+        `UPDATE projects SET ${fields.join(", ")} WHERE id = ? AND org_id = ?`,
+      )
+      .bind(...values)
+      .run();
+
+    return this.getById(id, orgId);
+  }
+
   async delete(orgId: string, linearTeamId: string): Promise<boolean> {
     const result = await this.db
       .prepare("DELETE FROM projects WHERE org_id = ? AND linear_team_id = ?")
       .bind(orgId, linearTeamId)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
+  async deleteById(id: number, orgId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare("DELETE FROM projects WHERE id = ? AND org_id = ?")
+      .bind(id, orgId)
       .run();
     return (result.meta.changes ?? 0) > 0;
   }
@@ -373,55 +452,6 @@ export interface SessionListFilter {
   triggered_by?: string;
   limit?: number;
   offset?: number;
-}
-
-export interface CredentialRecord {
-  id: number;
-  organization_id: string;
-  kind: string;
-  ciphertext: string | null;
-  kek_version: number;
-  created_at: string;
-  updated_at: string;
-}
-
-export class CredentialStore {
-  constructor(private readonly db: D1Database) {}
-
-  async upsert(organizationId: string, kind: string, plaintext: string): Promise<void> {
-    await this.db
-      .prepare(
-        `INSERT INTO org_credentials (organization_id, kind, ciphertext, kek_version)
-         VALUES (?, ?, ?, 0)
-         ON CONFLICT(organization_id, kind) DO UPDATE SET
-           ciphertext  = excluded.ciphertext,
-           kek_version = 0,
-           updated_at  = datetime('now')`,
-      )
-      .bind(organizationId, kind, plaintext)
-      .run();
-  }
-
-  async get(organizationId: string, kind: string): Promise<CredentialRecord | null> {
-    return await this.db
-      .prepare(
-        `SELECT id, organization_id, kind, ciphertext, kek_version, created_at, updated_at
-         FROM org_credentials WHERE organization_id = ? AND kind = ?`,
-      )
-      .bind(organizationId, kind)
-      .first<CredentialRecord>();
-  }
-
-  async listKinds(organizationId: string): Promise<string[]> {
-    const result = await this.db
-      .prepare(
-        `SELECT kind FROM org_credentials
-         WHERE organization_id = ? AND ciphertext IS NOT NULL`,
-      )
-      .bind(organizationId)
-      .all<{ kind: string }>();
-    return result.results.map((r) => r.kind);
-  }
 }
 
 export class AgentSessionStore {

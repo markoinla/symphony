@@ -1,3 +1,98 @@
+export interface Project {
+  id: number;
+  org_id: string;
+  linear_team_id: string;
+  linear_team_name: string;
+  repo_url: string;
+  default_branch: string;
+  engine: string;
+  model: string | null;
+  max_turns: number;
+  scope: string | null;
+  system_prompt_override: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectInput {
+  linear_team_id: string;
+  linear_team_name: string;
+  repo_url: string;
+  default_branch: string;
+  engine: string;
+  model: string | null;
+  scope: string | null;
+  system_prompt_override: string | null;
+}
+
+class ApiError extends Error {
+  constructor(
+    public status: number,
+    public body: { error: string; fields?: Record<string, string> },
+  ) {
+    super(body.error);
+  }
+}
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(path, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options?.headers,
+    },
+    credentials: "same-origin",
+  });
+
+  const json = await res.json();
+
+  if (!res.ok) {
+    throw new ApiError(
+      res.status,
+      json as { error: string; fields?: Record<string, string> },
+    );
+  }
+
+  return json as T;
+}
+
+export async function listProjects(): Promise<Project[]> {
+  const data = await request<{ projects: Project[] }>(
+    "/dashboard/api/projects",
+  );
+  return data.projects;
+}
+
+export async function createProject(input: ProjectInput): Promise<Project> {
+  const data = await request<{ project: Project }>("/dashboard/api/projects", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+  return data.project;
+}
+
+export async function updateProject(
+  id: number,
+  input: Partial<ProjectInput>,
+): Promise<Project> {
+  const data = await request<{ project: Project }>(
+    `/dashboard/api/projects/${id}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(input),
+    },
+  );
+  return data.project;
+}
+
+export async function deleteProject(id: number): Promise<void> {
+  await request<{ ok: boolean }>(`/dashboard/api/projects/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export { ApiError };
+
 const BASE = "/dashboard/api";
 
 export interface SessionRow {
@@ -103,8 +198,6 @@ export async function saveCredential(
     throw new Error(body.message || `Failed to save credential: ${res.status}`);
   }
 }
-
-// --- Sessions ---
 
 export async function rerunSession(
   id: string,

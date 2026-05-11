@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-router";
 import { IntegrationsPage } from "./components/IntegrationsPage";
 import { SessionsPage } from "./components/SessionsPage";
+import { ProjectsPage } from "./pages/Projects";
 import { AuthContext, useAuth, useAuthProvider } from "./use-auth";
 
 const rootRoute = createRootRoute({
@@ -156,7 +157,7 @@ const integrationsRoute = createRoute({
 const projectsRoute = createRoute({
   getParentRoute: () => dashboardLayout,
   path: "/dashboard/projects",
-  component: () => <h2>Projects</h2>,
+  component: ProjectsPage,
 });
 
 const sessionsRoute = createRoute({

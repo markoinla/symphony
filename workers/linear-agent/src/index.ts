@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 
 import { buildAdminRouter } from "./routes/admin";
+import { buildDashboardApiRouter } from "./routes/dashboard-api";
 import { buildDashboardRouter } from "./routes/dashboard";
 import { buildOAuthRouter } from "./routes/oauth";
 import { buildWebhookRouter } from "./routes/webhook";
@@ -65,6 +66,11 @@ export interface Env {
   // URL to the GitHub App installation settings page. Shown on the
   // dashboard Integrations tab as the "Manage" link for GitHub.
   GITHUB_APP_SETTINGS_URL?: string;
+
+  // Master KEK (base64-encoded AES-256 key) for envelope encryption
+  // of per-org credentials in the org_credentials table. Set with:
+  //   wrangler secret put CREDENTIAL_KEK
+  CREDENTIAL_KEK?: string;
 }
 
 // Re-export the Workflow class so wrangler's class_name resolution finds
@@ -84,6 +90,7 @@ export function buildApp() {
 
   app.get("/health", (c) => c.json({ ok: true }));
 
+  app.route("/", buildDashboardApiRouter());
   app.route("/", buildDashboardRouter());
   app.route("/", buildOAuthRouter());
   app.route("/", buildWebhookRouter());

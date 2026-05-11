@@ -1,32 +1,11 @@
 import { Hono } from "hono";
-import type { Context } from "hono";
 import type { Env } from "../index";
-import {
-  AgentSessionStore,
-  CredentialStore,
-  InstallationStore,
-  SessionStore,
-  type UserRecord,
-} from "../lib/store";
+import { AgentSessionStore, SessionStore } from "../lib/store";
 
 function parseCookie(header: string | undefined, name: string): string | null {
   if (!header) return null;
   const match = header.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
   return match?.[1] ? decodeURIComponent(match[1]) : null;
-}
-
-async function requireDashboardUser(
-  c: Context<{ Bindings: Env }>,
-): Promise<UserRecord | Response> {
-  const token = parseCookie(c.req.header("cookie"), "dashboard_session");
-  if (!token) {
-    return c.json({ error: "unauthenticated" }, 401);
-  }
-  const user = await new SessionStore(c.env.DB).validate(token);
-  if (!user) {
-    return c.json({ error: "unauthenticated" }, 401);
-  }
-  return user;
 }
 
 function sessionCookie(
@@ -290,62 +269,6 @@ export function buildDashboardRouter() {
     }
 
     return c.json({ ok: true, new_session_id: newSessionId });
-  });
-
-  // --- Integrations API routes ---
-
-  router.get("/dashboard/api/integrations", async (c) => {
-    const userOrRes = await requireDashboardUser(c);
-    if (userOrRes instanceof Response) return userOrRes;
-    const user = userOrRes;
-    const orgId = user.organization_id;
-
-    const installStore = new InstallationStore(c.env.DB);
-    const credStore = new CredentialStore(c.env.DB);
-
-    const installation = await installStore.getByOrgId(orgId);
-    const configuredKinds = await credStore.listKinds(orgId);
-    const configuredSet = new Set(configuredKinds);
-
-    return c.json({
-      linear: {
-        connected: !!installation,
-        email: user.email ?? null,
-      },
-      github: {
-        connected: !!installation?.github_app_installation_id,
-        repo_count: 0,
-      },
-      anthropic: { configured: configuredSet.has("anthropic") },
-      openai: { configured: configuredSet.has("openai") },
-      cf_workers_ai: { configured: configuredSet.has("cf_workers_ai") },
-      github_app_settings_url: c.env.GITHUB_APP_SETTINGS_URL ?? null,
-    });
-  });
-
-  router.put("/dashboard/api/integrations/credentials", async (c) => {
-    const userOrRes = await requireDashboardUser(c);
-    if (userOrRes instanceof Response) return userOrRes;
-    const user = userOrRes;
-
-    const body = await c.req.json<{ provider?: string; api_key?: string }>();
-    const validProviders = ["anthropic", "openai", "cf_workers_ai"];
-    if (
-      !body.provider ||
-      !validProviders.includes(body.provider) ||
-      !body.api_key ||
-      typeof body.api_key !== "string" ||
-      body.api_key.trim().length === 0
-    ) {
-      return c.json(
-        { error: "invalid_request", message: "provider and api_key are required" },
-        400,
-      );
-    }
-
-    const credStore = new CredentialStore(c.env.DB);
-    await credStore.upsert(user.organization_id, body.provider, body.api_key.trim());
-    return c.json({ ok: true });
   });
 
   // --- Auth API routes ---
