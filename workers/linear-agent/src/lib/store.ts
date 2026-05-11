@@ -98,6 +98,20 @@ export class InstallationStore {
     return (result.meta.changes ?? 0) > 0;
   }
 
+  async getByOrgId(organizationId: string): Promise<{
+    organization_id: string;
+    access_token: string;
+    github_app_installation_id: number | null;
+  } | null> {
+    return await this.db
+      .prepare(
+        `SELECT organization_id, access_token, github_app_installation_id
+         FROM installations WHERE organization_id = ?`,
+      )
+      .bind(organizationId)
+      .first();
+  }
+
   async delete(orgId: string): Promise<boolean> {
     const result = await this.db
       .prepare("DELETE FROM installations WHERE org_id = ?")
@@ -359,6 +373,55 @@ export interface SessionListFilter {
   triggered_by?: string;
   limit?: number;
   offset?: number;
+}
+
+export interface CredentialRecord {
+  id: number;
+  organization_id: string;
+  kind: string;
+  ciphertext: string | null;
+  kek_version: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export class CredentialStore {
+  constructor(private readonly db: D1Database) {}
+
+  async upsert(organizationId: string, kind: string, plaintext: string): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO org_credentials (organization_id, kind, ciphertext, kek_version)
+         VALUES (?, ?, ?, 0)
+         ON CONFLICT(organization_id, kind) DO UPDATE SET
+           ciphertext  = excluded.ciphertext,
+           kek_version = 0,
+           updated_at  = datetime('now')`,
+      )
+      .bind(organizationId, kind, plaintext)
+      .run();
+  }
+
+  async get(organizationId: string, kind: string): Promise<CredentialRecord | null> {
+    return await this.db
+      .prepare(
+        `SELECT id, organization_id, kind, ciphertext, kek_version, created_at, updated_at
+         FROM org_credentials WHERE organization_id = ? AND kind = ?`,
+      )
+      .bind(organizationId, kind)
+      .first<CredentialRecord>();
+  }
+
+  async listKinds(organizationId: string): Promise<string[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT kind FROM org_credentials
+         WHERE organization_id = ? AND ciphertext IS NOT NULL`,
+      )
+      .bind(organizationId)
+      .all<{ kind: string }>();
+    return result.results.map((r) => r.kind);
+  }
 }
 
 export class AgentSessionStore {

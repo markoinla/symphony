@@ -61,6 +61,10 @@ export interface Env {
   //   wrangler secret put GITHUB_APP_PRIVATE_KEY
   GITHUB_APP_ID?: string;
   GITHUB_APP_PRIVATE_KEY?: string;
+
+  // URL to the GitHub App installation settings page. Shown on the
+  // dashboard Integrations tab as the "Manage" link for GitHub.
+  GITHUB_APP_SETTINGS_URL?: string;
 }
 
 // Re-export the Workflow class so wrangler's class_name resolution finds
