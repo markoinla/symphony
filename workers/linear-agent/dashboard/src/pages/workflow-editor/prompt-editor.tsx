@@ -67,7 +67,7 @@ export function PromptEditor({
   }
 
   function runPreview() {
-    previewMutation.mutate({ issue_identifier: issueIdent })
+    previewMutation.mutate({ issue_id: issueIdent })
   }
 
   return (
@@ -96,7 +96,7 @@ export function PromptEditor({
             <Field
               className="flex-1"
               label="Preview against issue"
-              hint="Linear identifier (e.g. SYM-123). Autocomplete is mocked until track 2 ships."
+              hint="Linear identifier or id. Rendered against an empty issue stub for now — Linear lookup lands in a follow-up."
             >
               <Input
                 onChange={(event) => setIssueIdent(event.target.value)}
@@ -121,7 +121,7 @@ export function PromptEditor({
 
           {previewMutation.data ? (
             <pre className="mt-3 max-h-[280px] overflow-auto whitespace-pre-wrap rounded border border-th-border bg-th-bg p-3 text-[12px] leading-5 text-th-text-2">
-              {previewMutation.data.prompt}
+              {previewMutation.data.rendered}
             </pre>
           ) : (
             <p className="mt-3 text-xs text-th-text-4">

@@ -7,6 +7,7 @@ import {
   useWorkflows,
 } from '@/lib/api/workflows'
 import {
+  workflowScopeLabel,
   workflowTemplates,
   type Workflow,
   type WorkflowTemplate,
@@ -28,17 +29,11 @@ import {
 } from '@/components/feedback'
 
 function ScopePill({ workflow }: { workflow: Workflow }) {
-  // Org-only today. Code structure here is the seam where future
-  // Team:/User: pills will plug in.
-  const label =
-    workflow.scope === 'organization'
-      ? 'Org'
-      : workflow.scope === 'team'
-        ? `Team: ${workflow.scope_label ?? '—'}`
-        : `User: ${workflow.scope_label ?? '—'}`
+  // Derived from which of organization_id/team_id/user_id is non-null.
+  // The DB CHECK guarantees exactly one is set.
   return (
     <span className="inline-flex items-center rounded bg-th-accent-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-th-accent">
-      {label}
+      {workflowScopeLabel(workflow)}
     </span>
   )
 }
@@ -53,7 +48,11 @@ function StatusBadge({ status }: { status: Workflow['status'] }) {
           : 'inline-flex items-center rounded bg-th-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-th-text-3'
       }
     >
-      {isPublished ? 'Published' : 'Draft'}
+      {status === 'published'
+        ? 'Published'
+        : status === 'archived'
+          ? 'Archived'
+          : 'Draft'}
     </span>
   )
 }
@@ -80,8 +79,8 @@ function WorkflowCard({ workflow }: { workflow: Workflow }) {
             <p className="text-[13px] text-th-text-4">No description</p>
           )}
           <p className="text-[11px] text-th-text-4">
-            {workflow.config.engine} · {workflow.config.model} · max{' '}
-            {workflow.config.max_turns} turns · v{workflow.current_version}
+            {workflow.engine} · {workflow.model ?? 'default model'} · max{' '}
+            {workflow.max_turns} turns · v{workflow.version}
           </p>
         </div>
       </div>
@@ -107,17 +106,9 @@ function TemplateGalleryDialog({
 
   function handlePick(template: WorkflowTemplate) {
     setError(null)
-    create.mutate(
-      {
-        name: template.name,
-        description: template.description,
-        scope: 'organization',
-        template: template.id,
-      },
-      {
-        onError: (err) => setError(formatQueryError(err)),
-      },
-    )
+    create.mutate(template.body, {
+      onError: (err) => setError(formatQueryError(err)),
+    })
   }
 
   return (

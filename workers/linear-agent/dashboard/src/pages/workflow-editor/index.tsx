@@ -30,23 +30,39 @@ import {
   useUpdateWorkflow,
   useWorkflow,
 } from '@/lib/api/workflows'
-import { emptyTrigger } from '@/lib/api/workflow-types'
+import { newTriggerDraft } from '@/lib/api/workflow-types'
 import type {
   McpServer,
-  PermissionMode,
   Trigger,
   Workflow,
-  WorkflowConfig,
+  WorkflowUpdateBody,
 } from '@/lib/api/workflow-types'
 import { formatQueryError } from '@/lib/helpers'
 
 import { TriggerRow } from './trigger-row'
 import { PromptEditor } from './prompt-editor'
 
+// Editor-local working copy of a workflow. We normalize all nullable
+// string fields to empty strings and nullable arrays to [] so form
+// controls don't have to special-case null. `draftToBody` converts
+// back when we PUT to the API.
 type Draft = {
   name: string
   description: string
-  config: WorkflowConfig
+  engine: string
+  model: string
+  max_turns: number
+  max_continuations: number
+  allowed_tools: string[]
+  disallowed_tools: string[]
+  allowed_domains: string[]
+  mcp_servers: McpServer[]
+  permission_mode: string
+  additional_read_paths: string[]
+  additional_write_paths: string[]
+  hook_after_create: string
+  hook_before_remove: string
+  hook_timeout_ms: number
   prompt_template: string
 }
 
@@ -54,8 +70,49 @@ function workflowToDraft(workflow: Workflow): Draft {
   return {
     name: workflow.name,
     description: workflow.description ?? '',
-    config: workflow.config,
+    engine: workflow.engine,
+    model: workflow.model ?? '',
+    max_turns: workflow.max_turns,
+    max_continuations: workflow.max_continuations ?? 0,
+    allowed_tools: workflow.allowed_tools ?? [],
+    disallowed_tools: workflow.disallowed_tools ?? [],
+    allowed_domains: workflow.allowed_domains ?? [],
+    mcp_servers: workflow.mcp_servers ?? [],
+    permission_mode: workflow.permission_mode ?? 'ask',
+    additional_read_paths: workflow.additional_read_paths ?? [],
+    additional_write_paths: workflow.additional_write_paths ?? [],
+    hook_after_create: workflow.hook_after_create ?? '',
+    hook_before_remove: workflow.hook_before_remove ?? '',
+    hook_timeout_ms: workflow.hook_timeout_ms,
     prompt_template: workflow.prompt_template,
+  }
+}
+
+function draftToBody(draft: Draft): WorkflowUpdateBody {
+  // Trim free-form strings, coerce empty strings to null on
+  // nullable backend fields so the column doesn't store `""`.
+  const nullable = (s: string) => {
+    const trimmed = s.trim()
+    return trimmed === '' ? null : trimmed
+  }
+  return {
+    name: draft.name,
+    description: nullable(draft.description),
+    engine: draft.engine,
+    model: nullable(draft.model),
+    max_turns: draft.max_turns,
+    max_continuations: draft.max_continuations,
+    allowed_tools: draft.allowed_tools,
+    disallowed_tools: draft.disallowed_tools,
+    allowed_domains: draft.allowed_domains,
+    mcp_servers: draft.mcp_servers,
+    permission_mode: nullable(draft.permission_mode),
+    additional_read_paths: draft.additional_read_paths,
+    additional_write_paths: draft.additional_write_paths,
+    hook_after_create: nullable(draft.hook_after_create),
+    hook_before_remove: nullable(draft.hook_before_remove),
+    hook_timeout_ms: draft.hook_timeout_ms,
+    prompt_template: draft.prompt_template,
   }
 }
 
@@ -66,16 +123,17 @@ function McpServerEditor({
   servers: McpServer[]
   onChange: (next: McpServer[]) => void
 }) {
+  // Mirrors the server's mcpServerSchema: name + url (HTTP/SSE
+  // endpoint) OR name + command + args (stdio launch). The UI keeps
+  // them in one row — only fill the relevant column.
   function updateAt(idx: number, patch: Partial<McpServer>) {
     onChange(servers.map((s, i) => (i === idx ? { ...s, ...patch } : s)))
   }
-
   function removeAt(idx: number) {
     onChange(servers.filter((_, i) => i !== idx))
   }
-
   function add() {
-    onChange([...servers, { name: '', url: '', kind: 'http' }])
+    onChange([...servers, { name: '' }])
   }
 
   return (
@@ -86,7 +144,7 @@ function McpServerEditor({
       {servers.map((server, idx) => (
         <div
           key={idx}
-          className="grid gap-3 rounded-md border border-th-border bg-th-surface p-3 sm:grid-cols-[1fr_2fr_120px_auto]"
+          className="grid gap-3 rounded-md border border-th-border bg-th-surface p-3 sm:grid-cols-[1fr_2fr_auto]"
         >
           <Input
             onChange={(event) => updateAt(idx, { name: event.target.value })}
@@ -94,25 +152,12 @@ function McpServerEditor({
             value={server.name}
           />
           <Input
-            onChange={(event) => updateAt(idx, { url: event.target.value })}
-            placeholder="https://…"
-            value={server.url}
-          />
-          <Select
-            value={server.kind}
-            onValueChange={(value) =>
-              updateAt(idx, { kind: value as McpServer['kind'] })
+            onChange={(event) =>
+              updateAt(idx, { url: event.target.value || undefined })
             }
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="http">http</SelectItem>
-              <SelectItem value="sse">sse</SelectItem>
-              <SelectItem value="stdio">stdio</SelectItem>
-            </SelectContent>
-          </Select>
+            placeholder="https://… (or leave blank for stdio)"
+            value={server.url ?? ''}
+          />
           <Button
             aria-label="Remove MCP server"
             onClick={() => removeAt(idx)}
@@ -149,22 +194,15 @@ export function WorkflowEditorView() {
   const [triggerDrafts, setTriggerDrafts] = useState<Record<string, Trigger>>(
     {},
   )
-  // Track the last workflow updated_at we seeded the draft from. When
-  // the remote workflow changes (refetch / mutation), we reseed; user
-  // edits live in `draft` until they hit Save.
-  const [seededFromUpdatedAt, setSeededFromUpdatedAt] = useState<string | null>(
+  // Reseed the draft when the remote workflow's updated_at changes (a
+  // save or refetch). Until then, user edits live in `draft`.
+  const [seededFromUpdatedAt, setSeededFromUpdatedAt] = useState<number | null>(
     null,
   )
-  // Same idea for triggers — reseed local trigger drafts when the
-  // remote list changes by any saved row's updated_at, additions, or
-  // deletions.
   const [seededTriggersKey, setSeededTriggersKey] = useState<string | null>(
     null,
   )
 
-  // Seed draft from the remote workflow during render (avoids the
-  // setState-in-effect cascade pattern). Reseeds whenever the remote
-  // workflow's updated_at changes — i.e. after a save / refetch.
   if (
     workflowQuery.data &&
     workflowQuery.data.updated_at !== seededFromUpdatedAt
@@ -173,19 +211,14 @@ export function WorkflowEditorView() {
     setDraft(workflowToDraft(workflowQuery.data))
   }
 
-  // Same pattern for triggers — derive a stable key from the trigger
-  // list and reseed when it changes.
   const triggersKey = triggersQuery.data
-    ? triggersQuery.data
-        .map((t) => `${t.id}:${t.updated_at}`)
-        .join('|')
+    ? triggersQuery.data.map((t) => `${t.id}:${t.updated_at}`).join('|')
     : null
   if (triggersKey && triggersKey !== seededTriggersKey) {
     setSeededTriggersKey(triggersKey)
     setTriggerDrafts((current) => {
       const next: Record<string, Trigger> = {}
       for (const trigger of triggersQuery.data ?? []) {
-        // Preserve local edits for rows the user is still editing.
         const local = current[trigger.id]
         next[trigger.id] = local ?? trigger
       }
@@ -214,27 +247,17 @@ export function WorkflowEditorView() {
 
   const workflow = workflowQuery.data
 
-  function patchConfig(patch: Partial<WorkflowConfig>) {
-    setDraft((current) =>
-      current ? { ...current, config: { ...current.config, ...patch } } : current,
-    )
+  function patchDraft(patch: Partial<Draft>) {
+    setDraft((current) => (current ? { ...current, ...patch } : current))
   }
 
   function handleSave() {
     if (!draft) return
     setError(null)
-    updateWorkflow.mutate(
-      {
-        name: draft.name,
-        description: draft.description || null,
-        config: draft.config,
-        prompt_template: draft.prompt_template,
-      },
-      {
-        onSuccess: () => setFeedback('Workflow saved.'),
-        onError: (err) => setError(formatQueryError(err)),
-      },
-    )
+    updateWorkflow.mutate(draftToBody(draft), {
+      onSuccess: () => setFeedback('Workflow saved.'),
+      onError: (err) => setError(formatQueryError(err)),
+    })
   }
 
   function handlePublish() {
@@ -257,7 +280,7 @@ export function WorkflowEditorView() {
   }
 
   function handleAddTrigger() {
-    createTrigger.mutate(emptyTrigger(id), {
+    createTrigger.mutate(newTriggerDraft(), {
       onError: (err) => setError(formatQueryError(err)),
     })
   }
@@ -279,8 +302,15 @@ export function WorkflowEditorView() {
   function handleTriggerSave(triggerId: string) {
     const local = triggerDrafts[triggerId]
     if (!local) return
-    const { id: _id, created_at: _ca, updated_at: _ua, ...body } = local
+    const {
+      id: _id,
+      workflow_id: _wid,
+      created_at: _ca,
+      updated_at: _ua,
+      ...body
+    } = local
     void _id
+    void _wid
     void _ca
     void _ua
     updateTrigger.mutate(
@@ -314,7 +344,7 @@ export function WorkflowEditorView() {
             {draft.name || 'Untitled workflow'}
           </h1>
           <p className="mt-1 text-xs text-th-text-4">
-            v{workflow.current_version} · {workflow.status}
+            v{workflow.version} · {workflow.status}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -359,11 +389,11 @@ export function WorkflowEditorView() {
         </TabsList>
 
         <TabsContent value="basics">
-          <BasicsTab draft={draft} setDraft={setDraft} />
+          <BasicsTab draft={draft} patchDraft={patchDraft} />
         </TabsContent>
 
         <TabsContent value="tools">
-          <ToolsTab config={draft.config} patchConfig={patchConfig} />
+          <ToolsTab draft={draft} patchDraft={patchDraft} />
         </TabsContent>
 
         <TabsContent value="triggers">
@@ -383,11 +413,7 @@ export function WorkflowEditorView() {
 
         <TabsContent value="prompt">
           <PromptEditor
-            onChange={(prompt_template) =>
-              setDraft((current) =>
-                current ? { ...current, prompt_template } : current,
-              )
-            }
+            onChange={(prompt_template) => patchDraft({ prompt_template })}
             value={draft.prompt_template}
             workflowId={id}
           />
@@ -399,30 +425,22 @@ export function WorkflowEditorView() {
 
 function BasicsTab({
   draft,
-  setDraft,
+  patchDraft,
 }: {
   draft: Draft
-  setDraft: (next: Draft | ((current: Draft | null) => Draft | null)) => void
+  patchDraft: (patch: Partial<Draft>) => void
 }) {
-  function update<K extends keyof Draft>(key: K, value: Draft[K]) {
-    setDraft((current) => (current ? { ...current, [key]: value } : current))
-  }
-  function patchConfig(patch: Partial<WorkflowConfig>) {
-    setDraft((current) =>
-      current ? { ...current, config: { ...current.config, ...patch } } : current,
-    )
-  }
   return (
     <div className="grid max-w-3xl gap-5">
       <Field label="Name">
         <Input
-          onChange={(event) => update('name', event.target.value)}
+          onChange={(event) => patchDraft({ name: event.target.value })}
           value={draft.name}
         />
       </Field>
       <Field label="Description">
         <Textarea
-          onChange={(event) => update('description', event.target.value)}
+          onChange={(event) => patchDraft({ description: event.target.value })}
           placeholder="What does this workflow do?"
           value={draft.description}
         />
@@ -450,8 +468,8 @@ function BasicsTab({
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Engine">
           <Select
-            onValueChange={(engine) => patchConfig({ engine })}
-            value={draft.config.engine}
+            onValueChange={(engine) => patchDraft({ engine })}
+            value={draft.engine}
           >
             <SelectTrigger className="w-full">
               <SelectValue />
@@ -459,38 +477,40 @@ function BasicsTab({
             <SelectContent>
               <SelectItem value="codex">codex</SelectItem>
               <SelectItem value="claude-code">claude-code</SelectItem>
+              <SelectItem value="pi">pi</SelectItem>
             </SelectContent>
           </Select>
         </Field>
         <Field label="Model">
           <Input
-            onChange={(event) => patchConfig({ model: event.target.value })}
+            onChange={(event) => patchDraft({ model: event.target.value })}
             placeholder="claude-sonnet-4-6"
-            value={draft.config.model}
+            value={draft.model}
           />
         </Field>
         <Field label="Max turns">
           <Input
             min={1}
             onChange={(event) =>
-              patchConfig({
+              patchDraft({
                 max_turns: Number.parseInt(event.target.value, 10) || 1,
               })
             }
             type="number"
-            value={String(draft.config.max_turns)}
+            value={String(draft.max_turns)}
           />
         </Field>
         <Field label="Max continuations">
           <Input
             min={0}
             onChange={(event) =>
-              patchConfig({
-                max_continuations: Number.parseInt(event.target.value, 10) || 0,
+              patchDraft({
+                max_continuations:
+                  Number.parseInt(event.target.value, 10) || 0,
               })
             }
             type="number"
-            value={String(draft.config.max_continuations)}
+            value={String(draft.max_continuations)}
           />
         </Field>
       </div>
@@ -499,11 +519,11 @@ function BasicsTab({
 }
 
 function ToolsTab({
-  config,
-  patchConfig,
+  draft,
+  patchDraft,
 }: {
-  config: WorkflowConfig
-  patchConfig: (patch: Partial<WorkflowConfig>) => void
+  draft: Draft
+  patchDraft: (patch: Partial<Draft>) => void
 }) {
   return (
     <div className="grid max-w-3xl gap-5">
@@ -511,27 +531,25 @@ function ToolsTab({
         <Field label="Allowed tools">
           <ChipInput
             monospace
-            onChange={(allowed_tools) => patchConfig({ allowed_tools })}
+            onChange={(allowed_tools) => patchDraft({ allowed_tools })}
             placeholder="bash, edit, read…"
-            value={config.allowed_tools}
+            value={draft.allowed_tools}
           />
         </Field>
         <Field label="Disallowed tools">
           <ChipInput
             monospace
-            onChange={(disallowed_tools) => patchConfig({ disallowed_tools })}
+            onChange={(disallowed_tools) => patchDraft({ disallowed_tools })}
             placeholder="rm -rf …"
-            value={config.disallowed_tools}
+            value={draft.disallowed_tools}
           />
         </Field>
       </div>
 
       <Field label="Permission mode">
         <Select
-          onValueChange={(value) =>
-            patchConfig({ permission_mode: value as PermissionMode })
-          }
-          value={config.permission_mode}
+          onValueChange={(value) => patchDraft({ permission_mode: value })}
+          value={draft.permission_mode}
         >
           <SelectTrigger className="w-full max-w-xs">
             <SelectValue />
@@ -547,9 +565,9 @@ function ToolsTab({
       <Field label="Allowed domains" hint="Host allow-list for outbound HTTP.">
         <ChipInput
           monospace
-          onChange={(allowed_domains) => patchConfig({ allowed_domains })}
+          onChange={(allowed_domains) => patchDraft({ allowed_domains })}
           placeholder="github.com"
-          value={config.allowed_domains}
+          value={draft.allowed_domains}
         />
       </Field>
 
@@ -558,45 +576,51 @@ function ToolsTab({
           <ChipInput
             monospace
             onChange={(additional_read_paths) =>
-              patchConfig({ additional_read_paths })
+              patchDraft({ additional_read_paths })
             }
             placeholder="/etc/config"
-            value={config.additional_read_paths}
+            value={draft.additional_read_paths}
           />
         </Field>
         <Field label="Additional write paths">
           <ChipInput
             monospace
             onChange={(additional_write_paths) =>
-              patchConfig({ additional_write_paths })
+              patchDraft({ additional_write_paths })
             }
             placeholder="/tmp/scratch"
-            value={config.additional_write_paths}
+            value={draft.additional_write_paths}
           />
         </Field>
       </div>
 
-      <Field label="Hook: after create" hint="Shell run right after workspace creation.">
+      <Field
+        label="Hook: after create"
+        hint="Shell run right after workspace creation."
+      >
         <Textarea
           className="font-mono"
           onChange={(event) =>
-            patchConfig({ hook_after_create: event.target.value || null })
+            patchDraft({ hook_after_create: event.target.value })
           }
           placeholder="bun install"
           rows={4}
-          value={config.hook_after_create ?? ''}
+          value={draft.hook_after_create}
         />
       </Field>
 
-      <Field label="Hook: before remove" hint="Cleanup before the workspace is torn down.">
+      <Field
+        label="Hook: before remove"
+        hint="Cleanup before the workspace is torn down."
+      >
         <Textarea
           className="font-mono"
           onChange={(event) =>
-            patchConfig({ hook_before_remove: event.target.value || null })
+            patchDraft({ hook_before_remove: event.target.value })
           }
           placeholder="rm -rf node_modules"
           rows={4}
-          value={config.hook_before_remove ?? ''}
+          value={draft.hook_before_remove}
         />
       </Field>
 
@@ -604,12 +628,13 @@ function ToolsTab({
         <Input
           min={1000}
           onChange={(event) =>
-            patchConfig({
-              hook_timeout_ms: Number.parseInt(event.target.value, 10) || 30_000,
+            patchDraft({
+              hook_timeout_ms:
+                Number.parseInt(event.target.value, 10) || 30_000,
             })
           }
           type="number"
-          value={String(config.hook_timeout_ms)}
+          value={String(draft.hook_timeout_ms)}
         />
       </Field>
 
@@ -621,8 +646,8 @@ function ToolsTab({
           <span />
         </Field>
         <McpServerEditor
-          onChange={(mcp_servers) => patchConfig({ mcp_servers })}
-          servers={config.mcp_servers}
+          onChange={(mcp_servers) => patchDraft({ mcp_servers })}
+          servers={draft.mcp_servers}
         />
       </div>
     </div>

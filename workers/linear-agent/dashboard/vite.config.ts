@@ -18,6 +18,11 @@ export default defineConfig({
     conditions: ['@tanstack/custom-condition'],
     alias: {
       '@': path.resolve(__dirname, './src'),
+      // Cross-tree type imports from the worker's source. Only the
+      // Zod schemas under @server/schemas/* are intended for browser
+      // consumption — anything that touches Cloudflare bindings, D1,
+      // or Node APIs will fail at build time.
+      '@server': path.resolve(__dirname, '../src'),
     },
   },
   build: {
