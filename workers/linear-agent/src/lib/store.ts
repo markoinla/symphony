@@ -506,3 +506,77 @@ export class AgentSessionStore {
     return result.results;
   }
 }
+
+export interface GitHubInstallRecord {
+  org_id: string;
+  install_id: number;
+  account_login: string;
+  account_type: string;
+  repo_selection: string;
+  selected_repos: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export class GitHubInstallStore {
+  constructor(private readonly db: D1Database) {}
+
+  async upsert(input: {
+    orgId: string;
+    installId: number;
+    accountLogin: string;
+    accountType?: string;
+    repoSelection?: string;
+    selectedRepos?: string[] | null;
+  }): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO github_installs (org_id, install_id, account_login, account_type, repo_selection, selected_repos)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(org_id) DO UPDATE SET
+           install_id      = excluded.install_id,
+           account_login   = excluded.account_login,
+           account_type    = excluded.account_type,
+           repo_selection  = excluded.repo_selection,
+           selected_repos  = excluded.selected_repos,
+           updated_at      = datetime('now')`,
+      )
+      .bind(
+        input.orgId,
+        input.installId,
+        input.accountLogin,
+        input.accountType ?? "Organization",
+        input.repoSelection ?? "all",
+        input.selectedRepos ? JSON.stringify(input.selectedRepos) : null,
+      )
+      .run();
+  }
+
+  async get(orgId: string): Promise<GitHubInstallRecord | null> {
+    return await this.db
+      .prepare(
+        `SELECT org_id, install_id, account_login, account_type, repo_selection, selected_repos, created_at, updated_at
+         FROM github_installs WHERE org_id = ?`,
+      )
+      .bind(orgId)
+      .first<GitHubInstallRecord>();
+  }
+
+  async list(): Promise<GitHubInstallRecord[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT org_id, install_id, account_login, account_type, repo_selection, selected_repos, created_at, updated_at
+         FROM github_installs ORDER BY created_at DESC`,
+      )
+      .all<GitHubInstallRecord>();
+    return result.results;
+  }
+
+  async delete(orgId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare("DELETE FROM github_installs WHERE org_id = ?")
+      .bind(orgId)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+}

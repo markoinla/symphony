@@ -68,7 +68,7 @@ export async function mintInstallationToken(
   return json.token;
 }
 
-export async function createAppJwt(
+export export async function createAppJwt(
   appId: string,
   privateKeyPem: string,
 ): Promise<string> {
