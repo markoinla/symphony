@@ -13,6 +13,7 @@ export interface InstallationRecord {
   organization_id: string;
   access_token: string;
   scopes: string;
+  github_app_installation_id: number | null;
   installed_at: string;
   refreshed_at: string;
 }
@@ -57,7 +58,7 @@ export class InstallationStore {
   async get(organizationId: string): Promise<InstallationRecord | null> {
     return await this.db
       .prepare(
-        `SELECT organization_id, access_token, scopes, installed_at, refreshed_at
+        `SELECT organization_id, access_token, scopes, github_app_installation_id, installed_at, refreshed_at
          FROM installations WHERE organization_id = ?`,
       )
       .bind(organizationId)
@@ -72,12 +73,27 @@ export class InstallationStore {
   async getOnlyInstallation(): Promise<InstallationRecord | null> {
     const result = await this.db
       .prepare(
-        `SELECT organization_id, access_token, scopes, installed_at, refreshed_at
+        `SELECT organization_id, access_token, scopes, github_app_installation_id, installed_at, refreshed_at
          FROM installations LIMIT 2`,
       )
       .all<InstallationRecord>();
     if (result.results.length !== 1) return null;
     return result.results[0] ?? null;
+  }
+
+  async updateGitHubAppInstallation(
+    organizationId: string,
+    githubAppInstallationId: number,
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE installations
+         SET github_app_installation_id = ?, refreshed_at = datetime('now')
+         WHERE organization_id = ?`,
+      )
+      .bind(githubAppInstallationId, organizationId)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
   }
 
   async delete(organizationId: string): Promise<boolean> {

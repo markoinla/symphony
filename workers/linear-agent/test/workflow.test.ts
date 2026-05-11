@@ -52,6 +52,7 @@ function makeEnv(
   db: FakeD1 = new FakeD1(),
 ): Env {
   return {
+    ASSETS: { fetch: () => new Response("") } as unknown as Fetcher,
     LINEAR_TOKENS: kv as unknown as KVNamespace,
     SESSION_RUNNER: {} as Workflow,
     DB: db as unknown as D1Database,
@@ -263,6 +264,7 @@ describe("SessionRunner.run — happy path", () => {
       "post-initial-thought",
       "resolve-inputs",
       "transition-to-in-progress",
+      "mint-github-token",
       "turn-1",
       "post-terminal-activity",
     ]);
@@ -439,6 +441,7 @@ describe("SessionRunner.run — dispatch failures", () => {
       "post-initial-thought",
       "resolve-inputs",
       "transition-to-in-progress",
+      "mint-github-token",
       "turn-1",
       "post-terminal-activity",
     ]);

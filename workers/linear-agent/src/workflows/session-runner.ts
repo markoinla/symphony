@@ -34,6 +34,7 @@ import {
   postThought,
 } from "../lib/activities";
 import { GitHubError, addLabels, createPr } from "../lib/github";
+import { mintInstallationToken } from "../lib/github-app";
 import { transitionIssue } from "../lib/issues";
 import {
   DispatcherClient,
@@ -106,24 +107,35 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     // `installations` keyed by `organizationId`; the legacy KV
     // `access_token` is consulted as a fallback so single-org
     // deployments that haven't seeded D1 yet keep working.
-    const token = await step.do("load-token", async () => {
+    const installInfo = await step.do("load-token", async () => {
       const installs = new InstallationStore(this.env.DB);
       const orgId = webhookEvent.organizationId;
       const install = orgId
         ? await installs.get(orgId)
         : await installs.getOnlyInstallation();
-      if (install) return install.access_token;
+      if (install) {
+        return {
+          token: install.access_token,
+          githubAppInstallationId: install.github_app_installation_id,
+        };
+      }
       // Legacy single-tenant KV fallback.
-      return (await this.env.LINEAR_TOKENS.get("access_token")) ?? null;
+      const kvToken = await this.env.LINEAR_TOKENS.get("access_token");
+      return kvToken
+        ? { token: kvToken, githubAppInstallationId: null as number | null }
+        : null;
     });
 
-    if (!token) {
+    if (!installInfo) {
       console.error(
         "no_access_token",
         JSON.stringify({ session_id: sessionId }),
       );
       return { status: "no_token" };
     }
+
+    const token = installInfo.token;
+    const githubAppInstallationId = installInfo.githubAppInstallationId;
 
     await step.do("post-initial-thought", async () => {
       const linear = buildActivityClient(token);
@@ -224,6 +236,33 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       });
     }
 
+    // SYM-269: mint a per-org GitHub installation token if the org has
+    // installed the Symphony GitHub App. Falls back to env.GITHUB_TOKEN.
+    const githubToken: string | null = await step.do(
+      "mint-github-token",
+      async () => {
+        if (
+          githubAppInstallationId &&
+          this.env.GITHUB_APP_ID &&
+          this.env.GITHUB_APP_PRIVATE_KEY
+        ) {
+          try {
+            return await mintInstallationToken(
+              githubAppInstallationId,
+              this.env.GITHUB_APP_ID,
+              this.env.GITHUB_APP_PRIVATE_KEY,
+            );
+          } catch (e) {
+            console.error(
+              "github_app_token_mint_failed",
+              e instanceof Error ? e.message : String(e),
+            );
+          }
+        }
+        return this.env.GITHUB_TOKEN ?? null;
+      },
+    );
+
     let prompt = resolved.prompt;
     let lastAssistant: string | null = null;
     let terminal: TurnOutcome | null = null;
@@ -248,6 +287,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
             prompt: captured,
             engine: resolved.engine,
             model: resolved.model,
+            githubToken,
             turn,
           }),
       );
@@ -305,10 +345,10 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       terminal.kind === "done" &&
       terminal.result.exit_code === 0 &&
       terminal.result.branch &&
-      this.env.GITHUB_TOKEN
+      githubToken
     ) {
       const branch = terminal.result.branch;
-      const githubToken = this.env.GITHUB_TOKEN;
+      const prGithubToken = githubToken;
       const issueIdent = issueIdentifier;
       const responseBody = lastAssistant ?? `Symphony agent run for ${issueIdent}`;
 
@@ -325,14 +365,14 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
               body:
                 responseBody.slice(0, 4000) +
                 (issueGraphqlId ? `\n\n_Linear: \`${issueIdent}\`_` : ""),
-              token: githubToken,
+              token: prGithubToken,
             });
             try {
               await addLabels({
                 repoUrl: resolved.repoUrl,
                 prNumber: pr.number,
                 labels: ["symphony"],
-                token: githubToken,
+                token: prGithubToken,
               });
             } catch (e) {
               // Label failure is non-fatal — the PR still exists.
@@ -451,6 +491,7 @@ async function runTurn(
     prompt: string;
     engine: "pi";
     model: string | null;
+    githubToken: string | null;
     turn: number;
   },
 ): Promise<TurnOutcome> {
@@ -473,6 +514,7 @@ async function runTurn(
       prompt: args.prompt,
       engine: args.engine,
       model: args.model,
+      githubToken: args.githubToken,
     })) {
       events.push(ev);
 

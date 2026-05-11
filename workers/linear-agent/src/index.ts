@@ -1,10 +1,14 @@
 import { Hono } from "hono";
 
 import { buildAdminRouter } from "./routes/admin";
+import { buildDashboardRouter } from "./routes/dashboard";
 import { buildOAuthRouter } from "./routes/oauth";
 import { buildWebhookRouter } from "./routes/webhook";
 
 export interface Env {
+  // Static assets for the dashboard SPA (served at /dashboard/*)
+  ASSETS: Fetcher;
+
   // KV namespace storing OAuth state nonces and webhook delivery
   // dedupe markers. As of item 3, the install access token lives in
   // D1 (`installations.access_token`), not here.
@@ -50,7 +54,17 @@ export interface Env {
   // apply the `symphony` label. Set with
   // `wrangler secret put GITHUB_TOKEN`. When unset, the workflow
   // posts the branch info as a thought but skips PR creation.
+  // Deprecated: prefer Symphony GitHub App (GITHUB_APP_ID +
+  // GITHUB_APP_PRIVATE_KEY) which mints per-org installation tokens.
   GITHUB_TOKEN?: string;
+
+  // Symphony GitHub App credentials. When present, per-org
+  // installation tokens are minted via the GitHub App instead of
+  // using the org-wide GITHUB_TOKEN PAT. Set with:
+  //   wrangler secret put GITHUB_APP_ID
+  //   wrangler secret put GITHUB_APP_PRIVATE_KEY
+  GITHUB_APP_ID?: string;
+  GITHUB_APP_PRIVATE_KEY?: string;
 }
 
 // Re-export the Workflow class so wrangler's class_name resolution finds
@@ -70,6 +84,7 @@ export function buildApp() {
 
   app.get("/health", (c) => c.json({ ok: true }));
 
+  app.route("/", buildDashboardRouter());
   app.route("/", buildOAuthRouter());
   app.route("/", buildWebhookRouter());
   app.route("/", buildAdminRouter());

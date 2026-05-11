@@ -28,6 +28,7 @@ export interface RunArgs {
   engine: "pi";
   model?: string | null;
   timeoutMs?: number;
+  githubToken?: string | null;
 }
 
 export interface RunResult {
@@ -117,6 +118,7 @@ export class DispatcherClient {
       engine: args.engine,
       ...(args.model ? { model: args.model } : {}),
       ...(args.timeoutMs ? { timeout_ms: args.timeoutMs } : {}),
+      ...(args.githubToken ? { github_token: args.githubToken } : {}),
     });
 
     const sig = await computeSignature(this.secret, body);
@@ -165,6 +167,7 @@ export class DispatcherClient {
       engine: args.engine,
       ...(args.model ? { model: args.model } : {}),
       ...(args.timeoutMs ? { timeout_ms: args.timeoutMs } : {}),
+      ...(args.githubToken ? { github_token: args.githubToken } : {}),
     });
 
     const sig = await computeSignature(this.secret, body);

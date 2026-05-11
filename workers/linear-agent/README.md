@@ -67,6 +67,30 @@ open https://linear-agent.<your-subdomain>.workers.dev/oauth/authorize
 
 After OAuth, mention the agent or assign it an issue in Linear.
 
+## D1 migrations
+
+The D1 database schema lives in `migrations/`. Apply migrations with:
+
+```bash
+# Local development (uses local SQLite file, no credentials needed)
+wrangler d1 migrations apply symphony-linear-agent --local
+
+# Production (requires Cloudflare auth)
+wrangler d1 migrations apply symphony-linear-agent --remote
+```
+
+Tables (v1 multi-tenant schema in `0002_multi_tenant.sql`):
+
+| Table | Purpose |
+|---|---|
+| `organizations` | One row per Linear workspace install |
+| `installations` | Per-org `actor=app` OAuth tokens |
+| `users` | Dashboard logins with per-user `actor=user` OAuth tokens |
+| `projects` | Per-team config (repo URL, branch, engine/model overrides) |
+| `org_credentials` | Envelope-encrypted per-org secrets |
+| `sessions` | Agent session runs with status and cost |
+| `usage` | Aggregated turns/minutes per org per billing period |
+
 ## Development
 
 ```bash

@@ -185,6 +185,48 @@ export function buildOAuthRouter() {
     }
   });
 
+  // SYM-269: GitHub App install callback. After an org installs the
+  // Symphony GitHub App, GitHub redirects here with `installation_id`
+  // and `state` (the Linear org id we passed when redirecting to the
+  // GitHub App install page). We write the installation id to D1.
+  app.get("/oauth/github/install-callback", async (c) => {
+    const installationId = c.req.query("installation_id");
+    const state = c.req.query("state");
+    const setupAction = c.req.query("setup_action");
+
+    if (!installationId || !state) {
+      return c.json({ error: "missing_parameters" }, 400);
+    }
+
+    const numericId = parseInt(installationId, 10);
+    if (!Number.isFinite(numericId) || numericId <= 0) {
+      return c.json({ error: "invalid_installation_id" }, 400);
+    }
+
+    const store = new InstallationStore(c.env.DB);
+    const install = await store.get(state);
+    if (!install) {
+      return c.json(
+        {
+          error: "unknown_organization",
+          message:
+            "No Linear installation found for this org. Install the Linear agent first.",
+        },
+        404,
+      );
+    }
+
+    await store.updateGitHubAppInstallation(state, numericId);
+
+    return c.json({
+      ok: true,
+      message: "GitHub App installed. Symphony will use per-org tokens for PRs.",
+      organization_id: state,
+      github_app_installation_id: numericId,
+      setup_action: setupAction ?? "install",
+    });
+  });
+
   app.get("/oauth/revoke", async (c) => {
     // Revoke either by query param `organization_id` or, when there's
     // exactly one install, the implicit only-install.
