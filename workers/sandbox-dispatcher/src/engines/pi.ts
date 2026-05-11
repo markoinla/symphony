@@ -17,9 +17,10 @@
  *   tool_execution_end (isError=true)         → tool_result ok=false
  *   message_update / thinking_end             → thought (full block)
  *   message_end (role=assistant, text blocks) → assistant_msg
+ *   turn_start                                → thought ("Calling model…")
  *
  * Dropped:
- *   session, agent_start, agent_end, turn_start, turn_end (lifecycle)
+ *   session, agent_start, agent_end, turn_end (lifecycle)
  *   message_start                             (consolidated by message_end)
  *   message_update / text_delta|text_start|text_end (high volume; final
  *                                             text comes via message_end)
@@ -82,6 +83,15 @@ export const piEngineAdapter: EngineAdapter = {
       // summarizeStdout fallback handles the same case for the
       // backwards-compat blob response.
       return [];
+    }
+
+    if (event.type === "turn_start") {
+      // Per-turn heartbeat. The first turn_start fires right after the
+      // dispatcher's "Calling model (…)" prep thought, which is a
+      // tolerable duplicate; subsequent turn_starts (one per
+      // tool-result loop) give a clear separator in the timeline
+      // before the next model response begins streaming.
+      return [{ type: "thought", text: "Calling model…" }];
     }
 
     if (event.type === "tool_execution_start") {

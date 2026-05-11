@@ -50,12 +50,17 @@ describe("piEngineAdapter.parseEvents", () => {
       [],
     );
     expect(piEngineAdapter.parseEvents('{"type":"agent_start"}')).toEqual([]);
-    expect(piEngineAdapter.parseEvents('{"type":"turn_start"}')).toEqual([]);
     expect(piEngineAdapter.parseEvents('{"type":"agent_end"}')).toEqual([]);
     expect(piEngineAdapter.parseEvents('{"type":"turn_end"}')).toEqual([]);
     expect(
       piEngineAdapter.parseEvents('{"type":"message_start","message":{}}'),
     ).toEqual([]);
+  });
+
+  it("turns turn_start into a thought heartbeat", () => {
+    expect(piEngineAdapter.parseEvents('{"type":"turn_start"}')).toEqual([
+      { type: "thought", text: "Calling model…" },
+    ]);
   });
 
   it("drops text_delta updates (consolidated by message_end)", () => {

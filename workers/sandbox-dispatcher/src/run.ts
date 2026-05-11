@@ -282,7 +282,9 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
       const cmd = buildEngineCommand(parsed, workspaceDir);
       await emit({
         type: "thought",
-        text: `Starting ${parsed.engine}${parsed.model ? ` (${parsed.model})` : ""}…`,
+        text: parsed.model
+          ? `Calling model (${parsed.model})…`
+          : "Calling model…",
       });
       const execStream = await sandbox.execStream(cmd, {
         timeout: parsed.timeoutMs,

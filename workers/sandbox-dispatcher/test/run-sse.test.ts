@@ -271,7 +271,7 @@ describe("POST /run (Accept: text/event-stream)", () => {
     });
     expect(events[2]).toMatchObject({
       type: "thought",
-      text: expect.stringContaining("Starting pi"),
+      text: expect.stringContaining("Calling model"),
     });
     expect(events[3]).toMatchObject({
       type: "assistant_msg",
