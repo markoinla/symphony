@@ -5,6 +5,7 @@ import {
   Outlet,
   Link,
 } from "@tanstack/react-router";
+import { SessionsPage } from "./components/SessionsPage";
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -50,7 +51,7 @@ const projectsRoute = createRoute({
 const sessionsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/dashboard/sessions",
-  component: () => <h2>Sessions</h2>,
+  component: SessionsPage,
 });
 
 const routeTree = rootRoute.addChildren([
