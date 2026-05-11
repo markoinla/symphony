@@ -4,7 +4,7 @@
  * from the last completed step instead of dropping the session.
  *
  * Steps:
- *   1. load-token            — read the install's access_token from KV.
+ *   1. load-token            — read the install's access_token from D1.
  *   2. post-initial-thought  — meet Linear's 10s first-activity SLA.
  *   3. resolve-inputs        — decide repo + prompt; classify outcome.
  *   4. turn-N (loop)         — stream the dispatcher's SSE response,
@@ -102,19 +102,13 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     const webhookEvent = event.payload.event;
     const sessionId = webhookEvent.agentSession.id;
 
-    // Look up the install for this delivery. New code path is D1
-    // `installations` keyed by `organizationId`; the legacy KV
-    // `access_token` is consulted as a fallback so single-org
-    // deployments that haven't seeded D1 yet keep working.
     const token = await step.do("load-token", async () => {
       const installs = new InstallationStore(this.env.DB);
       const orgId = webhookEvent.organizationId;
       const install = orgId
         ? await installs.get(orgId)
         : await installs.getOnlyInstallation();
-      if (install) return install.access_token;
-      // Legacy single-tenant KV fallback.
-      return (await this.env.LINEAR_TOKENS.get("access_token")) ?? null;
+      return install?.access_token ?? null;
     });
 
     if (!token) {

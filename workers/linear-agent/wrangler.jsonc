@@ -9,9 +9,8 @@
     "enabled": true
   },
 
-  // KV holds (a) the per-flow OAuth state nonce and (b) the agent's own
-  // installed `actor=app` access token. Single-org for the walking
-  // skeleton — multi-tenant config lives in D1 in a later phase.
+  // KV holds (a) the per-flow OAuth state nonce and (b) webhook delivery
+  // dedupe markers. Install access tokens live in D1 `installations`.
   // Create with: wrangler kv namespace create LINEAR_TOKENS
   // Then paste the printed id below.
   "kv_namespaces": [

@@ -208,6 +208,18 @@ function buildRunner(env: Env): SessionRunner {
   return runner;
 }
 
+function seededDb(): FakeD1 {
+  const db = new FakeD1();
+  db.installations.set("org-1", {
+    organization_id: "org-1",
+    access_token: "fake-token",
+    scopes: "read,write",
+    installed_at: new Date().toISOString(),
+    refreshed_at: new Date().toISOString(),
+  });
+  return db;
+}
+
 const baseSession = {
   id: "session-1",
   issue: {
@@ -222,7 +234,7 @@ const baseSession = {
 describe("SessionRunner.run — happy path", () => {
   it("streams assistant_msg and posts thought + response with the last assistant text", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
     installFetchMock({
       dispatcherEvents: [
         { type: "assistant_msg", text: "Looking at this." },
@@ -238,7 +250,7 @@ describe("SessionRunner.run — happy path", () => {
       ],
     });
 
-    const env = makeEnv(kv);
+    const env = makeEnv(kv, {}, db);
     const runner = buildRunner(env);
     const { step, ran } = makeStep();
 
@@ -275,7 +287,7 @@ describe("SessionRunner.run — happy path", () => {
 
   it("posts tool_call as an action activity in the timeline", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
     installFetchMock({
       dispatcherEvents: [
         {
@@ -296,7 +308,7 @@ describe("SessionRunner.run — happy path", () => {
       ],
     });
 
-    const runner = buildRunner(makeEnv(kv));
+    const runner = buildRunner(makeEnv(kv, {}, db));
     const { step } = makeStep();
 
     const event: AgentSessionEventWebhook = {
@@ -323,9 +335,8 @@ describe("SessionRunner.run — happy path", () => {
 });
 
 describe("SessionRunner.run — abort branches", () => {
-  it("returns no_token without posting when access_token is missing", async () => {
+  it("returns no_token without posting when no installation exists", async () => {
     const kv = new FakeKV();
-    // No access_token put.
     const runner = buildRunner(makeEnv(kv));
     const { step, ran } = makeStep();
 
@@ -345,9 +356,9 @@ describe("SessionRunner.run — abort branches", () => {
 
   it("posts thought + error when no repo is configured for the team", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
     installFetchMock({ dispatcherEvents: [] });
-    const env = makeEnv(kv, { PROJECT_MAPPINGS_JSON: "{}" });
+    const env = makeEnv(kv, { PROJECT_MAPPINGS_JSON: "{}" }, db);
     const runner = buildRunner(env);
     const { step, ran } = makeStep();
 
@@ -376,9 +387,9 @@ describe("SessionRunner.run — abort branches", () => {
 
   it("posts thought + error when no prompt is in the payload", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
     installFetchMock({ dispatcherEvents: [] });
-    const runner = buildRunner(makeEnv(kv));
+    const runner = buildRunner(makeEnv(kv, {}, db));
     const { step, ran } = makeStep();
 
     const event: AgentSessionEventWebhook = {
@@ -407,7 +418,7 @@ describe("SessionRunner.run — abort branches", () => {
 describe("SessionRunner.run — dispatch failures", () => {
   it("posts thought + error when the dispatcher returns a non-2xx response", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
     installFetchMock({
       dispatcherStatus: 412,
       dispatcherErrorBody: {
@@ -416,7 +427,7 @@ describe("SessionRunner.run — dispatch failures", () => {
       },
     });
 
-    const runner = buildRunner(makeEnv(kv));
+    const runner = buildRunner(makeEnv(kv, {}, db));
     const { step, ran } = makeStep();
 
     const event: AgentSessionEventWebhook = {
@@ -452,7 +463,7 @@ describe("SessionRunner.run — dispatch failures", () => {
 
   it("posts thought + error when the engine result frame has non-zero exit", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
     installFetchMock({
       dispatcherEvents: [
         { type: "error", message: "ENOENT: codex auth missing" },
@@ -467,7 +478,7 @@ describe("SessionRunner.run — dispatch failures", () => {
       ],
     });
 
-    const runner = buildRunner(makeEnv(kv));
+    const runner = buildRunner(makeEnv(kv, {}, db));
     const { step } = makeStep();
 
     const event: AgentSessionEventWebhook = {
@@ -498,7 +509,7 @@ describe("SessionRunner.run — dispatch failures", () => {
 
   it("posts thought + error when the stream closes without a result frame", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
     installFetchMock({
       // Stream closes after the assistant_msg without a turn_end / result.
       dispatcherEvents: [
@@ -506,7 +517,7 @@ describe("SessionRunner.run — dispatch failures", () => {
       ],
     });
 
-    const runner = buildRunner(makeEnv(kv));
+    const runner = buildRunner(makeEnv(kv, {}, db));
     const { step } = makeStep();
 
     const event: AgentSessionEventWebhook = {
@@ -537,7 +548,7 @@ describe("SessionRunner.run — dispatch failures", () => {
 describe("SessionRunner.run — PR creation (item 4)", () => {
   it("creates a PR, adds the symphony label, attaches it to Linear, and appends the URL to the response", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
 
     const githubCalls: Array<{ url: string; body?: string }> = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -625,7 +636,7 @@ describe("SessionRunner.run — PR creation (item 4)", () => {
       throw new Error(`unexpected fetch in test: ${url}`);
     });
 
-    const env = makeEnv(kv, { GITHUB_TOKEN: "ghp_test" });
+    const env = makeEnv(kv, { GITHUB_TOKEN: "ghp_test" }, db);
     const runner = buildRunner(env);
     const { step, ran } = makeStep();
 
@@ -665,7 +676,7 @@ describe("SessionRunner.run — PR creation (item 4)", () => {
 
   it("skips PR creation when GITHUB_TOKEN is unset", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
     installFetchMock({
       dispatcherEvents: [
         { type: "assistant_msg", text: "Done." },
@@ -680,7 +691,7 @@ describe("SessionRunner.run — PR creation (item 4)", () => {
       ],
     });
 
-    const env = makeEnv(kv);
+    const env = makeEnv(kv, {}, db);
     delete (env as Partial<Env>).GITHUB_TOKEN;
     const runner = buildRunner(env);
     const { step, ran } = makeStep();
@@ -700,7 +711,7 @@ describe("SessionRunner.run — PR creation (item 4)", () => {
 
   it("skips PR creation when result has no branch (no changes)", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
     installFetchMock({
       dispatcherEvents: [
         { type: "assistant_msg", text: "Nothing to change." },
@@ -715,7 +726,7 @@ describe("SessionRunner.run — PR creation (item 4)", () => {
       ],
     });
 
-    const env = makeEnv(kv, { GITHUB_TOKEN: "ghp_test" });
+    const env = makeEnv(kv, { GITHUB_TOKEN: "ghp_test" }, db);
     const runner = buildRunner(env);
     const { step, ran } = makeStep();
 
@@ -736,7 +747,7 @@ describe("SessionRunner.run — PR creation (item 4)", () => {
 describe("SessionRunner.run — multi-turn loop", () => {
   it("re-dispatches when a turn ends with needs_continuation", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
 
     // Two dispatcher calls expected: turn 1 needs continuation, turn 2
     // completes. The fetch mock returns a different SSE script per
@@ -799,7 +810,7 @@ describe("SessionRunner.run — multi-turn loop", () => {
       throw new Error(`unexpected fetch in test: ${url}`);
     });
 
-    const runner = buildRunner(makeEnv(kv));
+    const runner = buildRunner(makeEnv(kv, {}, db));
     const { step, ran } = makeStep();
 
     const event: AgentSessionEventWebhook = {
@@ -828,7 +839,7 @@ describe("SessionRunner.run — multi-turn loop", () => {
 
   it("stops at max_turns and uses the last assistant message", async () => {
     const kv = new FakeKV();
-    await kv.put("access_token", "fake-token");
+    const db = seededDb();
 
     // Always returns needs_continuation; we cap at 2.
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -864,7 +875,7 @@ describe("SessionRunner.run — multi-turn loop", () => {
       throw new Error(`unexpected fetch: ${url}`);
     });
 
-    const env = makeEnv(kv, { DEFAULT_MAX_TURNS: "2" });
+    const env = makeEnv(kv, { DEFAULT_MAX_TURNS: "2" }, db);
     const runner = buildRunner(env);
     const { step } = makeStep();
 

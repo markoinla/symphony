@@ -15,6 +15,7 @@ import {
   summarizeStdout,
   truncate,
 } from "../lib/session-helpers";
+import { InstallationStore } from "../lib/store";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
 
 // Re-exported so existing call sites (and tests) that imported these
@@ -152,9 +153,13 @@ export async function runSession(
   env: Env,
   event: AgentSessionEventWebhook,
 ): Promise<void> {
-  const accessToken = await env.LINEAR_TOKENS.get("access_token");
+  const installs = new InstallationStore(env.DB);
+  const orgId = event.organizationId;
+  const install = orgId
+    ? await installs.get(orgId)
+    : await installs.getOnlyInstallation();
+  const accessToken = install?.access_token ?? null;
   if (!accessToken) {
-    // Nothing we can post back to Linear without the token — log and bail.
     console.error(
       "no_access_token",
       JSON.stringify({ session_id: event.agentSession.id }),
