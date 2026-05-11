@@ -32,10 +32,6 @@ class FakeSandbox {
   destroyed = false;
   restoredBackups: Array<{ id: string; dir: string }> = [];
   execCalls: ExecCall[] = [];
-
-  // Each test can install a queue of canned exec results. If the queue is
-  // empty we return success-with-empty-output, which is correct for the
-  // "happy path" prep commands (mkdir, rm -rf, git clone).
   execQueue: Array<{ exitCode: number; stdout: string; stderr: string }> = [];
 
   async restoreBackup(handle: { id: string; dir: string }) {
@@ -58,7 +54,7 @@ class FakeSandbox {
 class FakeD1 {
   rows = new Map<
     string,
-    { handle: string; created_at: number; refreshed_at: number | null }
+    { handle: string; version: string | null; created_at: number; refreshed_at: number | null }
   >();
 
   prepare(sql: string) {
@@ -78,23 +74,24 @@ class FakeStatement {
 
   async run() {
     const sql = this.sql.trim();
-    if (sql.startsWith("INSERT INTO auth_backups")) {
-      const [scope, handle, created_at, refreshed_at] = this.bindings as [
+    if (sql.startsWith("INSERT INTO engine_baselines")) {
+      const [engine, handle, version, created_at, refreshed_at] = this.bindings as [
         string,
         string,
+        string | null,
         number,
         number,
       ];
-      this.db.rows.set(scope, { handle, created_at, refreshed_at });
+      this.db.rows.set(engine, { handle, version, created_at, refreshed_at });
       return { success: true, meta: { changes: 1 } };
     }
-    if (sql.startsWith("DELETE FROM auth_backups")) {
-      const [scope] = this.bindings as [string];
-      const had = this.db.rows.has(scope);
-      this.db.rows.delete(scope);
+    if (sql.startsWith("DELETE FROM engine_baselines")) {
+      const [engine] = this.bindings as [string];
+      const had = this.db.rows.has(engine);
+      this.db.rows.delete(engine);
       return { success: true, meta: { changes: had ? 1 : 0 } };
     }
-    if (sql.startsWith("UPDATE auth_backups")) {
+    if (sql.startsWith("UPDATE engine_baselines")) {
       return { success: true, meta: { changes: 0 } };
     }
     throw new Error(`Unsupported SQL in fake D1: ${sql}`);
@@ -103,10 +100,10 @@ class FakeStatement {
   async first<T>() {
     const sql = this.sql.trim();
     if (!sql.startsWith("SELECT")) throw new Error(`first() called on non-SELECT: ${sql}`);
-    const [scope] = this.bindings as [string];
-    const row = this.db.rows.get(scope);
+    const [key] = this.bindings as [string];
+    const row = this.db.rows.get(key);
     if (!row) return null;
-    return { scope, ...row } as unknown as T;
+    return { engine: key, ...row } as unknown as T;
   }
 
   async all<T>() {
@@ -138,15 +135,10 @@ async function signedRequest(
   return new Request(url, { ...init, headers });
 }
 
-function getSandboxForId(id: string): FakeSandbox {
-  const sandbox = sandboxHandles[id];
-  if (!sandbox) throw new Error(`expected fake sandbox to exist for id=${id}`);
-  return sandbox;
-}
-
-function seedBackup(db: FakeD1, scope: string) {
-  db.rows.set(scope, {
-    handle: JSON.stringify({ id: `backup-${scope}`, dir: "/root" }),
+function seedBaseline(db: FakeD1, engine: string) {
+  db.rows.set(engine, {
+    handle: JSON.stringify({ id: `baseline-${engine}`, dir: "/home/symphony" }),
+    version: null,
     created_at: 1_700_000_000,
     refreshed_at: 1_700_000_000,
   });
@@ -162,13 +154,12 @@ afterEach(() => {
 });
 
 describe("POST /run (engine: pi)", () => {
-  it("restores the snapshot, clones, runs pi, and destroys the sandbox", async () => {
+  it("restores the baseline, clones, runs pi, and destroys the sandbox", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-162",
       repo_url: "https://github.com/markoinla/symphony.git",
       prompt: "Add today's date to README.md.",
@@ -176,8 +167,6 @@ describe("POST /run (engine: pi)", () => {
       model: "anthropic/claude-sonnet-4-6",
     });
 
-    // Pre-create the sandbox so we can pre-load exec results: mkdir, rm,
-    // git clone (success), then the engine command itself.
     const sandbox = new FakeSandbox(runSandboxId("SYM-162"));
     sandbox.execQueue = [
       { exitCode: 0, stdout: "", stderr: "" }, // mkdir
@@ -199,7 +188,7 @@ describe("POST /run (engine: pi)", () => {
     expect(json.stdout).toContain('"type":"response"');
     expect(typeof json.duration_ms).toBe("number");
 
-    expect(sandbox.restoredBackups).toEqual([{ id: "backup-alice", dir: "/root" }]);
+    expect(sandbox.restoredBackups).toEqual([{ id: "baseline-pi", dir: "/home/symphony" }]);
     expect(sandbox.execCalls).toHaveLength(4);
     expect(sandbox.execCalls[0]?.cmd).toMatch(/mkdir -p '\/workspace\/SYM-162'/);
     expect(sandbox.execCalls[2]?.cmd).toContain("git clone");
@@ -214,12 +203,11 @@ describe("POST /run (engine: pi)", () => {
     expect(sandbox.destroyed).toBe(true);
   });
 
-  it("returns 412 when no snapshot exists for the scope", async () => {
+  it("returns 412 when no baseline exists for the engine", async () => {
     const app = buildApp();
     const db = new FakeD1();
 
     const body = JSON.stringify({
-      scope: "ghost",
       issue_id: "SYM-1",
       repo_url: "https://github.com/x/y.git",
       prompt: "hi",
@@ -233,17 +221,16 @@ describe("POST /run (engine: pi)", () => {
 
     expect(res.status).toBe(412);
     expect(await res.json()).toEqual({
-      error: "missing_auth_backup",
-      scope: "ghost",
+      error: "missing_baseline",
+      engine: "pi",
     });
-    // No sandbox should have been created.
     expect(Object.keys(sandboxHandles)).toEqual([]);
   });
 
   it("returns 502 when git clone fails and still destroys the sandbox", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-99"));
     sandbox.execQueue = [
@@ -254,7 +241,6 @@ describe("POST /run (engine: pi)", () => {
     sandboxHandles[runSandboxId("SYM-99")] = sandbox;
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-99",
       repo_url: "https://github.com/missing/missing.git",
       prompt: "do a thing",
@@ -272,22 +258,19 @@ describe("POST /run (engine: pi)", () => {
     expect(json.exit_code).toBe(128);
     expect(json.stderr).toContain("repository not found");
     expect(sandbox.destroyed).toBe(true);
-    // Engine command should not have run.
     expect(sandbox.execCalls.find((c) => c.cmd.includes("pi --print"))).toBeUndefined();
   });
 
   it("destroys the sandbox even when the engine throws", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-1"));
     let calls = 0;
     sandbox.exec = async (cmd: string, opts?: { timeout?: number }) => {
       calls++;
       sandbox.execCalls.push({ cmd, opts });
-      // First three exec calls succeed (mkdir, rm, clone). Engine call (4)
-      // throws.
       if (calls >= 4) {
         throw new Error("sandbox boom");
       }
@@ -296,7 +279,6 @@ describe("POST /run (engine: pi)", () => {
     sandboxHandles[runSandboxId("SYM-1")] = sandbox;
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-1",
       repo_url: "https://github.com/x/y.git",
       prompt: "hi",
@@ -308,22 +290,20 @@ describe("POST /run (engine: pi)", () => {
       makeEnv(db),
     );
 
-    // Hono's default error handler converts thrown errors to 500.
     expect(res.status).toBe(500);
     expect(sandbox.destroyed).toBe(true);
   });
 
   it.each([
-    ["missing scope", { issue_id: "SYM-1", repo_url: "https://github.com/x/y.git", prompt: "p", engine: "pi" }, "invalid_scope"],
-    ["missing issue_id", { scope: "a", repo_url: "https://github.com/x/y.git", prompt: "p", engine: "pi" }, "invalid_issue_id"],
-    ["bad repo_url scheme", { scope: "a", issue_id: "i", repo_url: "file:///etc/passwd", prompt: "p", engine: "pi" }, "invalid_repo_url"],
-    ["repo_url with shell metachar", { scope: "a", issue_id: "i", repo_url: "https://x.y/z;rm -rf /.git", prompt: "p", engine: "pi" }, "invalid_repo_url"],
-    ["empty prompt", { scope: "a", issue_id: "i", repo_url: "https://x.y/z.git", prompt: "", engine: "pi" }, "invalid_prompt"],
-    ["unsupported engine", { scope: "a", issue_id: "i", repo_url: "https://x.y/z.git", prompt: "p", engine: "claude" }, "unsupported_engine"],
+    ["missing issue_id", { repo_url: "https://github.com/x/y.git", prompt: "p", engine: "pi" }, "invalid_issue_id"],
+    ["bad repo_url scheme", { issue_id: "i", repo_url: "file:///etc/passwd", prompt: "p", engine: "pi" }, "invalid_repo_url"],
+    ["repo_url with shell metachar", { issue_id: "i", repo_url: "https://x.y/z;rm -rf /.git", prompt: "p", engine: "pi" }, "invalid_repo_url"],
+    ["empty prompt", { issue_id: "i", repo_url: "https://x.y/z.git", prompt: "", engine: "pi" }, "invalid_prompt"],
+    ["unsupported engine", { issue_id: "i", repo_url: "https://x.y/z.git", prompt: "p", engine: "claude" }, "unsupported_engine"],
   ])("rejects %s with 400", async (_label, payload, expected) => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "a");
+    seedBaseline(db, "pi");
 
     const res = await app.fetch(
       await signedRequest("https://example/run", {
@@ -341,13 +321,12 @@ describe("POST /run (engine: pi)", () => {
   it("clamps timeout_ms to MAX_TIMEOUT_MS", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-1"));
     sandboxHandles[runSandboxId("SYM-1")] = sandbox;
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-1",
       repo_url: "https://github.com/x/y.git",
       prompt: "hi",
@@ -404,19 +383,18 @@ describe("POST /run with credentials", () => {
   it("injects credential env vars into the engine command", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-300"));
     sandbox.execQueue = [
-      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
-      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
-      { exitCode: 0, stdout: "", stderr: "" }, // git clone
-      { exitCode: 0, stdout: '{"type":"response","body":"done"}', stderr: "" }, // engine
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: '{"type":"response","body":"done"}', stderr: "" },
     ];
     sandboxHandles[runSandboxId("SYM-300")] = sandbox;
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-300",
       repo_url: "https://github.com/x/y.git",
       prompt: "do something",
@@ -441,7 +419,7 @@ describe("POST /run with credentials", () => {
   it("shell-quotes credential values containing single quotes", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-301"));
     sandbox.execQueue = [
@@ -453,7 +431,6 @@ describe("POST /run with credentials", () => {
     sandboxHandles[runSandboxId("SYM-301")] = sandbox;
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-301",
       repo_url: "https://github.com/x/y.git",
       prompt: "go",
@@ -476,20 +453,19 @@ describe("POST /run with credentials", () => {
   it("writes MCP config file when mcp_servers are provided", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-302"));
     sandbox.execQueue = [
-      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
-      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
-      { exitCode: 0, stdout: "", stderr: "" }, // git clone
-      { exitCode: 0, stdout: "", stderr: "" }, // writeMcpConfig
-      { exitCode: 0, stdout: '{"type":"response","body":"ok"}', stderr: "" }, // engine
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: '{"type":"response","body":"ok"}', stderr: "" },
     ];
     sandboxHandles[runSandboxId("SYM-302")] = sandbox;
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-302",
       repo_url: "https://github.com/x/y.git",
       prompt: "go",
@@ -511,7 +487,6 @@ describe("POST /run with credentials", () => {
     expect(mcpCall).toBeDefined();
     expect(mcpCall?.cmd).toContain("mkdir -p '/home/symphony/.config/pi'");
     expect(mcpCall?.cmd).toContain("mcp.json");
-    // Verify the config JSON is written (via printf '%s')
     expect(mcpCall?.cmd).toContain("linear");
     expect(mcpCall?.cmd).toContain("Bearer lin_tok_123");
   });
@@ -519,16 +494,15 @@ describe("POST /run with credentials", () => {
   it("rejects invalid credential fields with 400", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-303",
       repo_url: "https://github.com/x/y.git",
       prompt: "go",
       engine: "pi",
       credentials: {
-        anthropic_api_key: 12345, // not a string
+        anthropic_api_key: 12345,
       },
     });
 
@@ -545,16 +519,15 @@ describe("POST /run with credentials", () => {
   it("rejects invalid mcp_servers entries with 400", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-304",
       repo_url: "https://github.com/x/y.git",
       prompt: "go",
       engine: "pi",
       credentials: {
-        mcp_servers: [{ name: "x", url: "" }], // empty url
+        mcp_servers: [{ name: "x", url: "" }],
       },
     });
 
@@ -571,7 +544,7 @@ describe("POST /run with credentials", () => {
   it("passes null credentials when field is absent (backward compatible)", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-305"));
     sandbox.execQueue = [
@@ -583,7 +556,6 @@ describe("POST /run with credentials", () => {
     sandboxHandles[runSandboxId("SYM-305")] = sandbox;
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-305",
       repo_url: "https://github.com/x/y.git",
       prompt: "go",
@@ -596,7 +568,6 @@ describe("POST /run with credentials", () => {
     );
 
     expect(res.status).toBe(200);
-    // Should be exactly 4 exec calls (mkdir, rm, clone, engine) — no MCP config write
     expect(sandbox.execCalls).toHaveLength(4);
     const piCall = sandbox.execCalls[3];
     expect(piCall?.cmd).not.toContain("ANTHROPIC_API_KEY");
@@ -606,19 +577,18 @@ describe("POST /run with credentials", () => {
   it("returns 502 when MCP config write fails", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-307"));
     sandbox.execQueue = [
-      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
-      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
-      { exitCode: 0, stdout: "", stderr: "" }, // git clone
-      { exitCode: 1, stdout: "", stderr: "Permission denied" }, // writeMcpConfig fails
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 1, stdout: "", stderr: "Permission denied" },
     ];
     sandboxHandles[runSandboxId("SYM-307")] = sandbox;
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-307",
       repo_url: "https://github.com/x/y.git",
       prompt: "go",
@@ -647,7 +617,7 @@ describe("POST /run with credentials", () => {
   it("injects all supported credential env vars", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBackup(db, "alice");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-306"));
     sandbox.execQueue = [
@@ -659,7 +629,6 @@ describe("POST /run with credentials", () => {
     sandboxHandles[runSandboxId("SYM-306")] = sandbox;
 
     const body = JSON.stringify({
-      scope: "alice",
       issue_id: "SYM-306",
       repo_url: "https://github.com/x/y.git",
       prompt: "go",

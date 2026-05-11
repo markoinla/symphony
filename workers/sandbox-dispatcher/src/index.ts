@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import { proxyToSandbox, type Sandbox as SandboxType } from "@cloudflare/sandbox";
 
-import { buildAuthRouter } from "./auth";
+import { buildBaselineRouter } from "./baselines";
 import { hmacMiddleware, type HmacEnv } from "./hmac";
 import { buildRunRouter } from "./run";
-import { buildRefreshRouter, refreshStaleSnapshots } from "./refresh";
+import { buildRefreshRouter, refreshStaleBaselines } from "./refresh";
 
 // Re-export the Sandbox Durable Object class so the Worker runtime can find
 // it for the binding declared in wrangler.jsonc. `@cloudflare/sandbox`
@@ -46,7 +46,7 @@ export function buildApp() {
     }),
   );
 
-  app.route("/", buildAuthRouter());
+  app.route("/", buildBaselineRouter());
   app.route("/", buildRunRouter());
   app.route("/", buildRefreshRouter());
 
@@ -67,11 +67,6 @@ export default {
     return app.fetch(request, env, ctx);
   },
 
-  /**
-   * Phase 6: refresh stale snapshots before the R2 lifecycle rule (14
-   * days) GCs them. Triggered by `triggers.crons` in `wrangler.jsonc`.
-   * Logs per-scope outcomes so they're visible in `wrangler tail`.
-   */
   async scheduled(
     _controller: ScheduledController,
     env: Env,
@@ -81,10 +76,10 @@ export default {
     ctx.waitUntil(
       (async () => {
         try {
-          const results = await refreshStaleSnapshots(env, now);
+          const results = await refreshStaleBaselines(env, now);
           console.log(
             JSON.stringify({
-              event: "snapshot.refresh.complete",
+              event: "baseline.refresh.complete",
               now,
               checked: results.length,
               refreshed: results.filter((r) => r.outcome === "refreshed").length,
@@ -96,7 +91,7 @@ export default {
         } catch (err) {
           console.error(
             JSON.stringify({
-              event: "snapshot.refresh.error",
+              event: "baseline.refresh.error",
               error: err instanceof Error ? err.message : String(err),
             }),
           );

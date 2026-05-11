@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { getSandbox, parseSSEStream } from "@cloudflare/sandbox";
 
 import type { Env } from "./index";
-import { AuthBackupStore } from "./storage";
+import { BaselineStore } from "./storage";
 import { SANDBOX_HOME, safeDestroy, sanitizeScopeForId } from "./sandbox-helpers";
 import { piEngineAdapter } from "./engines/pi";
 import type { EngineAdapter, NormalizedEvent } from "./engines/types";
@@ -12,21 +12,19 @@ import { commitAndPush } from "./git";
  * `/run` — execute one agent turn in a fresh per-issue sandbox.
  *
  * Flow:
- *   1. Look up the snapshot handle for `scope`. 412 if absent.
+ *   1. Look up the baseline snapshot for `engine`. 412 if absent.
  *   2. Get a per-issue sandbox (`run-<sanitized-issue-id>`), restore the
- *      snapshot so all CLI auth + binaries are available.
+ *      baseline so engine binary + base toolchain are available.
  *   3. Clone `repo_url` into `/workspace/<issue_id>`.
- *   4. Build an engine command for `engine` ("pi" today; "codex"/"claude"
- *      reserved for future engines) and exec it with the configured timeout.
- *   5. Always destroy the sandbox in `finally` — leases are short-lived
- *      and we don't want containers leaking on the operator's account.
+ *   4. Inject per-tenant credentials (env vars, MCP config) from the
+ *      `credentials` block.
+ *   5. Build an engine command and exec it with the configured timeout.
+ *   6. Always destroy the sandbox in `finally`.
  *
  * Returns `{ engine, exit_code, stdout, stderr, duration_ms }` on success.
  *
- * Authentication state (Anthropic/OpenAI/Cloudflare API keys, model
- * config) lives entirely in the snapshot — the dispatcher never sees
- * provider credentials. Operators authenticate `pi` interactively during
- * `/auth/bootstrap` and snapshot the result.
+ * Baselines contain only binaries (no credentials). Per-tenant secrets
+ * arrive via the `credentials` block on each `/run` request.
  */
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -36,7 +34,6 @@ const SUPPORTED_ENGINES = new Set(["pi"] as const);
 type Engine = "pi";
 
 interface RunBody {
-  scope?: unknown;
   issue_id?: unknown;
   repo_url?: unknown;
   prompt?: unknown;
@@ -69,7 +66,6 @@ export interface ParsedCredentials {
 }
 
 interface ParsedRun {
-  scope: string;
   issueId: string;
   repoUrl: string;
   prompt: string;
@@ -103,13 +99,10 @@ export function buildRunRouter() {
       return runStreaming(c.env, parsed);
     }
 
-    const store = new AuthBackupStore(c.env.DB);
-    const record = await store.get(parsed.scope);
+    const store = new BaselineStore(c.env.DB);
+    const record = await store.get(parsed.engine);
     if (!record) {
-      // Phase 4 plan: 412 (Precondition Failed), not 404. The caller is
-      // expected to bootstrap+snapshot before running; the snapshot is the
-      // precondition.
-      return c.json({ error: "missing_auth_backup", scope: parsed.scope }, 412);
+      return c.json({ error: "missing_baseline", engine: parsed.engine }, 412);
     }
 
     const sandbox = getSandbox(c.env.Sandbox, runSandboxId(parsed.issueId));
@@ -272,26 +265,18 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
   // returns the readable end of the pipe immediately so SSE headers
   // flush before the engine even starts.
   void (async () => {
-    const record = await new AuthBackupStore(env.DB).get(parsed.scope);
+    const record = await new BaselineStore(env.DB).get(parsed.engine);
     try {
       if (!record) {
-        // The non-streaming branch returns 412 for this case; in the
-        // streaming branch we've already committed to a 200 SSE
-        // response, so surface the same condition as an `error` event
-        // followed by a non-zero `result`.
         await emitTerminal(75 /* EX_TEMPFAIL */, {
-          message: `missing_auth_backup: ${parsed.scope}`,
+          message: `missing_baseline: ${parsed.engine}`,
         });
         return;
       }
 
-      // Surface each prep stage as a `thought` so the Linear timeline
-      // shows progress during the cold-start window (snapshot restore +
-      // clone can run 30–60s combined). These flow through the same
-      // event pipeline as engine-emitted thoughts.
       await emit({
         type: "thought",
-        text: "Restoring sandbox environment from snapshot…",
+        text: `Restoring ${parsed.engine} baseline snapshot…`,
       });
       await sandbox.restoreBackup(record.handle);
 
@@ -438,9 +423,6 @@ function adapterFor(engine: Engine): EngineAdapter {
 }
 
 function parseRun(body: RunBody): ParsedRun | string {
-  const scope = parseScope(body.scope);
-  if (!scope) return "invalid_scope";
-
   const issueId = parseIssueId(body.issue_id);
   if (!issueId) return "invalid_issue_id";
 
@@ -468,7 +450,6 @@ function parseRun(body: RunBody): ParsedRun | string {
   if (typeof credentials === "string") return credentials;
 
   return {
-    scope,
     issueId,
     repoUrl,
     prompt: body.prompt,
@@ -478,14 +459,6 @@ function parseRun(body: RunBody): ParsedRun | string {
     githubToken,
     credentials,
   };
-}
-
-function parseScope(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (trimmed === "") return null;
-  if (!/^[a-zA-Z0-9._:@-]+$/.test(trimmed)) return null;
-  return trimmed;
 }
 
 function parseIssueId(value: unknown): string | null {
