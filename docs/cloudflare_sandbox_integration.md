@@ -428,7 +428,7 @@ This works because the entire toolchain (gh, claude-code, codex, ttyd,
 mise, etc.) lives **inside the snapshot at `/home/symphony`** rather
 than baked into the image. ttyd is the only chicken-and-egg piece,
 and we install it idempotently from `BOOTSTRAP_PREP_CMD` on the very
-first bootstrap (`mkdir -p ~/.local/bin && curl ... -o ~/.local/bin/ttyd`).
+first bootstrap (`mkdir -p ~/.local/bin && curl ... -o ~/.local/scripts/ttyd`).
 After the first snapshot, every bootstrap restores ttyd for free.
 
 If you ever do need a custom image (e.g. for Phase 4 to bake a fixed
@@ -437,7 +437,7 @@ git/jq version), the slim pattern is:
 ```dockerfile
 FROM docker.io/cloudflare/sandbox:0.10.0
 RUN curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64" \
-        -o /usr/local/bin/ttyd && chmod +x /usr/local/bin/ttyd
+        -o /usr/local/scripts/ttyd && chmod +x /usr/local/scripts/ttyd
 ```
 
 But don't add one prematurely. We deleted the original Dockerfile
@@ -491,18 +491,31 @@ prod Worker stop matching the previously-set `DISPATCH_HMAC_SECRET`.
 Diagnostic: every signed request 401s with `{"error":"invalid_signature"}`
 even though `wrangler secret list` claims the secret is set.
 
-Mitigation: after every deploy that touches `wrangler.jsonc`, re-run
-the secret put explicitly with `--env=""` and verify with a quick
-`/auth/exec` round-trip:
+Mitigation (automated): use `scripts/deploy-workers.sh` instead of running
+`npm run deploy` directly. It deploys the targeted Worker(s), waits
+for edge propagation, and runs `scripts/smoke-dispatch.sh` as a gate — a
+post-deploy 401 storm fails the script loudly instead of being
+discovered by the next user-triggered Linear session.
+
+When drift is detected (the smoke check returns
+`connect_error: dispatcher_401: invalid_signature`), recover with:
 
 ```bash
-echo "$DISPATCH_HMAC_SECRET" | npx wrangler secret put DISPATCH_HMAC_SECRET --env=""
-# then a smoke curl with X-Symphony-Signature
+scripts/rotate-dispatch-secret.sh                     # generate fresh value, push to both workers
+scripts/rotate-dispatch-secret.sh "<known value>"     # or set a specific value (e.g. matching Symphony Elixir)
 ```
+
+The script bakes in `--env=""` and pushes to both workers in one shot
+so the "set on one but not the other" failure mode is impossible. It
+runs `scripts/smoke-dispatch.sh` afterwards as a verification gate.
+
+The smoke script needs `LINEAR_AGENT_ADMIN_TOKEN` set (matches the
+`ADMIN_TOKEN` secret on the linear-agent Worker). Either export it or
+write it to `.secrets/admin-token` (gitignored).
 
 This may be a wrangler 4.x quirk where named-env semantics confuse
 secret targeting. Either way, the recovery is cheap once you know to
-look for it.
+look for it — and the deploy-workers.sh gate makes it self-healing.
 
 ## Phase 6 — cron snapshot refresh (shipped)
 
@@ -719,7 +732,7 @@ in `.bashrc` + `.bash_profile`):
 ```bash
 # Sanity check: PATH/HOME should be wired up via .bash_profile → .bashrc.
 echo $HOME           # /home/symphony
-which npm            # /usr/local/bin/npm (system) is fine — npm-prefix routes -g installs
+which npm            # /usr/local/scripts/npm (system) is fine — npm-prefix routes -g installs
 npm config get prefix  # /home/symphony/.npm-global
 
 # Install pi.
