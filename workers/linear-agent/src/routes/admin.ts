@@ -111,13 +111,14 @@ export function buildAdminRouter() {
   app.get("/admin/installations", async (c) => {
     const result = await c.env.DB
       .prepare(
-        `SELECT org_id, scopes, status, installed_at, refreshed_at
+        `SELECT org_id, scopes, status, github_app_installation_id, installed_at, refreshed_at
          FROM installations ORDER BY installed_at DESC`,
       )
       .all<{
         org_id: string;
         scopes: string;
         status: string;
+        github_app_installation_id: number | null;
         installed_at: string;
         refreshed_at: string;
       }>();

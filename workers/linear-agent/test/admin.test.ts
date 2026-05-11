@@ -194,6 +194,7 @@ describe("/admin/installations", () => {
       scopes: "read,write",
       installed_by: "oauth",
       status: "active",
+      github_app_installation_id: null,
       installed_at: "2026-01-01T00:00:00Z",
       refreshed_at: "2026-01-01T00:00:00Z",
     });

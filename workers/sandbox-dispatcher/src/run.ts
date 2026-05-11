@@ -44,6 +44,7 @@ interface RunBody {
   model?: unknown;
   timeout_ms?: unknown;
   max_turns?: unknown;
+  github_token?: unknown;
 }
 
 interface ParsedRun {
@@ -54,6 +55,7 @@ interface ParsedRun {
   engine: Engine;
   model: string | null;
   timeoutMs: number;
+  githubToken: string | null;
 }
 
 export function buildRunRouter() {
@@ -126,14 +128,17 @@ export function buildRunRouter() {
       // is configured AND the engine exited cleanly. Push failures are
       // surfaced as a `push_error` field on the response, not as an
       // HTTP failure — the engine work itself still succeeded.
+      // SYM-269: prefer the per-run token from the body (minted by
+      // linear-agent via GitHub App) over the org-wide env var.
       let branch: string | null = null;
       let commitSha: string | null = null;
       let pushError: string | null = null;
-      if (result.exitCode === 0 && c.env.DISPATCH_GITHUB_TOKEN) {
+      const pushToken = parsed.githubToken ?? c.env.DISPATCH_GITHUB_TOKEN;
+      if (result.exitCode === 0 && pushToken) {
         try {
           const pushed = await commitAndPush(sandbox, workspaceDir, {
             issueIdentifier: parsed.issueId,
-            githubToken: c.env.DISPATCH_GITHUB_TOKEN,
+            githubToken: pushToken,
           });
           branch = pushed?.branch ?? null;
           commitSha = pushed?.commit_sha ?? null;
@@ -333,12 +338,14 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
       // a token is configured. Push failures don't fail the whole
       // run — we surface them as an `error` event so users see them
       // in the timeline, then continue to the result frame.
+      // SYM-269: prefer the per-run token from the body over the env.
       let branch: string | null = null;
-      if (exitCode === 0 && env.DISPATCH_GITHUB_TOKEN) {
+      const streamPushToken = parsed.githubToken ?? env.DISPATCH_GITHUB_TOKEN;
+      if (exitCode === 0 && streamPushToken) {
         try {
           const pushed = await commitAndPush(sandbox, workspaceDir, {
             issueIdentifier: parsed.issueId,
-            githubToken: env.DISPATCH_GITHUB_TOKEN,
+            githubToken: streamPushToken,
           });
           branch = pushed?.branch ?? null;
         } catch (e) {
@@ -412,6 +419,11 @@ function parseRun(body: RunBody): ParsedRun | string {
 
   const timeoutMs = parseTimeout(body.timeout_ms);
 
+  const githubToken =
+    typeof body.github_token === "string" && body.github_token.length > 0
+      ? body.github_token
+      : null;
+
   return {
     scope,
     issueId,
@@ -420,6 +432,7 @@ function parseRun(body: RunBody): ParsedRun | string {
     engine: body.engine as Engine,
     model,
     timeoutMs,
+    githubToken,
   };
 }
 

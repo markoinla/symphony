@@ -12,6 +12,7 @@ interface InstallationRow {
   scopes: string;
   installed_by: string;
   status: string;
+  github_app_installation_id: number | null;
   installed_at: string;
   refreshed_at: string;
 }
@@ -30,12 +31,25 @@ interface ProjectRow {
   updated_at: string;
 }
 
+interface UserRow {
+  linear_user_id: string;
+  organization_id: string;
+  access_token: string;
+  refresh_token: string | null;
+  expires_at: string | null;
+  email: string | null;
+  name: string | null;
+  created_at: string;
+  refreshed_at: string;
+}
+
 let nextInstallId = 1;
 let nextProjectId = 1;
 
 export class FakeD1 {
   installations = new Map<string, InstallationRow>();
   projects = new Map<string, ProjectRow>();
+  users = new Map<string, UserRow>();
 
   prepare(sql: string) {
     return new FakeStatement(this, sql);
@@ -66,10 +80,21 @@ class FakeStatement {
         scopes,
         installed_by: installedBy,
         status: "active",
+        github_app_installation_id: existing?.github_app_installation_id ?? null,
         installed_at: existing?.installed_at ?? now,
         refreshed_at: now,
       });
       return { success: true, meta: { changes: 1 } };
+    }
+    if (/^UPDATE installations/i.test(sql)) {
+      const [ghInstId, orgId] = this.bindings as [number, string];
+      const existing = this.db.installations.get(orgId);
+      if (existing) {
+        existing.github_app_installation_id = ghInstId;
+        existing.refreshed_at = new Date().toISOString();
+        return { success: true, meta: { changes: 1 } };
+      }
+      return { success: true, meta: { changes: 0 } };
     }
     if (/^DELETE FROM installations/i.test(sql)) {
       const [orgId] = this.bindings as [string];
@@ -104,6 +129,23 @@ class FakeStatement {
       this.db.projects.delete(key);
       return { success: true, meta: { changes: had ? 1 : 0 } };
     }
+    if (/^INSERT INTO users/i.test(sql)) {
+      const [linearUserId, orgId, accessToken, refreshToken, expiresAt, email, name] =
+        this.bindings as [string, string, string, string | null, string | null, string | null, string | null];
+      const now = new Date().toISOString();
+      this.db.users.set(linearUserId, {
+        linear_user_id: linearUserId,
+        organization_id: orgId,
+        access_token: accessToken,
+        refresh_token: refreshToken,
+        expires_at: expiresAt,
+        email,
+        name,
+        created_at: this.db.users.get(linearUserId)?.created_at ?? now,
+        refreshed_at: now,
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
     throw new Error(`FakeD1.run: unsupported SQL: ${sql}`);
   }
 
@@ -124,6 +166,10 @@ class FakeStatement {
         if (row.linear_team_id === linearTeamId) return row as unknown as T;
       }
       return null;
+    }
+    if (/^SELECT .* FROM users WHERE linear_user_id/i.test(sql)) {
+      const [userId] = this.bindings as [string];
+      return (this.db.users.get(userId) as unknown as T) ?? null;
     }
     throw new Error(`FakeD1.first: unsupported SQL: ${sql}`);
   }
@@ -152,6 +198,13 @@ class FakeStatement {
         success: true,
         results: Array.from(this.db.projects.values()) as unknown as T[],
       };
+    }
+    if (/^SELECT .* FROM users WHERE organization_id .* ORDER BY created_at/i.test(sql)) {
+      const [orgId] = this.bindings as [string];
+      const filtered = Array.from(this.db.users.values()).filter(
+        (u) => u.organization_id === orgId,
+      );
+      return { success: true, results: filtered as unknown as T[] };
     }
     throw new Error(`FakeD1.all: unsupported SQL: ${sql}`);
   }

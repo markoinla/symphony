@@ -25,6 +25,7 @@ CREATE TABLE installations (
   scopes           TEXT NOT NULL,
   installed_by     TEXT NOT NULL,
   status           TEXT NOT NULL DEFAULT 'active',
+  github_app_installation_id INTEGER,
   installed_at     TEXT NOT NULL DEFAULT (datetime('now')),
   refreshed_at     TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(org_id)

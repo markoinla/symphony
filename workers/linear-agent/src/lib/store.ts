@@ -6,6 +6,7 @@
  *   - `projects`      — per-team config: repo URL, engine, model,
  *     max_turns, scope, system_prompt_override (keyed by org_id +
  *     linear_team_id).
+ *   - `users`         — per-user OAuth tokens for dashboard login.
  */
 
 export interface InstallationRecord {
@@ -16,6 +17,7 @@ export interface InstallationRecord {
   scopes: string;
   installed_by: string;
   status: string;
+  github_app_installation_id: number | null;
   installed_at: string;
   refreshed_at: string;
 }
@@ -38,7 +40,7 @@ export class InstallationStore {
   constructor(private readonly db: D1Database) {}
 
   private static readonly COLUMNS =
-    "id, org_id, access_token, refresh_token, scopes, installed_by, status, installed_at, refreshed_at";
+    "id, org_id, access_token, refresh_token, scopes, installed_by, status, github_app_installation_id, installed_at, refreshed_at";
 
   async upsert(
     orgId: string,
@@ -80,12 +82,100 @@ export class InstallationStore {
     return result.results[0] ?? null;
   }
 
+  async updateGitHubAppInstallation(
+    orgId: string,
+    githubAppInstallationId: number,
+  ): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `UPDATE installations
+         SET github_app_installation_id = ?, refreshed_at = datetime('now')
+         WHERE org_id = ?`,
+      )
+      .bind(githubAppInstallationId, orgId)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+
   async delete(orgId: string): Promise<boolean> {
     const result = await this.db
       .prepare("DELETE FROM installations WHERE org_id = ?")
       .bind(orgId)
       .run();
     return (result.meta.changes ?? 0) > 0;
+  }
+}
+
+export interface UserRecord {
+  linear_user_id: string;
+  organization_id: string;
+  access_token: string;
+  refresh_token: string | null;
+  expires_at: string | null;
+  email: string | null;
+  name: string | null;
+  created_at: string;
+  refreshed_at: string;
+}
+
+export class UserStore {
+  constructor(private readonly db: D1Database) {}
+
+  async upsert(input: {
+    linearUserId: string;
+    organizationId: string;
+    accessToken: string;
+    refreshToken?: string | null;
+    expiresAt?: string | null;
+    email?: string | null;
+    name?: string | null;
+  }): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO users (linear_user_id, organization_id, access_token, refresh_token, expires_at, email, name)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(linear_user_id) DO UPDATE SET
+           organization_id = excluded.organization_id,
+           access_token    = excluded.access_token,
+           refresh_token   = excluded.refresh_token,
+           expires_at      = excluded.expires_at,
+           email           = excluded.email,
+           name            = excluded.name,
+           refreshed_at    = datetime('now')`,
+      )
+      .bind(
+        input.linearUserId,
+        input.organizationId,
+        input.accessToken,
+        input.refreshToken ?? null,
+        input.expiresAt ?? null,
+        input.email ?? null,
+        input.name ?? null,
+      )
+      .run();
+  }
+
+  async getByLinearUserId(linearUserId: string): Promise<UserRecord | null> {
+    return await this.db
+      .prepare(
+        `SELECT linear_user_id, organization_id, access_token, refresh_token,
+                expires_at, email, name, created_at, refreshed_at
+         FROM users WHERE linear_user_id = ?`,
+      )
+      .bind(linearUserId)
+      .first<UserRecord>();
+  }
+
+  async listByOrg(organizationId: string): Promise<UserRecord[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT linear_user_id, organization_id, access_token, refresh_token,
+                expires_at, email, name, created_at, refreshed_at
+         FROM users WHERE organization_id = ? ORDER BY created_at`,
+      )
+      .bind(organizationId)
+      .all<UserRecord>();
+    return result.results;
   }
 }
 

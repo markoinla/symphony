@@ -279,6 +279,7 @@ describe("SessionRunner.run — happy path", () => {
       "post-initial-thought",
       "resolve-inputs",
       "transition-to-in-progress",
+      "mint-github-token",
       "turn-1",
       "post-terminal-activity",
     ]);
@@ -456,6 +457,7 @@ describe("SessionRunner.run — dispatch failures", () => {
       "post-initial-thought",
       "resolve-inputs",
       "transition-to-in-progress",
+      "mint-github-token",
       "turn-1",
       "post-terminal-activity",
     ]);
