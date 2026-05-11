@@ -46,10 +46,28 @@ class FakeKV {
   }
 }
 
+function makeSeededDb(): FakeD1 {
+  const db = new FakeD1();
+  db.projects.set("org-1:team-abc", {
+    id: 1,
+    org_id: "org-1",
+    linear_team_id: "team-abc",
+    repo_url: "https://github.com/markoinla/symphony.git",
+    default_branch: "main",
+    engine: "pi",
+    model: null,
+    max_turns: 10,
+    scope: null,
+    system_prompt_override: null,
+    updated_at: new Date().toISOString(),
+  });
+  return db;
+}
+
 function makeEnv(
   kv: FakeKV,
   overrides: Partial<Env> = {},
-  db: FakeD1 = new FakeD1(),
+  db: FakeD1 = makeSeededDb(),
 ): Env {
   return {
     ASSETS: { fetch: () => new Response("") } as unknown as Fetcher,
@@ -65,9 +83,6 @@ function makeEnv(
     DEFAULT_SCOPE: "default",
     DEFAULT_MODEL: "anthropic/claude-sonnet-4-6",
     DEFAULT_ENGINE: "pi",
-    PROJECT_MAPPINGS_JSON: JSON.stringify({
-      "team-abc": "https://github.com/markoinla/symphony.git",
-    }),
     DEFAULT_MAX_TURNS: "10",
     ...overrides,
   };
@@ -212,11 +227,29 @@ function buildRunner(env: Env): SessionRunner {
 function seededDb(): FakeD1 {
   const db = new FakeD1();
   db.installations.set("org-1", {
-    organization_id: "org-1",
+    id: 1,
+    org_id: "org-1",
     access_token: "fake-token",
+    refresh_token: null,
     scopes: "read,write",
+    installed_by: "oauth",
+    status: "active",
+    github_app_installation_id: null,
     installed_at: new Date().toISOString(),
     refreshed_at: new Date().toISOString(),
+  });
+  db.projects.set("org-1:team-abc", {
+    id: 1,
+    org_id: "org-1",
+    linear_team_id: "team-abc",
+    repo_url: "https://github.com/markoinla/symphony.git",
+    default_branch: "main",
+    engine: "pi",
+    model: null,
+    max_turns: 10,
+    scope: null,
+    system_prompt_override: null,
+    updated_at: new Date().toISOString(),
   });
   return db;
 }
@@ -277,8 +310,10 @@ describe("SessionRunner.run — happy path", () => {
       "resolve-inputs",
       "transition-to-in-progress",
       "mint-github-token",
+      "record-session-start",
       "turn-1",
       "post-terminal-activity",
+      "record-session-end",
     ]);
     expect(linearCalls.map((c) => c.content.type)).toEqual([
       "thought",
@@ -358,9 +393,21 @@ describe("SessionRunner.run — abort branches", () => {
 
   it("posts thought + error when no repo is configured for the team", async () => {
     const kv = new FakeKV();
-    const db = seededDb();
     installFetchMock({ dispatcherEvents: [] });
-    const env = makeEnv(kv, { PROJECT_MAPPINGS_JSON: "{}" }, db);
+    const installOnlyDb = new FakeD1();
+    installOnlyDb.installations.set("org-1", {
+      id: 1,
+      org_id: "org-1",
+      access_token: "fake-token",
+      refresh_token: null,
+      scopes: "read,write",
+      installed_by: "oauth",
+      status: "active",
+      github_app_installation_id: null,
+      installed_at: new Date().toISOString(),
+      refreshed_at: new Date().toISOString(),
+    });
+    const env = makeEnv(kv, {}, installOnlyDb);
     const runner = buildRunner(env);
     const { step, ran } = makeStep();
 
@@ -453,8 +500,10 @@ describe("SessionRunner.run — dispatch failures", () => {
       "resolve-inputs",
       "transition-to-in-progress",
       "mint-github-token",
+      "record-session-start",
       "turn-1",
       "post-terminal-activity",
+      "record-session-end",
     ]);
     expect(linearCalls.map((c) => c.content.type)).toEqual([
       "thought",
@@ -842,7 +891,6 @@ describe("SessionRunner.run — multi-turn loop", () => {
 
   it("stops at max_turns and uses the last assistant message", async () => {
     const kv = new FakeKV();
-    const db = seededDb();
 
     // Always returns needs_continuation; we cap at 2.
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -878,7 +926,33 @@ describe("SessionRunner.run — multi-turn loop", () => {
       throw new Error(`unexpected fetch: ${url}`);
     });
 
-    const env = makeEnv(kv, { DEFAULT_MAX_TURNS: "2" }, db);
+    const db = new FakeD1();
+    db.installations.set("org-1", {
+      id: 1,
+      org_id: "org-1",
+      access_token: "fake-token",
+      refresh_token: null,
+      scopes: "read,write",
+      installed_by: "oauth",
+      status: "active",
+      github_app_installation_id: null,
+      installed_at: new Date().toISOString(),
+      refreshed_at: new Date().toISOString(),
+    });
+    db.projects.set("org-1:team-abc", {
+      id: 1,
+      org_id: "org-1",
+      linear_team_id: "team-abc",
+      repo_url: "https://github.com/markoinla/symphony.git",
+      default_branch: "main",
+      engine: "pi",
+      model: null,
+      max_turns: 2,
+      scope: null,
+      system_prompt_override: null,
+      updated_at: new Date().toISOString(),
+    });
+    const env = makeEnv(kv, {}, db);
     const runner = buildRunner(env);
     const { step } = makeStep();
 
@@ -891,8 +965,6 @@ describe("SessionRunner.run — multi-turn loop", () => {
     };
 
     const result = await runner.run(makeEvent(event), step as never);
-    // 2 turns; on the second, max_turns_reached makes terminal an error
-    // post with code 0 but inband "max_turns_reached" reason.
     expect(result.turns).toBe(2);
     const lastCall = linearCalls[linearCalls.length - 1];
     expect(lastCall?.content.type).toBe("error");

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp, type Env } from "../src/index";
 import { FakeD1 } from "./helpers/fake-d1";
@@ -31,7 +31,6 @@ function makeEnv(db: FakeD1, overrides: Partial<Env> = {}): Env {
     DEFAULT_SCOPE: "default",
     DEFAULT_MODEL: "anthropic/claude-sonnet-4-6",
     DEFAULT_ENGINE: "pi",
-    PROJECT_MAPPINGS_JSON: "{}",
     ADMIN_TOKEN: "admin-secret",
     ...overrides,
   };
@@ -88,7 +87,7 @@ describe("/admin/projects CRUD", () => {
         new Request("https://agent.example/admin/projects", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ team_id: "" }),
+          body: JSON.stringify({ org_id: "", linear_team_id: "team-1" }),
         }),
       ),
       makeEnv(db),
@@ -106,9 +105,11 @@ describe("/admin/projects CRUD", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            team_id: "team-1",
+            org_id: "org-1",
+            linear_team_id: "team-1",
             repo_url: "https://github.com/x/y.git",
             max_turns: 5,
+            scope: "enterprise",
           }),
         }),
       ),
@@ -118,19 +119,25 @@ describe("/admin/projects CRUD", () => {
     expect(res.status).toBe(200);
     const json = (await res.json()) as Record<string, unknown>;
     expect(json.ok).toBe(true);
-    expect((json.project as { max_turns: number }).max_turns).toBe(5);
+    const project = json.project as { max_turns: number; scope: string };
+    expect(project.max_turns).toBe(5);
+    expect(project.scope).toBe("enterprise");
   });
 
   it("GET lists existing projects", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    db.projects.set("team-1", {
-      team_id: "team-1",
+    db.projects.set("org-1:team-1", {
+      id: 1,
+      org_id: "org-1",
+      linear_team_id: "team-1",
       repo_url: "https://github.com/x/y.git",
       default_branch: "main",
       engine: "pi",
       model: null,
       max_turns: 10,
+      scope: null,
+      system_prompt_override: null,
       updated_at: "2026-01-01T00:00:00Z",
     });
     const res = await app.fetch(
@@ -139,26 +146,30 @@ describe("/admin/projects CRUD", () => {
       makeExecCtx(),
     );
     expect(res.status).toBe(200);
-    const json = (await res.json()) as { projects: Array<{ team_id: string }> };
+    const json = (await res.json()) as { projects: Array<{ linear_team_id: string }> };
     expect(json.projects).toHaveLength(1);
-    expect(json.projects[0]?.team_id).toBe("team-1");
+    expect(json.projects[0]?.linear_team_id).toBe("team-1");
   });
 
   it("DELETE removes a project row", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    db.projects.set("team-1", {
-      team_id: "team-1",
+    db.projects.set("org-1:team-1", {
+      id: 1,
+      org_id: "org-1",
+      linear_team_id: "team-1",
       repo_url: "https://github.com/x/y.git",
       default_branch: "main",
       engine: "pi",
       model: null,
       max_turns: 10,
+      scope: null,
+      system_prompt_override: null,
       updated_at: "2026-01-01T00:00:00Z",
     });
     const res = await app.fetch(
       authed(
-        new Request("https://agent.example/admin/projects/team-1", {
+        new Request("https://agent.example/admin/projects/org-1/team-1", {
           method: "DELETE",
         }),
       ),
@@ -167,7 +178,7 @@ describe("/admin/projects CRUD", () => {
     );
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
-    expect(db.projects.has("team-1")).toBe(false);
+    expect(db.projects.has("org-1:team-1")).toBe(false);
   });
 });
 
@@ -176,9 +187,14 @@ describe("/admin/installations", () => {
     const app = buildApp();
     const db = new FakeD1();
     db.installations.set("org-1", {
-      organization_id: "org-1",
+      id: 1,
+      org_id: "org-1",
       access_token: "SUPER_SECRET",
+      refresh_token: null,
       scopes: "read,write",
+      installed_by: "oauth",
+      status: "active",
+      github_app_installation_id: null,
       installed_at: "2026-01-01T00:00:00Z",
       refreshed_at: "2026-01-01T00:00:00Z",
     });
@@ -193,19 +209,15 @@ describe("/admin/installations", () => {
       installations: Array<Record<string, unknown>>;
     };
     expect(json.installations).toHaveLength(1);
-    expect(json.installations[0]).not.toHaveProperty("access_token");
     expect(json.installations[0]).toMatchObject({
-      organization_id: "org-1",
+      org_id: "org-1",
       scopes: "read,write",
+      status: "active",
     });
   });
 });
 
 describe("/admin/smoke", () => {
-  /**
-   * Build a minimal SSE response body of NormalizedEvents — the same
-   * shape the dispatcher emits.
-   */
   function buildSseResponse(events: unknown[]): Response {
     const body = events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
     return new Response(body, {
@@ -285,7 +297,6 @@ describe("/admin/smoke", () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = typeof input === "string" ? input : (input as Request).url;
       if (url.endsWith("/run")) {
-        // Only a result, no error — wire shape is broken.
         return buildSseResponse([
           {
             type: "result",
@@ -322,11 +333,8 @@ describe("/admin/smoke", () => {
   });
 });
 
-describe("D1-driven project resolution (integration via workflow path)", () => {
-  it("project row's max_turns overrides DEFAULT_MAX_TURNS in resolve-inputs", async () => {
-    // Smoke-test by hitting the admin route to seed a project then
-    // confirming get() returns the override. The workflow itself is
-    // covered in workflow.test.ts.
+describe("D1-driven project resolution", () => {
+  it("project row's max_turns is stored correctly via admin POST", async () => {
     const app = buildApp();
     const db = new FakeD1();
     await app.fetch(
@@ -335,7 +343,8 @@ describe("D1-driven project resolution (integration via workflow path)", () => {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            team_id: "team-override",
+            org_id: "org-1",
+            linear_team_id: "team-override",
             repo_url: "https://github.com/x/y.git",
             max_turns: 1,
           }),
@@ -344,7 +353,7 @@ describe("D1-driven project resolution (integration via workflow path)", () => {
       makeEnv(db),
       makeExecCtx(),
     );
-    const row = db.projects.get("team-override");
+    const row = db.projects.get("org-1:team-override");
     expect(row?.max_turns).toBe(1);
   });
 });

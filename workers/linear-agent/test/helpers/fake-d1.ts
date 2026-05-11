@@ -1,29 +1,33 @@
 /**
  * Minimal D1Database stub for unit tests. Supports the subset of SQL
- * the linear-agent worker uses (item 3 schema): SELECT/INSERT/DELETE
- * against `installations` and `projects`. Anything else throws so
- * tests fail loudly when the worker grows new queries we haven't
- * stubbed.
- *
- * Keep this in lockstep with `src/lib/store.ts`. When you add a
- * query there, add it here.
+ * the linear-agent worker uses (multi-tenant schema from 0002):
+ * SELECT/INSERT/DELETE against `installations` and `projects`.
  */
 
 interface InstallationRow {
-  organization_id: string;
+  id: number;
+  org_id: string;
   access_token: string;
+  refresh_token: string | null;
   scopes: string;
+  installed_by: string;
+  status: string;
+  github_app_installation_id: number | null;
   installed_at: string;
   refreshed_at: string;
 }
 
 interface ProjectRow {
-  team_id: string;
+  id: number;
+  org_id: string;
+  linear_team_id: string;
   repo_url: string;
   default_branch: string;
   engine: string;
   model: string | null;
   max_turns: number;
+  scope: string | null;
+  system_prompt_override: string | null;
   updated_at: string;
 }
 
@@ -45,6 +49,9 @@ interface DashboardSessionRow {
   created_at: string;
   expires_at: string;
 }
+
+let nextInstallId = 1;
+let nextProjectId = 1;
 
 export class FakeD1 {
   installations = new Map<string, InstallationRow>();
@@ -70,16 +77,32 @@ class FakeStatement {
   async run() {
     const sql = normalizeSql(this.sql);
     if (/^INSERT INTO installations/i.test(sql)) {
-      const [orgId, token, scopes] = this.bindings as [string, string, string];
+      const [orgId, token, scopes, installedBy] = this.bindings as [string, string, string, string];
       const now = new Date().toISOString();
+      const existing = this.db.installations.get(orgId);
       this.db.installations.set(orgId, {
-        organization_id: orgId,
+        id: existing?.id ?? nextInstallId++,
+        org_id: orgId,
         access_token: token,
+        refresh_token: null,
         scopes,
-        installed_at: this.db.installations.get(orgId)?.installed_at ?? now,
+        installed_by: installedBy,
+        status: "active",
+        github_app_installation_id: existing?.github_app_installation_id ?? null,
+        installed_at: existing?.installed_at ?? now,
         refreshed_at: now,
       });
       return { success: true, meta: { changes: 1 } };
+    }
+    if (/^UPDATE installations/i.test(sql)) {
+      const [ghInstId, orgId] = this.bindings as [number, string];
+      const existing = this.db.installations.get(orgId);
+      if (existing) {
+        existing.github_app_installation_id = ghInstId;
+        existing.refreshed_at = new Date().toISOString();
+        return { success: true, meta: { changes: 1 } };
+      }
+      return { success: true, meta: { changes: 0 } };
     }
     if (/^DELETE FROM installations/i.test(sql)) {
       const [orgId] = this.bindings as [string];
@@ -88,23 +111,30 @@ class FakeStatement {
       return { success: true, meta: { changes: had ? 1 : 0 } };
     }
     if (/^INSERT INTO projects/i.test(sql)) {
-      const [teamId, repoUrl, defaultBranch, engine, model, maxTurns] =
-        this.bindings as [string, string, string, string, string | null, number];
-      this.db.projects.set(teamId, {
-        team_id: teamId,
+      const [orgId, linearTeamId, repoUrl, defaultBranch, engine, model, maxTurns, scope, systemPromptOverride] =
+        this.bindings as [string, string, string, string, string, string | null, number, string | null, string | null];
+      const key = `${orgId}:${linearTeamId}`;
+      const existing = this.db.projects.get(key);
+      this.db.projects.set(key, {
+        id: existing?.id ?? nextProjectId++,
+        org_id: orgId,
+        linear_team_id: linearTeamId,
         repo_url: repoUrl,
         default_branch: defaultBranch,
         engine,
         model,
         max_turns: maxTurns,
+        scope,
+        system_prompt_override: systemPromptOverride,
         updated_at: new Date().toISOString(),
       });
       return { success: true, meta: { changes: 1 } };
     }
     if (/^DELETE FROM projects/i.test(sql)) {
-      const [teamId] = this.bindings as [string];
-      const had = this.db.projects.has(teamId);
-      this.db.projects.delete(teamId);
+      const [orgId, linearTeamId] = this.bindings as [string, string];
+      const key = `${orgId}:${linearTeamId}`;
+      const had = this.db.projects.has(key);
+      this.db.projects.delete(key);
       return { success: true, meta: { changes: had ? 1 : 0 } };
     }
     if (/^INSERT INTO dashboard_sessions/i.test(sql)) {
@@ -156,13 +186,21 @@ class FakeStatement {
 
   async first<T>(): Promise<T | null> {
     const sql = normalizeSql(this.sql);
-    if (/^SELECT .* FROM installations WHERE organization_id/i.test(sql)) {
+    if (/^SELECT .* FROM installations WHERE org_id/i.test(sql)) {
       const [orgId] = this.bindings as [string];
       return (this.db.installations.get(orgId) as unknown as T) ?? null;
     }
-    if (/^SELECT .* FROM projects WHERE team_id/i.test(sql)) {
-      const [teamId] = this.bindings as [string];
-      return (this.db.projects.get(teamId) as unknown as T) ?? null;
+    if (/^SELECT .* FROM projects WHERE org_id = \? AND linear_team_id/i.test(sql)) {
+      const [orgId, linearTeamId] = this.bindings as [string, string];
+      const key = `${orgId}:${linearTeamId}`;
+      return (this.db.projects.get(key) as unknown as T) ?? null;
+    }
+    if (/^SELECT .* FROM projects WHERE linear_team_id/i.test(sql)) {
+      const [linearTeamId] = this.bindings as [string];
+      for (const row of this.db.projects.values()) {
+        if (row.linear_team_id === linearTeamId) return row as unknown as T;
+      }
+      return null;
     }
     if (/^SELECT .* FROM users WHERE linear_user_id/i.test(sql)) {
       const [userId] = this.bindings as [string];
@@ -184,10 +222,7 @@ class FakeStatement {
     if (/^SELECT .* FROM installations LIMIT 2/i.test(sql)) {
       return {
         success: true,
-        results: Array.from(this.db.installations.values()).slice(
-          0,
-          2,
-        ) as unknown as T[],
+        results: Array.from(this.db.installations.values()).slice(0, 2) as unknown as T[],
       };
     }
     if (/^SELECT .* FROM installations ORDER BY installed_at/i.test(sql)) {
@@ -196,7 +231,12 @@ class FakeStatement {
         results: Array.from(this.db.installations.values()) as unknown as T[],
       };
     }
-    if (/^SELECT .* FROM projects ORDER BY team_id/i.test(sql)) {
+    if (/^SELECT .* FROM projects WHERE org_id = \? ORDER BY linear_team_id/i.test(sql)) {
+      const [orgId] = this.bindings as [string];
+      const rows = Array.from(this.db.projects.values()).filter((r) => r.org_id === orgId);
+      return { success: true, results: rows as unknown as T[] };
+    }
+    if (/^SELECT .* FROM projects ORDER BY org_id/i.test(sql)) {
       return {
         success: true,
         results: Array.from(this.db.projects.values()) as unknown as T[],
@@ -213,12 +253,6 @@ class FakeStatement {
   }
 }
 
-/**
- * Collapse newlines + extra whitespace so the multi-line prepared SQL
- * strings in `src/lib/store.ts` match the single-line regexes above.
- * D1 itself ignores whitespace; this is purely a test-side
- * convenience.
- */
 function normalizeSql(raw: string): string {
   return raw.replace(/\s+/g, " ").trim();
 }

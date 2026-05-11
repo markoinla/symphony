@@ -1,36 +1,10 @@
 /**
- * Pure helpers shared between the legacy `runSession` path in
- * `routes/webhook.ts` and the durable `SessionRunner` Workflow in
- * `workflows/session-runner.ts`. These are deterministic functions of
- * (env, event) — safe to call inside a Workflow step or outside one.
+ * Pure helpers shared between routes and the durable `SessionRunner`
+ * Workflow. These are deterministic functions of (env, event) — safe
+ * to call inside a Workflow step or outside one.
  */
 
-import type { Env } from "../index";
-import type {
-  AgentSession,
-  AgentSessionEventWebhook,
-} from "../types/agent-session";
-
-interface ProjectMapping {
-  [linearTeamId: string]: string;
-}
-
-/**
- * Resolve the repository URL for a session by mapping `issue.teamId` →
- * repo URL via `PROJECT_MAPPINGS_JSON`. Returns null when no mapping is
- * configured for the team. Item 3 replaces this with a D1 lookup.
- */
-export function resolveRepoUrl(env: Env, session: AgentSession): string | null {
-  const teamId = session.issue?.teamId ?? session.issue?.team?.id;
-  if (!teamId) return null;
-  let mapping: ProjectMapping;
-  try {
-    mapping = JSON.parse(env.PROJECT_MAPPINGS_JSON || "{}") as ProjectMapping;
-  } catch {
-    return null;
-  }
-  return mapping[teamId] ?? null;
-}
+import type { AgentSessionEventWebhook } from "../types/agent-session";
 
 /**
  * Pull the user's actual question out of the webhook payload.

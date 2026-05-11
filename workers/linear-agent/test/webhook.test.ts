@@ -2,20 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp, type Env } from "../src/index";
 import { computeLinearSignature } from "../src/lib/signature";
-import { runSession, summarizeStdout } from "../src/routes/webhook";
+import { summarizeStdout } from "../src/routes/webhook";
 import type { AgentSessionEventWebhook } from "../src/types/agent-session";
 import { FakeD1 } from "./helpers/fake-d1";
-
-/**
- * Captured Linear `agentActivityCreate` mutations for the current test.
- * Populated by the `installFetchMock` helper, which routes:
- *   - https://api.linear.app/graphql  → push to linearCalls, return success
- *   - <DISPATCHER_URL>/run            → return canned dispatcher result
- */
-const linearCalls: Array<{
-  agentSessionId: string;
-  content: { type: string; body?: string; action?: string };
-}> = [];
 
 const LINEAR_SECRET = "linear-webhook-secret";
 const HMAC_SECRET = "dispatch-hmac-secret";
@@ -34,11 +23,6 @@ class FakeKV {
   }
 }
 
-/**
- * Stub Workflow binding shaped like Cloudflare's `Workflow` type. Tests
- * that exercise the webhook handler should pass `sessionRunner` from
- * `makeWorkflowStub()` so they can assert on `.create` invocations.
- */
 interface WorkflowStub {
   create: ReturnType<typeof vi.fn>;
 }
@@ -69,9 +53,6 @@ function makeEnv(
     DEFAULT_SCOPE: "default",
     DEFAULT_MODEL: "anthropic/claude-sonnet-4-6",
     DEFAULT_ENGINE: "pi",
-    PROJECT_MAPPINGS_JSON: JSON.stringify({
-      "team-abc": "https://github.com/markoinla/symphony.git",
-    }),
     ...overrides,
   };
 }
@@ -111,54 +92,11 @@ function makeExecCtx(): ExecutionContext & {
   };
 }
 
-beforeEach(() => {
-  linearCalls.length = 0;
-});
+beforeEach(() => {});
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
-
-/**
- * Install a fetch spy that recognizes Linear's GraphQL endpoint and the
- * dispatcher /run endpoint, routing each to the right canned response.
- *
- * `dispatcherResponse` is the JSON body the dispatcher should return for
- * /run. Linear GraphQL calls always return success and are pushed into
- * `linearCalls` so tests can assert on them.
- */
-function installFetchMock(dispatcherResponse: {
-  status?: number;
-  body: unknown;
-}): void {
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-    const url = typeof input === "string" ? input : (input as Request).url;
-    const body = init?.body as string | undefined;
-
-    if (url === "https://api.linear.app/graphql") {
-      if (body) {
-        const parsed = JSON.parse(body) as {
-          variables?: { input?: { agentSessionId: string; content: { type: string; body?: string; action?: string } } };
-        };
-        const input = parsed.variables?.input;
-        if (input) linearCalls.push(input);
-      }
-      return new Response(
-        JSON.stringify({ data: { agentActivityCreate: { success: true } } }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    }
-
-    if (url.endsWith("/run")) {
-      return new Response(JSON.stringify(dispatcherResponse.body), {
-        status: dispatcherResponse.status ?? 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-
-    throw new Error(`unexpected fetch in test: ${url}`);
-  });
-}
 
 describe("POST /webhook signature verification", () => {
   it("rejects requests with no linear-signature header", async () => {
@@ -293,190 +231,6 @@ describe("POST /webhook routing", () => {
   });
 });
 
-function seededDb(): FakeD1 {
-  const db = new FakeD1();
-  db.installations.set("org-1", {
-    organization_id: "org-1",
-    access_token: "fake-token",
-    scopes: "read,write",
-    installed_at: new Date().toISOString(),
-    refreshed_at: new Date().toISOString(),
-  });
-  return db;
-}
-
-describe("runSession", () => {
-  it("posts thought + response on a successful dispatcher run", async () => {
-    const kv = new FakeKV();
-    const db = seededDb();
-
-    installFetchMock({
-      body: {
-        engine: "pi",
-        exit_code: 0,
-        stdout: [
-          // Real pi `--mode json` event shape: lifecycle + message_end
-          // with message.role=assistant + content[].text. Lifted from
-          // the smoke-test stdout.
-          '{"type":"session","id":"x"}',
-          '{"type":"agent_start"}',
-          '{"type":"turn_start"}',
-          '{"type":"message_start","message":{"role":"user","content":[]}}',
-          '{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"Add the date to README"}]}}',
-          '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Done — opened PR #123."}]}}',
-          '{"type":"agent_end"}',
-        ].join("\n"),
-        stderr: "",
-        duration_ms: 4567,
-      },
-    });
-
-    await runSession(makeEnv(kv, {}, undefined, db), {
-      type: "AgentSessionEvent",
-      action: "created",
-      webhookId: "wh-2",
-      organizationId: "org-1",
-      agentSession: {
-        id: "session-2",
-        issue: {
-          id: "issue-2",
-          identifier: "SYM-200",
-          title: "Add date to README",
-          teamId: "team-abc",
-        },
-        promptContext: "Please add today's date to README.md",
-      },
-    });
-
-    expect(linearCalls).toHaveLength(2);
-    expect(linearCalls[0]).toEqual({
-      agentSessionId: "session-2",
-      content: {
-        type: "thought",
-        body: "Picked this up — preparing the sandbox. Cold-starts can take ~30–60s before tool activity begins streaming.",
-      },
-    });
-    expect(linearCalls[1]).toEqual({
-      agentSessionId: "session-2",
-      content: { type: "response", body: "Done — opened PR #123." },
-    });
-  });
-
-  it("posts thought + error when no repo is configured for the team", async () => {
-    const kv = new FakeKV();
-    const db = seededDb();
-    const env = makeEnv(kv, { PROJECT_MAPPINGS_JSON: "{}" }, undefined, db);
-
-    // Even the initial `thought` post hits Linear's GraphQL now that we
-    // bypassed the SDK; install a mock so the post resolves and the
-    // subsequent error flow proceeds.
-    installFetchMock({ body: { error: "should-not-be-called" } });
-
-    await runSession(env, {
-      type: "AgentSessionEvent",
-      action: "created",
-      webhookId: "wh-3",
-      organizationId: "org-1",
-      agentSession: {
-        id: "session-3",
-        issue: {
-          id: "i",
-          identifier: "SYM-1",
-          title: "x",
-          teamId: "team-unknown",
-        },
-        promptContext: "hi",
-      },
-    });
-
-    expect(linearCalls.map((c) => c.content.type)).toEqual(["thought", "error"]);
-    expect(linearCalls[1]?.content.body).toContain("No repository is configured");
-  });
-
-  it("posts thought + error when the dispatcher returns 412", async () => {
-    const kv = new FakeKV();
-    const db = seededDb();
-
-    installFetchMock({
-      status: 412,
-      body: { error: "missing_auth_backup", scope: "default" },
-    });
-
-    await runSession(makeEnv(kv, {}, undefined, db), {
-      type: "AgentSessionEvent",
-      action: "created",
-      webhookId: "wh-4",
-      organizationId: "org-1",
-      agentSession: {
-        id: "session-4",
-        issue: {
-          id: "i",
-          identifier: "SYM-4",
-          title: "x",
-          teamId: "team-abc",
-        },
-        promptContext: "hi",
-      },
-    });
-
-    expect(linearCalls.map((c) => c.content.type)).toEqual(["thought", "error"]);
-    expect(linearCalls[1]?.content.body).toContain("Dispatcher error (412)");
-    expect(linearCalls[1]?.content.body).toContain("missing_auth_backup");
-  });
-
-  it("posts thought + error when the engine exits non-zero", async () => {
-    const kv = new FakeKV();
-    const db = seededDb();
-
-    installFetchMock({
-      body: {
-        engine: "pi",
-        exit_code: 2,
-        stdout: "",
-        stderr: "ENOENT: codex auth missing",
-        duration_ms: 100,
-      },
-    });
-
-    await runSession(makeEnv(kv, {}, undefined, db), {
-      type: "AgentSessionEvent",
-      action: "created",
-      webhookId: "wh-5",
-      organizationId: "org-1",
-      agentSession: {
-        id: "session-5",
-        issue: {
-          id: "i",
-          identifier: "SYM-5",
-          title: "x",
-          teamId: "team-abc",
-        },
-        promptContext: "hi",
-      },
-    });
-
-    expect(linearCalls.map((c) => c.content.type)).toEqual(["thought", "error"]);
-    expect(linearCalls[1]?.content.body).toContain("Engine exited with code 2");
-    expect(linearCalls[1]?.content.body).toContain("ENOENT");
-  });
-
-  it("returns silently when no installation is configured", async () => {
-    const kv = new FakeKV();
-
-    await runSession(makeEnv(kv), {
-      type: "AgentSessionEvent",
-      action: "created",
-      webhookId: "wh-6",
-      agentSession: {
-        id: "session-6",
-        promptContext: "hi",
-      },
-    });
-
-    expect(linearCalls).toHaveLength(0);
-  });
-});
-
 describe("summarizeStdout", () => {
   it("returns the last assistant message_end text", () => {
     const stdout = [
@@ -518,4 +272,3 @@ describe("summarizeStdout", () => {
     expect(summarizeStdout(stdout)).toBe("ok");
   });
 });
-

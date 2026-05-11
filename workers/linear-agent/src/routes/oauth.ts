@@ -82,6 +82,7 @@ export function buildOAuthRouter() {
         organizationId,
         token.access_token,
         token.scope,
+        "oauth",
       );
 
       await c.env.LINEAR_TOKENS.delete("oauth_state");
@@ -245,7 +246,10 @@ export function buildOAuthRouter() {
         500,
       );
     }
-    await store.delete(install.organization_id);
+    if (install) {
+      await store.delete(install.org_id);
+    }
+    await c.env.LINEAR_TOKENS.delete("access_token");
     return c.json({ ok: true });
   });
 

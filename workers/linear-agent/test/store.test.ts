@@ -3,14 +3,14 @@ import { InstallationStore, ProjectStore, SessionStore, UserStore } from "../src
 import { FakeD1 } from "./helpers/fake-d1";
 
 describe("InstallationStore", () => {
-  it("upserts and reads a row by organization_id", async () => {
+  it("upserts and reads a row by org_id", async () => {
     const db = new FakeD1();
     const store = new InstallationStore(db as unknown as D1Database);
 
-    await store.upsert("org-1", "token-abc", "read,write,app:assignable");
+    await store.upsert("org-1", "token-abc", "read,write,app:assignable", "oauth");
 
     const row = await store.get("org-1");
-    expect(row?.organization_id).toBe("org-1");
+    expect(row?.org_id).toBe("org-1");
     expect(row?.access_token).toBe("token-abc");
     expect(row?.scopes).toBe("read,write,app:assignable");
   });
@@ -19,8 +19,8 @@ describe("InstallationStore", () => {
     const db = new FakeD1();
     const store = new InstallationStore(db as unknown as D1Database);
 
-    await store.upsert("org-1", "old-token", "read");
-    await store.upsert("org-1", "new-token", "read,write");
+    await store.upsert("org-1", "old-token", "read", "oauth");
+    await store.upsert("org-1", "new-token", "read,write", "oauth");
 
     const row = await store.get("org-1");
     expect(row?.access_token).toBe("new-token");
@@ -31,17 +31,17 @@ describe("InstallationStore", () => {
     const db = new FakeD1();
     const store = new InstallationStore(db as unknown as D1Database);
 
-    await store.upsert("org-only", "tok", "read");
+    await store.upsert("org-only", "tok", "read", "oauth");
     const single = await store.getOnlyInstallation();
-    expect(single?.organization_id).toBe("org-only");
+    expect(single?.org_id).toBe("org-only");
   });
 
   it("returns null when multiple installs exist (ambiguous)", async () => {
     const db = new FakeD1();
     const store = new InstallationStore(db as unknown as D1Database);
 
-    await store.upsert("org-a", "tok-a", "read");
-    await store.upsert("org-b", "tok-b", "read");
+    await store.upsert("org-a", "tok-a", "read", "oauth");
+    await store.upsert("org-b", "tok-b", "read", "oauth");
     expect(await store.getOnlyInstallation()).toBeNull();
   });
 
@@ -49,7 +49,7 @@ describe("InstallationStore", () => {
     const db = new FakeD1();
     const store = new InstallationStore(db as unknown as D1Database);
 
-    await store.upsert("org-1", "tok", "read");
+    await store.upsert("org-1", "tok", "read", "oauth");
     expect(await store.delete("org-1")).toBe(true);
     expect(await store.delete("org-1")).toBe(false);
   });
@@ -133,42 +133,49 @@ describe("UserStore", () => {
 
     const org2Users = await store.listByOrg("org-2");
     expect(org2Users).toHaveLength(1);
-    expect(org2Users[0]?.linear_user_id).toBe("u-c");
+    expect(org2Users[0]!.linear_user_id).toBe("u-c");
   });
 });
 
 describe("ProjectStore", () => {
-  it("upserts and reads a project by team_id with defaults", async () => {
+  it("upserts and reads a project by linear_team_id with defaults", async () => {
     const db = new FakeD1();
     const store = new ProjectStore(db as unknown as D1Database);
 
     await store.upsert({
-      teamId: "team-abc",
+      orgId: "org-1",
+      linearTeamId: "team-abc",
       repoUrl: "https://github.com/x/y.git",
     });
 
     const row = await store.get("team-abc");
     expect(row).toMatchObject({
-      team_id: "team-abc",
+      org_id: "org-1",
+      linear_team_id: "team-abc",
       repo_url: "https://github.com/x/y.git",
       default_branch: "main",
       engine: "pi",
       model: null,
       max_turns: 10,
+      scope: null,
+      system_prompt_override: null,
     });
   });
 
-  it("respects explicit engine/model/max_turns values", async () => {
+  it("respects explicit engine/model/max_turns/scope values", async () => {
     const db = new FakeD1();
     const store = new ProjectStore(db as unknown as D1Database);
 
     await store.upsert({
-      teamId: "team-claude",
+      orgId: "org-1",
+      linearTeamId: "team-claude",
       repoUrl: "https://github.com/x/y.git",
       engine: "claude",
       model: "claude-sonnet-4-6",
       maxTurns: 25,
       defaultBranch: "trunk",
+      scope: "enterprise",
+      systemPromptOverride: "Be concise.",
     });
 
     const row = await store.get("team-claude");
@@ -177,7 +184,38 @@ describe("ProjectStore", () => {
       model: "claude-sonnet-4-6",
       max_turns: 25,
       default_branch: "trunk",
+      scope: "enterprise",
+      system_prompt_override: "Be concise.",
     });
+  });
+
+  it("getByTeamId resolves with composite key", async () => {
+    const db = new FakeD1();
+    const store = new ProjectStore(db as unknown as D1Database);
+
+    await store.upsert({
+      orgId: "org-1",
+      linearTeamId: "team-abc",
+      repoUrl: "https://github.com/x/y.git",
+    });
+
+    const row = await store.getByTeamId("org-1", "team-abc");
+    expect(row?.linear_team_id).toBe("team-abc");
+    expect(await store.getByTeamId("org-2", "team-abc")).toBeNull();
+  });
+
+  it("delete requires both org_id and linear_team_id", async () => {
+    const db = new FakeD1();
+    const store = new ProjectStore(db as unknown as D1Database);
+
+    await store.upsert({
+      orgId: "org-1",
+      linearTeamId: "team-abc",
+      repoUrl: "https://github.com/x/y.git",
+    });
+
+    expect(await store.delete("org-1", "team-abc")).toBe(true);
+    expect(await store.delete("org-1", "team-abc")).toBe(false);
   });
 });
 

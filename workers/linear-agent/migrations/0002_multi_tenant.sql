@@ -19,12 +19,13 @@ CREATE TABLE organizations (
 -- Per-org agent install: actor=app OAuth token for posting activities.
 CREATE TABLE installations (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id           TEXT NOT NULL REFERENCES organizations(id),
+  org_id           TEXT NOT NULL,
   access_token     TEXT NOT NULL,
   refresh_token    TEXT,
   scopes           TEXT NOT NULL,
   installed_by     TEXT NOT NULL,
   status           TEXT NOT NULL DEFAULT 'active',
+  github_app_installation_id INTEGER,
   installed_at     TEXT NOT NULL DEFAULT (datetime('now')),
   refreshed_at     TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(org_id)
@@ -35,7 +36,7 @@ CREATE INDEX idx_installations_org_id ON installations(org_id);
 -- Dashboard users with per-user Linear actor=user OAuth tokens.
 CREATE TABLE users (
   id               TEXT PRIMARY KEY,
-  org_id           TEXT NOT NULL REFERENCES organizations(id),
+  org_id           TEXT NOT NULL,
   linear_user_id   TEXT NOT NULL,
   email            TEXT,
   name             TEXT,
@@ -52,7 +53,7 @@ CREATE INDEX idx_users_org_id ON users(org_id);
 -- Per-team project config: repo URL, branch, engine/model overrides.
 CREATE TABLE projects (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id           TEXT NOT NULL REFERENCES organizations(id),
+  org_id           TEXT NOT NULL,
   linear_team_id   TEXT NOT NULL,
   repo_url         TEXT NOT NULL,
   default_branch   TEXT NOT NULL DEFAULT 'main',
@@ -60,6 +61,7 @@ CREATE TABLE projects (
   model            TEXT,
   max_turns        INTEGER NOT NULL DEFAULT 10,
   scope            TEXT,
+  system_prompt_override TEXT,
   updated_at       TEXT NOT NULL DEFAULT (datetime('now')),
   UNIQUE(org_id, linear_team_id)
 );
@@ -70,7 +72,7 @@ CREATE INDEX idx_projects_org_id ON projects(org_id);
 -- Encryption logic is out of scope for this migration (see SYM-268).
 CREATE TABLE org_credentials (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id           TEXT NOT NULL REFERENCES organizations(id),
+  org_id           TEXT NOT NULL,
   kind             TEXT NOT NULL,
   ciphertext       BLOB,
   dek_ciphertext   BLOB,
@@ -85,7 +87,7 @@ CREATE INDEX idx_org_credentials_org_id ON org_credentials(org_id);
 -- One row per agent session dispatched to the sandbox.
 CREATE TABLE sessions (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id           TEXT NOT NULL REFERENCES organizations(id),
+  org_id           TEXT NOT NULL,
   dispatcher_run_id TEXT,
   status           TEXT NOT NULL DEFAULT 'pending',
   cost             REAL,
@@ -98,7 +100,7 @@ CREATE INDEX idx_sessions_org_id ON sessions(org_id);
 -- Aggregated usage per org per billing period.
 CREATE TABLE usage (
   id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  org_id           TEXT NOT NULL REFERENCES organizations(id),
+  org_id           TEXT NOT NULL,
   period           TEXT NOT NULL,
   turns            INTEGER NOT NULL DEFAULT 0,
   minutes          REAL NOT NULL DEFAULT 0,
