@@ -159,6 +159,46 @@ export async function fetchSessionDebug(id: string): Promise<SessionDebug> {
   return (await res.json()) as SessionDebug;
 }
 
+// --- Integrations ---
+
+export interface ProviderStatus {
+  connected?: boolean;
+  configured?: boolean;
+  email?: string | null;
+  repo_count?: number;
+}
+
+export interface IntegrationsStatus {
+  linear: { connected: boolean; email: string | null };
+  github: { connected: boolean; repo_count: number };
+  anthropic: { configured: boolean };
+  openai: { configured: boolean };
+  cf_workers_ai: { configured: boolean };
+  github_app_settings_url: string | null;
+}
+
+export async function fetchIntegrations(): Promise<IntegrationsStatus> {
+  const res = await fetch(`${BASE}/integrations`, { credentials: "same-origin" });
+  if (!res.ok) throw new Error(`Failed to fetch integrations: ${res.status}`);
+  return (await res.json()) as IntegrationsStatus;
+}
+
+export async function saveCredential(
+  provider: string,
+  apiKey: string,
+): Promise<void> {
+  const res = await fetch(`${BASE}/integrations/credentials`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ provider, api_key: apiKey }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { message?: string };
+    throw new Error(body.message || `Failed to save credential: ${res.status}`);
+  }
+}
+
 export async function rerunSession(
   id: string,
   prompt?: string,

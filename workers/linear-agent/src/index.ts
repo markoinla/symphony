@@ -68,6 +68,10 @@ export interface Env {
   //   wrangler secret put GITHUB_APP_SLUG
   GITHUB_APP_SLUG?: string;
 
+  // URL to the GitHub App installation settings page. Shown on the
+  // dashboard Integrations tab as the "Manage" link for GitHub.
+  GITHUB_APP_SETTINGS_URL?: string;
+
   // Master KEK (base64-encoded AES-256 key) for envelope encryption
   // of per-org credentials in the org_credentials table. Set with:
   //   wrangler secret put CREDENTIAL_KEK
