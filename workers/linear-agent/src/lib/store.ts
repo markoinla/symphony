@@ -192,7 +192,10 @@ export class SessionStore {
     const bytes = new Uint8Array(32);
     crypto.getRandomValues(bytes);
     const token = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-    const expiresAt = new Date(Date.now() + ttlDays * 86_400_000).toISOString();
+    const expiresAt = new Date(Date.now() + ttlDays * 86_400_000)
+      .toISOString()
+      .replace("T", " ")
+      .replace("Z", "");
     await this.db
       .prepare(
         `INSERT INTO dashboard_sessions (token, linear_user_id, expires_at)
