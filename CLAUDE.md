@@ -157,6 +157,37 @@ than failing the deploy.
 
 Full failure-mode postmortem: `docs/cloudflare_sandbox_integration.md:486-501`.
 
+### Editing an engine baseline snapshot
+
+Each engine (`pi`, `codex`, `claude`) has one baseline snapshot in D1 `engine_baselines` holding CLI logins + tools under `/home/symphony`. To edit interactively and resnapshot:
+
+```bash
+export SYMPHONY_DISPATCHER_URL=https://sandbox.marko.la
+export SYMPHONY_DISPATCHER_HMAC_SECRET=$(op item get twhncf7ryksvdjx424x74nbmiy --fields credential --reveal)
+export DATABASE_URL=ecto://postgres:postgres@localhost/symphony_dev
+
+mise exec -- mix symphony.baseline.edit --engine pi    # prints pty_url (browser, ~30 min TTL)
+# … make changes in the browser PTY (or via SSH, see below) …
+mise exec -- mix symphony.baseline.save --engine pi    # snapshots /home/symphony + destroys sandbox
+```
+
+The current baseline is restored into the edit sandbox first, so changes are additive. `--version <tag>` on save is optional; existing tag is preserved if omitted.
+
+### SSH into a running sandbox
+
+Alternative to the browser PTY when you want a normal shell, `scp`, etc. Works on any running sandbox (`baseline-edit-*` or `run-sym-*`).
+
+```bash
+cd workers/sandbox-dispatcher
+npx wrangler containers instances a03cbefb-2ff1-4d43-bc77-3afd96634d73 | grep <sandbox-name>
+npx wrangler containers ssh <instance-id>   # lands as root; snapshot at /home/symphony
+```
+
+Auth tunnels through Cloudflare account creds — no public port. Requirements:
+- ed25519 key only (Cloudflare doesn't accept RSA). The local key must be at `~/.ssh/id_ed25519` because `wrangler containers ssh` shells out to OpenSSH and **ignores ssh-agent**. Our dedicated key lives at `~/.ssh/symphony_sandbox_ed25519` symlinked from `~/.ssh/id_ed25519`.
+- `authorized_keys` is set on the container class in `workers/sandbox-dispatcher/wrangler.jsonc` (prod + `env.dev`) — same key authorizes every sandbox the dispatcher spins up.
+- Container instance must already be running. SSH does not wake idle containers. If you change `authorized_keys`, existing instances must be re-created (run `baseline.edit` again) to pick up the new key.
+
 ## Code Conventions
 
 - All public functions (`def`) must have an adjacent `@spec`. Private (`defp`) specs are optional. `@impl` callbacks are exempt.
