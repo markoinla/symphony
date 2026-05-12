@@ -18,7 +18,7 @@
  * Linear's schema changes.
  */
 
-export const LINEAR_GRAPHQL_REFERENCE = `
+const LINEAR_GRAPHQL_REFERENCE_HEADER = `
 
 ---
 
@@ -36,8 +36,10 @@ curl -sS https://api.linear.app/graphql \\
 \`\`\`
 
 All ID parameters are opaque UUIDs (not human-readable identifiers like
-\`SYM-32\`). The issue UUID is provided in the issue context above as
-\`ID (UUID)\`.
+\`SYM-32\`). Use the UUIDs from the "Issue context for Linear API" block
+below for any \`issueId\` / \`teamId\` variable.`;
+
+const LINEAR_GRAPHQL_REFERENCE_BODY = `
 
 ### Fetch issue by ID
 
@@ -166,14 +168,66 @@ mutation AddLabel($issueId: String!, $labelIds: [String!]!) {
 `;
 
 /**
- * Append the Linear GraphQL reference to a prompt unless the prompt
- * already contains it (idempotent — safe to call from multiple call
- * sites, including continuation-prompt builders that embed the
- * original prompt).
+ * Per-session identifiers Pi needs in order to substitute into
+ * GraphQL variables. The cheatsheet otherwise has no way to know
+ * the issue's UUID (which differs from the human-readable
+ * `SYM-32`-style identifier).
  */
-export function withLinearGraphqlReference(prompt: string): string {
+export interface LinearGraphqlContext {
+  /** Issue UUID — the value passed as `$issueId` to GraphQL. */
+  issueId?: string | null;
+  /** Human identifier (`SYM-32`) — useful for log/message strings. */
+  issueIdentifier?: string | null;
+  /** Team UUID, when known — needed for `issueCreate`, label lookup. */
+  teamId?: string | null;
+}
+
+/**
+ * Append the Linear GraphQL reference to a prompt unless it's already
+ * present (idempotent — safe to call from multiple call sites,
+ * including continuation-prompt builders that embed the original
+ * prompt). When `context` is provided, a small "Issue context for
+ * Linear API" block is rendered between the header and the
+ * queries/mutations so Pi can drop the UUID straight into variables.
+ */
+export function withLinearGraphqlReference(
+  prompt: string,
+  context?: LinearGraphqlContext,
+): string {
   if (prompt.includes("## Linear access (use raw GraphQL")) {
     return prompt;
   }
-  return prompt + LINEAR_GRAPHQL_REFERENCE;
+  return (
+    prompt +
+    LINEAR_GRAPHQL_REFERENCE_HEADER +
+    renderContextBlock(context) +
+    LINEAR_GRAPHQL_REFERENCE_BODY
+  );
+}
+
+/**
+ * Legacy export — kept for backwards compat with any in-flight
+ * workflow instances whose closures captured this name. New callers
+ * should use `withLinearGraphqlReference` so the issue context is
+ * threaded through.
+ */
+export const LINEAR_GRAPHQL_REFERENCE =
+  LINEAR_GRAPHQL_REFERENCE_HEADER +
+  renderContextBlock(undefined) +
+  LINEAR_GRAPHQL_REFERENCE_BODY;
+
+function renderContextBlock(context: LinearGraphqlContext | undefined): string {
+  if (!context) return "\n";
+  const lines: string[] = [];
+  if (context.issueId) lines.push(`- Issue UUID: \`${context.issueId}\``);
+  if (context.issueIdentifier)
+    lines.push(`- Issue identifier: \`${context.issueIdentifier}\``);
+  if (context.teamId) lines.push(`- Team UUID: \`${context.teamId}\``);
+  if (lines.length === 0) return "\n";
+  return (
+    "\n\n### Issue context for Linear API\n\n" +
+    "Use these literal values in your GraphQL variables:\n\n" +
+    lines.join("\n") +
+    "\n"
+  );
 }

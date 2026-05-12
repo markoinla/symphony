@@ -303,10 +303,17 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         if (!rawPrompt) return { kind: "no_prompt" } as const;
         // Append the Linear GraphQL cheatsheet once here so the engine
         // can call api.linear.app/graphql directly using the
-        // LINEAR_API_TOKEN env injected by the dispatcher. Continuation
-        // prompts embed `resolved.prompt` verbatim, so they inherit
-        // the cheatsheet for free.
-        const prompt = withLinearGraphqlReference(rawPrompt);
+        // LINEAR_API_TOKEN env injected by the dispatcher. Issue/team
+        // UUIDs are pulled from the webhook so the cheatsheet's
+        // variable-substitution lines aren't generic placeholders —
+        // Pi can copy them straight into GraphQL `variables`.
+        // Continuation prompts embed `resolved.prompt` verbatim, so
+        // they inherit the cheatsheet (and the UUIDs) for free.
+        const prompt = withLinearGraphqlReference(rawPrompt, {
+          issueId: webhookEvent.agentSession.issue?.id ?? null,
+          issueIdentifier: webhookEvent.agentSession.issue?.identifier ?? null,
+          teamId: teamId,
+        });
 
         const engine = (projectRow?.engine ?? this.env.DEFAULT_ENGINE ?? "pi") as
           | "pi"
@@ -629,7 +636,14 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     // sees so headless runs (no synthesized webhook with promptContext)
     // still pick it up. Idempotent — withLinearGraphqlReference is a
     // no-op if the marker is already present in the prompt.
-    const prompt = withLinearGraphqlReference(params.prompt);
+    //
+    // Headless params don't carry the issue UUID today (mode currently
+    // has no caller), so only the human identifier is plumbed through.
+    // When a real trigger path needs Linear writes, extend the params
+    // type to include `issueGraphqlId` and pass it here.
+    const prompt = withLinearGraphqlReference(params.prompt, {
+      issueIdentifier,
+    });
 
     const githubAppInstallationId: number | null = await step.do(
       "trigger-load-github-install",
