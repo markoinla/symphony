@@ -17,13 +17,27 @@ mix setup                  # Install Elixir + npm dependencies
 # Development
 mix phx.server             # Start Phoenix API server
 cd dashboard && npm run dev # Start Vite dev server (port 5173, proxies /api to :4000)
+./bin/symphony ./WORKFLOW.md   # Run the orchestrator directly via escript (README entry point)
+
+# Build
+mix assets.build           # Build dashboard SPA and copy into priv/static/dashboard
+mix build                  # assets.build + escript.build → ./bin/symphony
 
 # Fast validation (use this for pre-commit/pre-push checks)
 mix compile --warnings-as-errors && mix format --check-formatted && mix lint
+mix specs.check            # @spec enforcement on public funs (also runs as part of `mix lint`)
+cd dashboard && npm run lint   # Frontend ESLint
 
 # Run specific tests only — prefer targeted tests over full suite
 mix test path/to/test.exs           # Run a single test file
 mix test path/to/test.exs:42        # Run a specific test by line number
+
+# Live end-to-end test (creates real Linear resources + spawns Codex; opt-in only)
+SYMPHONY_RUN_LIVE_E2E=1 mix test test/symphony_elixir/live_e2e_test.exs
+# Optional: SYMPHONY_LIVE_LINEAR_TEAM_KEY (default SYME2E), SYMPHONY_LIVE_SSH_WORKER_HOSTS
+
+# User management
+mix symphony.create_user <email> <password> [--name "Name"]  # Add users after first-time /setup
 ```
 
 ## Architecture
@@ -35,17 +49,21 @@ The core pipeline flows: **Orchestrator** → **AgentRunner** → **Workspace** 
 - `SymphonyElixir.Orchestrator` — GenServer that polls Linear for candidate issues, dispatches agents, handles retries and reconciliation. Stateful and concurrency-sensitive.
 - `SymphonyElixir.AgentRunner` — Executes a single issue in an isolated workspace with Codex.
 - `SymphonyElixir.Workspace` — Creates per-issue workspaces (local or SSH workers). **Safety-critical: never run Codex in the source repo.**
-- `SymphonyElixir.Codex.AppServer` — Manages Codex app-server sessions (start, turn, tool responses).
-- `SymphonyElixir.Store` — PostgreSQL persistence layer with Ecto schemas for Projects, Sessions, Messages, Settings, IssueClaims.
-- `SymphonyElixir.Config` / `Config.Schema` — Parses YAML front matter from `WORKFLOW.md` files.
-- `SymphonyElixir.Linear.*` — Linear GraphQL API client (polling, comments, state transitions, labels).
+- `SymphonyElixir.Codex.AppServer` / `SymphonyElixir.Claude.AppServer` — Engine adapters for Codex and Claude app-server sessions (start, turn, tool responses). Both engines are supported side-by-side.
+- `SymphonyElixir.Store` — PostgreSQL persistence layer with Ecto schemas for Projects, Sessions, Messages, Settings, IssueClaims, Users, Organizations, UserOrganizations, Agents, WebhookLogs, WebhookHints.
+- `SymphonyElixir.Config` / `Config.Schema` — Parses YAML front matter from `WORKFLOW.md` files. Workflow files hot-reload from disk; on reload failure the last good config is retained.
+- `SymphonyElixir.Linear.*` — Linear GraphQL API client (polling, comments, state transitions, labels, OAuth, webhooks).
 - `SymphonyElixir.Tracker` — Abstract tracker interface with Linear and memory implementations.
+- `SymphonyElixir.Worker.*` — SSH worker support; workspaces can be local or executed on remote SSH hosts.
+- `SymphonyElixir.Cloudflare.DispatcherClient` — Talks to the `sandbox-dispatcher` Worker (see Cloudflare Workers ops below) for sandboxed run dispatch.
+
+**Workflow files:** `WORKFLOW.md` is the primary config, but Symphony also ships sibling workflows (`ENRICHMENT.md`, `EPIC_SPLITTER.md`, `MENTION.md`, `MERGING.md`, `REVIEW.md`, `TRIAGE.md`) at the repo root. Pass multiple paths or a directory via `--workflows <dir>` to run one orchestrator per workflow.
 
 ### Frontend (React Dashboard)
 
 Located in `dashboard/`. Built with Vite, served as static assets from Phoenix in production.
 
-- **Routing:** TanStack Router (dashboard, session detail, history views)
+- **Routing:** TanStack Router. Pages under `dashboard/src/pages/`: `dashboard`, `session`, `history`, `agents`, `analytics`, `reliability`, `projects`, `settings`, `login`, `setup`.
 - **Data fetching:** TanStack Query + SSE streams for live updates
 - **UI:** Radix UI primitives + Tailwind CSS
 - **Key files:** `src/lib/api.ts` (API client + types), `src/lib/streams.ts` (SSE), `src/lib/utils.ts`
@@ -59,6 +77,8 @@ REST JSON API under `/api/v1/*`:
 - `POST /api/v1/auth/setup` — body: `{email, password, name?}`, creates first user + org; 409 if already configured
 - `POST /api/v1/auth/logout` — clears session
 - `GET /api/v1/auth/status` — response: `{authenticated, auth_required, user?}` (user present when logged in)
+
+**First-time bootstrap:** when no users exist, `SymphonyElixirWeb.Plugs.RequireAuth` lets all requests through. Visit `/setup` to create the first admin + default organization, then connect Linear OAuth and create a project in the dashboard. Once any user exists, a valid `user_id` session is required on protected routes. Add more users via `mix symphony.create_user`.
 
 **Protected (session required when users exist):**
 - `GET /api/v1/state` — Orchestrator state snapshot
