@@ -358,6 +358,10 @@ actively running subagents, which is very useful during development.
 Launch `codex` in your repo, give it the URL to the Symphony repo, and ask it to set things up for
 you.
 
+## Status
+
+Updated at: 2026-05-12T22:47Z
+
 ## License
 
 This project is licensed under the [Apache License 2.0](../LICENSE).
