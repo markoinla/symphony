@@ -51,6 +51,7 @@ interface CredentialsBody {
   anthropic_api_key?: unknown;
   openai_api_key?: unknown;
   github_token?: unknown;
+  linear_token?: unknown;
   mcp_servers?: unknown;
 }
 
@@ -508,6 +509,12 @@ const CREDENTIAL_ENV_MAP: Array<{
   { field: "anthropic_api_key", envName: "ANTHROPIC_API_KEY" },
   { field: "openai_api_key", envName: "OPENAI_API_KEY" },
   { field: "github_token", envName: "GITHUB_TOKEN" },
+  // Linear bearer for raw GraphQL calls from the engine. We stopped
+  // wiring Linear's hosted MCP into the sandbox; the engine now hits
+  // https://api.linear.app/graphql directly with this token. See the
+  // `Linear access (use raw GraphQL)` block appended by the
+  // linear-agent worker for the contract the engine follows.
+  { field: "linear_token", envName: "LINEAR_API_TOKEN" },
 ];
 
 function parseCredentials(

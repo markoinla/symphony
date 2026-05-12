@@ -42,6 +42,7 @@ import {
 } from "../lib/dispatcher";
 import { lastAssistantText, mapToActivity } from "../lib/event-mapper";
 import { resolveLinearMcpToken } from "../lib/linear-token";
+import { withLinearGraphqlReference } from "../lib/prompts/linear-graphql";
 import { resolvePrompt, truncate } from "../lib/session-helpers";
 import {
   AgentSessionStore,
@@ -298,8 +299,14 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         // priority order. For trigger-initiated runs the dispatcher
         // pre-renders the workflow's Liquid template and stuffs it
         // into `promptContext`, so this picks it up verbatim.
-        const prompt = resolvePrompt(webhookEvent);
-        if (!prompt) return { kind: "no_prompt" } as const;
+        const rawPrompt = resolvePrompt(webhookEvent);
+        if (!rawPrompt) return { kind: "no_prompt" } as const;
+        // Append the Linear GraphQL cheatsheet once here so the engine
+        // can call api.linear.app/graphql directly using the
+        // LINEAR_API_TOKEN env injected by the dispatcher. Continuation
+        // prompts embed `resolved.prompt` verbatim, so they inherit
+        // the cheatsheet for free.
+        const prompt = withLinearGraphqlReference(rawPrompt);
 
         const engine = (projectRow?.engine ?? this.env.DEFAULT_ENGINE ?? "pi") as
           | "pi"
@@ -427,9 +434,14 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       //      Symphony Linear Agent install). Required for trigger-
       //      initiated runs where no human user is associated and for
       //      orgs that haven't completed the per-user link flow yet —
-      //      otherwise pi launches with no Linear MCP at all and the
-      //      "use Linear MCP to post the workpad" instruction in the
-      //      prompt is a dead letter.
+      //      otherwise the engine launches without any Linear auth and
+      //      can't call the GraphQL API the prompt directs it to use.
+      //
+      // The token is delivered to the sandbox as the `LINEAR_API_TOKEN`
+      // env var (dispatcher maps `linear_token` → that env). The Linear
+      // MCP is no longer attached; the engine calls
+      // https://api.linear.app/graphql directly via curl using the
+      // cheatsheet baked into the prompt.
       const linearMcpCredentials: RunCredentials | null = await step.do(
         `resolve-linear-mcp-token-${turn}`,
         async () => {
@@ -440,17 +452,9 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
               webhookEvent.agentSession.comment?.userId ?? null,
             runTimeoutMs: DEFAULT_TIMEOUT_MS,
           });
-          const mcpToken = result?.accessToken ?? token;
-          if (!mcpToken) return null;
-          return {
-            mcp_servers: [
-              {
-                name: "linear",
-                url: "https://mcp.linear.app/sse",
-                token: mcpToken,
-              },
-            ],
-          } as RunCredentials;
+          const linearToken = result?.accessToken ?? token;
+          if (!linearToken) return null;
+          return { linear_token: linearToken } as RunCredentials;
         },
       );
 
@@ -616,12 +620,16 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       sessionId,
       organizationId,
       repoUrl,
-      prompt,
       model,
       maxTurns,
       scope,
       issueIdentifier,
     } = params;
+    // Bake the Linear GraphQL cheatsheet onto every prompt the engine
+    // sees so headless runs (no synthesized webhook with promptContext)
+    // still pick it up. Idempotent — withLinearGraphqlReference is a
+    // no-op if the marker is already present in the prompt.
+    const prompt = withLinearGraphqlReference(params.prompt);
 
     const githubAppInstallationId: number | null = await step.do(
       "trigger-load-github-install",

@@ -32,6 +32,17 @@ export interface RunCredentials {
   anthropic_api_key?: string;
   openai_api_key?: string;
   github_token?: string;
+  /**
+   * Linear OAuth bearer (user or app-scoped) for the engine to call
+   * Linear's GraphQL API at https://api.linear.app/graphql. The
+   * dispatcher exposes this as `LINEAR_API_TOKEN` in the sandbox env.
+   * We used to wire Linear's hosted MCP via `mcp_servers` instead; the
+   * raw GraphQL path is engine-agnostic and avoids the MCP cold-start
+   * + hosted-MCP availability dependency. See
+   * `src/lib/prompts/linear-graphql.ts` for the matching cheatsheet
+   * appended to every prompt.
+   */
+  linear_token?: string;
   mcp_servers?: McpServerCredential[];
 }
 
