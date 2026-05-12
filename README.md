@@ -345,6 +345,10 @@ The live test creates a temporary Linear project and issue, writes a temporary `
 a real agent turn, verifies the workspace side effect, requires Codex to comment on and close the
 Linear issue, then marks the project completed so the run remains visible in Linear.
 
+## Status
+
+Updated At: 2026-05-12T23:54Z
+
 ## FAQ
 
 ### Why Elixir?
