@@ -7,6 +7,10 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 > Symphony Elixir is prototype software intended for evaluation only and is presented as-is.
 > We recommend implementing your own hardened version based on `SPEC.md`.
 
+## Status
+
+Updated at: 2026-05-12T01:23:45Z
+
 ## Screenshot
 
 ![Symphony Elixir screenshot](../.github/media/elixir-screenshot.png)
