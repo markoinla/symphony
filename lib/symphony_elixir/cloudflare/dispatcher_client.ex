@@ -2,7 +2,7 @@ defmodule SymphonyElixir.Cloudflare.DispatcherClient do
   @moduledoc """
   HTTP client for the `sandbox-dispatcher` Cloudflare Worker.
 
-  Used by the `mix symphony.auth.bootstrap` / `mix symphony.auth.snapshot`
+  Used by the `mix symphony.baseline.edit` / `mix symphony.baseline.save`
   tasks today; Phase 5 reuses it for `Worker.Backend.CloudflareSandbox`'s
   `acquire`/`exec`/`release` calls.
 
