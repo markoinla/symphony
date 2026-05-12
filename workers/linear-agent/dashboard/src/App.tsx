@@ -22,6 +22,7 @@ import {
   Menu,
   X,
   User,
+  Webhook,
   Workflow as WorkflowIcon,
 } from 'lucide-react'
 
@@ -41,6 +42,7 @@ import {
   dashboardRoute,
   sessionRoute,
   historyRoute,
+  webhooksRoute,
   projectsRoute,
   workflowsRoute,
   workflowEditorRoute,
@@ -53,6 +55,7 @@ import {
 import { DashboardView } from './pages/dashboard'
 import { SessionView } from './pages/session'
 import { HistoryView } from './pages/history'
+import { WebhooksView } from './pages/webhooks'
 import { ProjectsView } from './pages/projects'
 import { WorkflowsView } from './pages/workflows'
 import { WorkflowEditorView } from './pages/workflow-editor'
@@ -97,6 +100,7 @@ rootRoute.update({ component: RootLayout, notFoundComponent: NotFoundView })
 dashboardRoute.update({ component: DashboardView })
 sessionRoute.update({ component: SessionView })
 historyRoute.update({ component: HistoryView })
+webhooksRoute.update({ component: WebhooksView })
 projectsRoute.update({ component: ProjectsView })
 workflowsRoute.update({ component: WorkflowsView })
 workflowEditorRoute.update({ component: WorkflowEditorView })
@@ -116,6 +120,7 @@ export default function App() {
 const navItems = [
   { to: '/' as const, label: 'Dashboard', icon: LayoutDashboard, match: (p: string) => p === '/' },
   { to: '/history' as const, label: 'History', icon: Clock, match: (p: string) => p.startsWith('/history') },
+  { to: '/webhooks' as const, label: 'Webhooks', icon: Webhook, match: (p: string) => p.startsWith('/webhooks') },
   { to: '/projects' as const, label: 'Projects', icon: FolderKanban, match: (p: string) => p.startsWith('/projects') },
   { to: '/workflows' as const, label: 'Workflows', icon: WorkflowIcon, match: (p: string) => p.startsWith('/workflows') },
   { to: '/settings' as const, label: 'Settings', icon: Settings, match: (p: string) => p.startsWith('/settings') },

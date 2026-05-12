@@ -607,6 +607,50 @@ export function deleteProject(id: number) {
   return requestJson<{ ok: boolean }>(`/dashboard/api/projects/${id}`, { method: 'DELETE' })
 }
 
+// ── Webhook events (closed-loop test view) ──────────────────────────
+
+export type WebhookEvent = {
+  id: string
+  received_at: number
+  organization_id: string | null
+  webhook_id: string | null
+  envelope_type: string
+  envelope_action: string | null
+  signature_ok: boolean
+  deduped: boolean
+  matched_workflow_id: string | null
+  matched_trigger_id: string | null
+  dispatched_action: string
+  agent_session_id: string | null
+  error: string | null
+  latency_ms: number
+  event_summary: string | null
+  raw_body: string | null
+  raw_body_truncated?: boolean
+}
+
+export type WebhookListParams = {
+  limit?: number
+  envelope?: string
+  dispatchedAction?: string
+}
+
+export async function getWebhooks(
+  params?: WebhookListParams,
+): Promise<{ webhooks: WebhookEvent[] }> {
+  const qs = new URLSearchParams()
+  if (params?.limit) qs.set('limit', String(params.limit))
+  if (params?.envelope) qs.set('envelope', params.envelope)
+  if (params?.dispatchedAction)
+    qs.set('dispatched_action', params.dispatchedAction)
+  const suffix = qs.toString() ? `?${qs.toString()}` : ''
+  return requestJson<{ webhooks: WebhookEvent[] }>(`/api/v1/webhooks${suffix}`)
+}
+
+export async function getWebhook(id: string): Promise<{ webhook: WebhookEvent }> {
+  return requestJson<{ webhook: WebhookEvent }>(`/api/v1/webhooks/${id}`)
+}
+
 // ── Settings (no Worker equivalent yet) ─────────────────────────────
 
 export function getSettings(): Promise<SettingsPayload> {

@@ -615,6 +615,191 @@ export class AgentSessionStore {
   }
 }
 
+// ── webhook_events ──────────────────────────────────────────────────
+
+export interface WebhookEventRecord {
+  id: string;
+  received_at: number;
+  organization_id: string | null;
+  webhook_id: string | null;
+  envelope_type: string;
+  envelope_action: string | null;
+  signature_ok: number;
+  deduped: number;
+  matched_workflow_id: string | null;
+  matched_trigger_id: string | null;
+  dispatched_action: string;
+  agent_session_id: string | null;
+  error: string | null;
+  latency_ms: number;
+  event_summary: string | null;
+  raw_body: string | null;
+}
+
+export interface WebhookEventListFilter {
+  organizationId?: string;
+  envelope?: string;
+  dispatched_action?: string;
+  limit?: number;
+  offset?: number;
+}
+
+const WEBHOOK_EVENT_COLS =
+  "id, received_at, organization_id, webhook_id, envelope_type, envelope_action, signature_ok, deduped, matched_workflow_id, matched_trigger_id, dispatched_action, agent_session_id, error, latency_ms, event_summary, raw_body";
+
+export class WebhookEventStore {
+  constructor(private readonly db: D1Database) {}
+
+  async insert(input: {
+    receivedAt: number;
+    organizationId?: string | null;
+    webhookId?: string | null;
+    envelopeType: string;
+    envelopeAction?: string | null;
+    signatureOk: boolean;
+    rawBody?: string | null;
+    eventSummary?: string | null;
+  }): Promise<string> {
+    const id = crypto.randomUUID();
+    await this.db
+      .prepare(
+        `INSERT INTO webhook_events
+           (id, received_at, organization_id, webhook_id, envelope_type, envelope_action,
+            signature_ok, deduped, matched_workflow_id, matched_trigger_id,
+            dispatched_action, agent_session_id, error, latency_ms, event_summary, raw_body)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, 'pending', NULL, NULL, 0, ?, ?)`,
+      )
+      .bind(
+        id,
+        input.receivedAt,
+        input.organizationId ?? null,
+        input.webhookId ?? null,
+        input.envelopeType,
+        input.envelopeAction ?? null,
+        input.signatureOk ? 1 : 0,
+        input.eventSummary ?? null,
+        input.rawBody ?? null,
+      )
+      .run();
+    return id;
+  }
+
+  async update(
+    id: string,
+    fields: {
+      organizationId?: string | null;
+      deduped?: boolean;
+      matchedWorkflowId?: string | null;
+      matchedTriggerId?: string | null;
+      dispatchedAction?: string;
+      agentSessionId?: string | null;
+      error?: string | null;
+      latencyMs?: number;
+      eventSummary?: string | null;
+    },
+  ): Promise<void> {
+    const sets: string[] = [];
+    const values: (string | number | null)[] = [];
+
+    if (fields.organizationId !== undefined) {
+      sets.push("organization_id = ?");
+      values.push(fields.organizationId);
+    }
+    if (fields.deduped !== undefined) {
+      sets.push("deduped = ?");
+      values.push(fields.deduped ? 1 : 0);
+    }
+    if (fields.matchedWorkflowId !== undefined) {
+      sets.push("matched_workflow_id = ?");
+      values.push(fields.matchedWorkflowId);
+    }
+    if (fields.matchedTriggerId !== undefined) {
+      sets.push("matched_trigger_id = ?");
+      values.push(fields.matchedTriggerId);
+    }
+    if (fields.dispatchedAction !== undefined) {
+      sets.push("dispatched_action = ?");
+      values.push(fields.dispatchedAction);
+    }
+    if (fields.agentSessionId !== undefined) {
+      sets.push("agent_session_id = ?");
+      values.push(fields.agentSessionId);
+    }
+    if (fields.error !== undefined) {
+      sets.push("error = ?");
+      values.push(fields.error);
+    }
+    if (fields.latencyMs !== undefined) {
+      sets.push("latency_ms = ?");
+      values.push(fields.latencyMs);
+    }
+    if (fields.eventSummary !== undefined) {
+      sets.push("event_summary = ?");
+      values.push(fields.eventSummary);
+    }
+
+    if (sets.length === 0) return;
+
+    await this.db
+      .prepare(`UPDATE webhook_events SET ${sets.join(", ")} WHERE id = ?`)
+      .bind(...values, id)
+      .run();
+  }
+
+  async get(id: string, orgId?: string): Promise<WebhookEventRecord | null> {
+    if (orgId) {
+      return await this.db
+        .prepare(
+          `SELECT ${WEBHOOK_EVENT_COLS}
+           FROM webhook_events WHERE id = ? AND organization_id = ?`,
+        )
+        .bind(id, orgId)
+        .first<WebhookEventRecord>();
+    }
+    return await this.db
+      .prepare(
+        `SELECT ${WEBHOOK_EVENT_COLS}
+         FROM webhook_events WHERE id = ?`,
+      )
+      .bind(id)
+      .first<WebhookEventRecord>();
+  }
+
+  async list(filter: WebhookEventListFilter): Promise<WebhookEventRecord[]> {
+    const conditions: string[] = [];
+    const values: (string | number)[] = [];
+
+    if (filter.organizationId) {
+      conditions.push("organization_id = ?");
+      values.push(filter.organizationId);
+    }
+    if (filter.envelope) {
+      conditions.push("envelope_type = ?");
+      values.push(filter.envelope);
+    }
+    if (filter.dispatched_action) {
+      conditions.push("dispatched_action = ?");
+      values.push(filter.dispatched_action);
+    }
+
+    const where =
+      conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+    const limit = Math.min(filter.limit ?? 50, 200);
+    const offset = filter.offset ?? 0;
+
+    const result = await this.db
+      .prepare(
+        `SELECT ${WEBHOOK_EVENT_COLS}
+         FROM webhook_events ${where}
+         ORDER BY received_at DESC
+         LIMIT ? OFFSET ?`,
+      )
+      .bind(...values, limit, offset)
+      .all<WebhookEventRecord>();
+    return result.results;
+  }
+}
+
 // ── Compatibility aliases ───────────────────────────────────────────
 // Old names from the v1 schema. Existing callers can keep importing
 // `InstallationStore` and get the new linear_agent_installs-backed

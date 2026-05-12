@@ -25,6 +25,11 @@ export const historyRoute = createRoute({
   path: '/history',
 })
 
+export const webhooksRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/webhooks',
+})
+
 export const projectsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/projects',
@@ -64,6 +69,7 @@ export const routeTree = rootRoute.addChildren([
   dashboardRoute,
   sessionRoute,
   historyRoute,
+  webhooksRoute,
   projectsRoute,
   workflowsRoute,
   workflowEditorRoute,

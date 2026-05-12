@@ -31,6 +31,7 @@ export const issueRefSchema = z.object({
   id: z.string(),
   identifier: z.string().nullable().optional(),
   title: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
   state: z.string().nullable().optional(),
   state_id: z.string().nullable().optional(),
   team_id: z.string().nullable().optional(),

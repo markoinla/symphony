@@ -1,9 +1,14 @@
 import { Hono } from "hono";
 
 import type { Env } from "../index";
+import { dispatchTrigger } from "../lib/dispatch-trigger";
+import {
+  isIssueEnvelope,
+  mapIssueUpdateToEvent,
+  type IssueWebhookEnvelope,
+} from "../lib/event-mapper-inbound";
 import { verifyLinearSignature } from "../lib/signature";
-import { dispatchAction } from "../lib/workflows/dispatch";
-import { normalize, type LinearWebhookBody } from "../lib/workflows/normalize";
+import { LinearAgentInstallStore, WebhookEventStore } from "../lib/store";
 import { resolveWorkflow } from "../lib/workflows/resolver";
 import { ensureDefaultWorkflow } from "../lib/workflows/seed";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
@@ -11,27 +16,34 @@ import type { AgentSessionEventWebhook } from "../types/agent-session";
 export { summarizeStdout } from "../lib/session-helpers";
 
 /**
- * Linear webhook receiver for Agent Session events.
+ * Linear webhook receiver.
+ *
+ * Two envelopes are processed today:
+ *
+ *   1. `AgentSessionEvent` — created/prompted from Linear's Agents
+ *      platform. Hands off to the `SESSION_RUNNER` workflow which
+ *      drives a turn loop and writes activities back into the Linear
+ *      session timeline.
+ *
+ *   2. `Issue` (action: "update") — standard Linear issue webhooks.
+ *      State transitions are mapped to a `state_entered` EventTuple,
+ *      resolved against `workflow_triggers`, and dispatched via
+ *      `dispatchTrigger`. Trigger-initiated sessions have no Linear
+ *      AgentSession id so they don't post back into Linear; they're
+ *      visible on `/dashboard/webhooks` and `/dashboard/sessions`.
+ *
+ * Every delivery records a row in `webhook_events` for the dashboard's
+ * "did this fire?" view, regardless of envelope or outcome.
  *
  * Linear's SLAs (https://linear.app/developers/agents):
  *   - HTTP 2xx within 5 seconds
  *   - First activity within 10 seconds
  *
- * Implementation strategy to honor both:
- *   1. Verify HMAC and parse — pure synchronous work, < ~50 ms.
- *   2. Acknowledge with 200 immediately.
- *   3. Hand off to the `SESSION_RUNNER` Cloudflare Workflow which posts
- *      the initial `thought` activity, calls the dispatcher's `/run`
- *      route, and posts the terminal `response`/`error` activity. Each
- *      phase is its own durable step — a Worker eviction mid-dispatch
- *      resumes from the last completed step instead of dropping the
- *      session silently.
- *
- * Idempotency: Linear retries failed deliveries. We dedupe on
- * `webhookId + agentSession.id` via a short-lived KV entry. As a second
- * line of defense, the Workflow instance id is the `agentSession.id`,
- * so a concurrent retry that beats the KV write collides on the
- * Workflow id and is treated as success.
+ * Idempotency: Linear retries failed deliveries. `AgentSessionEvent`
+ * dedupes on `(webhookId, agentSession.id)` via a 60-min KV entry +
+ * the Workflow instance id collision (instance id = agentSession.id).
+ * Issue envelopes dedupe on `(webhookId, data.id, data.stateId)` so
+ * a retried state transition doesn't double-dispatch.
  */
 
 const WEBHOOK_DEDUPE_TTL_S = 60 * 60;
@@ -40,119 +52,315 @@ export function buildWebhookRouter() {
   const app = new Hono<{ Bindings: Env }>();
 
   app.post("/webhook", async (c) => {
+    const receivedAt = Math.floor(Date.now() / 1000);
+    const startedMs = Date.now();
     console.log("webhook_enter");
+    const events = new WebhookEventStore(c.env.DB);
+    let logId: string | null = null;
+    let orgIdForLog: string | null = null;
+
     try {
       const raw = await c.req.raw.clone().text();
       console.log("webhook_body_read", raw.length);
 
       const sigHeader = c.req.header("linear-signature");
-      console.log("got_sig_header", typeof sigHeader, sigHeader?.slice(0, 16));
       const secret = c.env.LINEAR_WEBHOOK_SECRET;
-      console.log("got_secret", typeof secret, secret ? secret.length : 0);
-      const ok = await verifyLinearSignature(secret, raw, sigHeader);
-      console.log("signature_verified", ok);
-      if (!ok) {
-        return c.json({ error: "invalid_signature" }, 401);
-      }
+      const sigOk = await verifyLinearSignature(secret, raw, sigHeader);
+      console.log("signature_verified", sigOk);
 
-      let parsed: unknown;
+      let parsed: Record<string, unknown> | null = null;
       try {
         parsed = JSON.parse(raw);
       } catch {
+        logId = await events.insert({
+          receivedAt,
+          envelopeType: "unknown",
+          signatureOk: sigOk,
+          rawBody: raw.slice(0, 65_536),
+        });
+        await events.update(logId, {
+          dispatchedAction: "error",
+          error: "invalid_json",
+          latencyMs: Date.now() - startedMs,
+        });
         return c.json({ error: "invalid_json" }, 400);
       }
-      console.log("json_parsed", typeof parsed);
-      // One-time diagnostic: dump the top-level keys + type field so we
-      // can see what envelope Linear is actually sending.
-      try {
-        const p = parsed as Record<string, unknown>;
-        console.log(
-          "parsed_keys",
-          Object.keys(p).join(","),
-          "type=",
-          String(p.type),
-          "action=",
-          String(p.action),
-          "hasAgentSession=",
-          !!p.agentSession,
-        );
-      } catch {}
 
-      if (!isAgentSessionEvent(parsed)) {
-        // SYM-295: Issue / Comment / IssueLabel deliveries flow through
-        // the workflow router. AgentSessionEvent still uses the legacy
-        // path below so existing /run dispatches keep working.
-        const dispatched = await tryDispatchWorkflow(
-          c.env,
-          parsed as LinearWebhookBody,
-        );
-        if (dispatched) {
-          return c.json({ ok: true, scheduled: true, via: "workflow" });
-        }
-        console.log("ignored_non_agent_session_no_match");
-        return c.json({ ok: true, ignored: true });
-      }
+      const envelopeType = inferEnvelopeType(parsed);
+      const envelopeAction =
+        typeof parsed?.action === "string" ? (parsed.action as string) : null;
+      const webhookId =
+        typeof parsed?.webhookId === "string"
+          ? (parsed.webhookId as string)
+          : null;
 
-      const event = parsed;
-      console.log("agent_session_event", event.action, event.agentSession.id);
-      const dedupeKey = `webhook:${event.webhookId}:${event.agentSession.id}`;
-      const seen = await c.env.LINEAR_TOKENS.get(dedupeKey);
-      console.log("dedupe_check", seen ? "seen" : "fresh");
-      if (seen) {
-        return c.json({ ok: true, deduped: true });
-      }
-      await c.env.LINEAR_TOKENS.put(dedupeKey, "1", {
-        expirationTtl: WEBHOOK_DEDUPE_TTL_S,
+      logId = await events.insert({
+        receivedAt,
+        webhookId,
+        envelopeType,
+        envelopeAction,
+        signatureOk: sigOk,
+        rawBody: raw.slice(0, 65_536),
       });
-      console.log("dedupe_marked");
 
-      if (event.action !== "created" && event.action !== "prompted") {
-        return c.json({ ok: true, ignored: true, action: event.action });
-      }
-
-      // SYM-295: try the workflow router first. Only AgentSessionEvents
-      // emit a `session_started` tuple today; if a workflow matches we
-      // dispatch through it. When no workflow matches (resolver returns
-      // null — either because the migration hasn't run or because no
-      // trigger fires), fall through to the legacy hand-off below.
-      const dispatched = await tryDispatchWorkflow(c.env, parsed as LinearWebhookBody);
-      if (dispatched) {
-        return c.json({ ok: true, scheduled: true, via: "workflow" });
-      }
-
-      // Hand off to the durable Workflow; respond immediately so we
-      // stay inside Linear's 5s ack budget regardless of dispatcher
-      // latency. The Workflow instance id is the agent session id, so
-      // a Linear retry that beats the KV dedupe write still collides
-      // here — we catch the "instance exists" error and treat it as
-      // success. Real new prompts on a running session are handled by
-      // SYM-267 item 7 (mid-run comment ingestion).
-      console.log("scheduling_session_runner", event.agentSession.id);
-      try {
-        await c.env.SESSION_RUNNER.create({
-          id: event.agentSession.id,
-          params: { event },
+      if (!sigOk) {
+        await events.update(logId, {
+          dispatchedAction: "error",
+          error: "invalid_signature",
+          latencyMs: Date.now() - startedMs,
         });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (!/instance.*exists|already/i.test(msg)) {
-          console.error("workflow_create_failed", msg);
-          throw e;
-        }
-        console.log("workflow_already_exists", event.agentSession.id);
+        return c.json({ error: "invalid_signature" }, 401);
       }
-      return c.json({ ok: true, scheduled: true });
+
+      if (isAgentSessionEvent(parsed)) {
+        return await handleAgentSession(c, parsed, logId, events, startedMs);
+      }
+
+      if (isIssueEnvelope(parsed)) {
+        // Tenant resolution for the log row.
+        const linearOrgId =
+          typeof (parsed as IssueWebhookEnvelope).organizationId === "string"
+            ? ((parsed as IssueWebhookEnvelope).organizationId as string)
+            : null;
+        if (linearOrgId) {
+          const install = await new LinearAgentInstallStore(
+            c.env.DB,
+          ).getByLinearOrgId(linearOrgId);
+          if (install) orgIdForLog = install.organization_id;
+        }
+        return await handleIssueEnvelope(
+          c,
+          parsed as IssueWebhookEnvelope,
+          {
+            logId,
+            orgId: orgIdForLog,
+            envelopeAction,
+            startedMs,
+            events,
+          },
+        );
+      }
+
+      console.log("ignored_unhandled_envelope", envelopeType);
+      await events.update(logId, {
+        dispatchedAction: "ignored_envelope",
+        latencyMs: Date.now() - startedMs,
+        eventSummary: `Ignored ${envelopeType}`,
+      });
+      return c.json({ ok: true, ignored: true });
     } catch (e) {
-      // Surface the real error to Linear's webhook delivery log instead of
-      // letting Workers turn it into an opaque "Illegal invocation".
       const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
       const stack = e instanceof Error ? e.stack ?? "" : "";
       console.error("webhook_handler_error", msg, "\n", stack);
+      if (logId) {
+        try {
+          await events.update(logId, {
+            dispatchedAction: "error",
+            error: msg,
+            latencyMs: Date.now() - startedMs,
+          });
+        } catch {}
+      }
       return c.json({ error: "webhook_handler_error", message: msg, stack }, 500);
     }
   });
 
   return app;
+}
+
+async function handleAgentSession(
+  c: { env: Env; json: (b: unknown, s?: number) => Response },
+  event: AgentSessionEventWebhook,
+  logId: string,
+  events: WebhookEventStore,
+  startedMs: number,
+): Promise<Response> {
+  console.log("agent_session_event", event.action, event.agentSession.id);
+  const dedupeKey = `webhook:${event.webhookId}:${event.agentSession.id}`;
+  const seen = await c.env.LINEAR_TOKENS.get(dedupeKey);
+  if (seen) {
+    await events.update(logId, {
+      deduped: true,
+      dispatchedAction: "deduped",
+      latencyMs: Date.now() - startedMs,
+    });
+    return c.json({ ok: true, deduped: true });
+  }
+  await c.env.LINEAR_TOKENS.put(dedupeKey, "1", {
+    expirationTtl: WEBHOOK_DEDUPE_TTL_S,
+  });
+
+  if (event.action !== "created" && event.action !== "prompted") {
+    await events.update(logId, {
+      dispatchedAction: "ignored_envelope",
+      eventSummary: `AgentSessionEvent ${event.action} (ignored)`,
+      latencyMs: Date.now() - startedMs,
+    });
+    return c.json({ ok: true, ignored: true, action: event.action });
+  }
+
+  try {
+    await c.env.SESSION_RUNNER.create({
+      id: event.agentSession.id,
+      params: { mode: "agent_session", event },
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!/instance.*exists|already/i.test(msg)) {
+      console.error("workflow_create_failed", msg);
+      await events.update(logId, {
+        dispatchedAction: "error",
+        error: msg,
+        latencyMs: Date.now() - startedMs,
+      });
+      throw e;
+    }
+    console.log("workflow_already_exists", event.agentSession.id);
+  }
+
+  await events.update(logId, {
+    dispatchedAction: "start_session",
+    agentSessionId: event.agentSession.id,
+    eventSummary: `AgentSessionEvent ${event.action}`,
+    latencyMs: Date.now() - startedMs,
+  });
+  return c.json({ ok: true, scheduled: true });
+}
+
+async function handleIssueEnvelope(
+  c: { env: Env; json: (b: unknown, s?: number) => Response },
+  envelope: IssueWebhookEnvelope,
+  ctx: {
+    logId: string;
+    orgId: string | null;
+    envelopeAction: string | null;
+    startedMs: number;
+    events: WebhookEventStore;
+  },
+): Promise<Response> {
+  const { logId, orgId, envelopeAction, startedMs, events } = ctx;
+
+  if (!orgId) {
+    await events.update(logId, {
+      dispatchedAction: "no_match",
+      error: "no_install_for_linear_org",
+      latencyMs: Date.now() - startedMs,
+      eventSummary: "Issue: no install for org",
+    });
+    return c.json({ ok: true, ignored: true });
+  }
+
+  // Filter envelopes we don't process at all (e.g. `remove`). Both
+  // `create` and `update` go to the mapper — `create` fires
+  // state_entered when the new issue lands in a non-default state
+  // that matches a trigger's `to_state`. The mapper still returns
+  // null for non-state-changing updates (e.g. title edits).
+  if (envelopeAction !== "update" && envelopeAction !== "create") {
+    await events.update(logId, {
+      organizationId: orgId,
+      dispatchedAction: "ignored_envelope",
+      eventSummary: `Issue ${envelopeAction} (no handler)`,
+      latencyMs: Date.now() - startedMs,
+    });
+    return c.json({ ok: true, ignored: true });
+  }
+
+  const mapped = mapIssueUpdateToEvent(envelope, orgId);
+  if (!mapped) {
+    await events.update(logId, {
+      organizationId: orgId,
+      dispatchedAction: "ignored_envelope",
+      eventSummary:
+        envelopeAction === "create"
+          ? "Issue created without state"
+          : "Issue update without state transition",
+      latencyMs: Date.now() - startedMs,
+    });
+    return c.json({ ok: true, ignored: true });
+  }
+
+  // Dedupe a state transition on (webhookId, issueId, newStateId).
+  // Only reached when we know we've got a real state transition, so
+  // the key tracks "this transition has been dispatched."
+  const newStateId =
+    envelope.data?.stateId ?? envelope.data?.state?.id ?? "no-state";
+  const dedupeKey = `webhook:issue:${envelope.webhookId ?? "?"}:${envelope.data?.id ?? "?"}:${newStateId}`;
+  const seen = await c.env.LINEAR_TOKENS.get(dedupeKey);
+  if (seen) {
+    await events.update(logId, {
+      organizationId: orgId,
+      deduped: true,
+      dispatchedAction: "deduped",
+      latencyMs: Date.now() - startedMs,
+    });
+    return c.json({ ok: true, deduped: true });
+  }
+  await c.env.LINEAR_TOKENS.put(dedupeKey, "1", {
+    expirationTtl: WEBHOOK_DEDUPE_TTL_S,
+  });
+
+  // Lazy-seed the Engineering Default workflow on the org's first
+  // webhook delivery. Idempotent — skips when any workflow exists for
+  // the org. Errors are swallowed so a seed regression can't 500 a
+  // real delivery.
+  try {
+    await ensureDefaultWorkflow(c.env, orgId);
+  } catch (e) {
+    console.error(
+      "ensure_default_workflow_failed",
+      e instanceof Error ? `${e.name}: ${e.message}` : String(e),
+    );
+  }
+
+  const resolved = await resolveWorkflow(c.env, mapped.event);
+  if (!resolved) {
+    await events.update(logId, {
+      organizationId: orgId,
+      dispatchedAction: "no_match",
+      eventSummary: mapped.summary,
+      latencyMs: Date.now() - startedMs,
+    });
+    return c.json({ ok: true, matched: false });
+  }
+
+  const linearOrgId = envelope.organizationId ?? null;
+  if (!linearOrgId) {
+    await events.update(logId, {
+      organizationId: orgId,
+      dispatchedAction: "error",
+      error: "missing_linear_organization_id",
+      eventSummary: mapped.summary,
+      latencyMs: Date.now() - startedMs,
+    });
+    return c.json({ ok: true, error: "missing_linear_organization_id" });
+  }
+
+  const dispatched = await dispatchTrigger(c.env, {
+    workflow: resolved.workflow,
+    trigger: resolved.trigger,
+    event: mapped.event,
+    linearOrganizationId: linearOrgId,
+  });
+
+  await events.update(logId, {
+    organizationId: orgId,
+    matchedWorkflowId: resolved.workflow.id,
+    matchedTriggerId: resolved.trigger.id,
+    dispatchedAction: dispatched.outcome,
+    agentSessionId: dispatched.agentSessionId ?? null,
+    error: dispatched.error ?? null,
+    eventSummary: mapped.summary,
+    latencyMs: Date.now() - startedMs,
+  });
+
+  return c.json({
+    ok: true,
+    matched: true,
+    workflow_id: resolved.workflow.id,
+    trigger_id: resolved.trigger.id,
+    outcome: dispatched.outcome,
+    agent_session_id: dispatched.agentSessionId ?? null,
+  });
 }
 
 function isAgentSessionEvent(value: unknown): value is AgentSessionEventWebhook {
@@ -167,46 +375,9 @@ function isAgentSessionEvent(value: unknown): value is AgentSessionEventWebhook 
   return true;
 }
 
-/**
- * Run the SYM-295 router: normalize the payload, lazy-seed the
- * Engineering Default workflow for the org if no workflows exist, then
- * resolve + dispatch each EventTuple in order. Returns `true` if at
- * least one trigger matched and dispatch was attempted.
- *
- * Defensive: swallows errors so a regression in the new router never
- * 500s a Linear delivery. The legacy path still runs when this returns
- * false.
- */
-async function tryDispatchWorkflow(
-  env: Env,
-  body: LinearWebhookBody,
-): Promise<boolean> {
-  try {
-    const tuples = normalize(body);
-    if (!tuples || tuples.length === 0) return false;
-
-    const orgId = tuples[0]!.organization_id;
-    await ensureDefaultWorkflow(env, orgId);
-
-    let dispatchedAny = false;
-    for (const event of tuples) {
-      const match = await resolveWorkflow(env, event);
-      if (!match) continue;
-      await dispatchAction({
-        env,
-        workflow: match.workflow,
-        trigger: match.trigger,
-        event,
-      });
-      dispatchedAny = true;
-    }
-    return dispatchedAny;
-  } catch (e) {
-    console.error(
-      "workflow_router_failed",
-      e instanceof Error ? `${e.name}: ${e.message}` : String(e),
-    );
-    return false;
-  }
+function inferEnvelopeType(parsed: Record<string, unknown> | null): string {
+  if (!parsed) return "unknown";
+  const t = parsed.type;
+  if (typeof t === "string" && t.length > 0) return t;
+  return "unknown";
 }
-

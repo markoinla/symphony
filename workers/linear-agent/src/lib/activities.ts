@@ -37,24 +37,37 @@ const AGENT_ACTIVITY_CREATE_MUTATION = `
 
 /**
  * Build an ActivityClient that posts directly via fetch + GraphQL.
- * `accessToken` is the agent's `actor=app` install token from KV.
+ *
+ * `accessToken` is the agent's `actor=app` install token. Linear's
+ * tokens expire (typically ~24h); when the GraphQL endpoint returns
+ * 401 we transparently call `onTokenExpired()` to fetch a fresh
+ * token, then retry the request once. Mirrors the Elixir side's
+ * `Linear.AgentAPI.handle_unauthorized` → `Refresher.force_refresh`
+ * → retry pattern (`lib/symphony_elixir/linear/agent_api.ex:160`).
+ *
+ * Pass `onTokenExpired` to enable the reactive refresh path; callers
+ * without a refresh source (tests, one-shot smoke checks) can omit
+ * it and the client will throw on 401 like before.
  */
-export function buildActivityClient(accessToken: string): ActivityClient {
+export function buildActivityClient(
+  accessToken: string,
+  onTokenExpired?: () => Promise<string | null>,
+): ActivityClient {
+  let currentToken = accessToken;
   return {
     async createAgentActivity(input) {
-      const res = await fetch(LINEAR_GRAPHQL_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: accessToken.startsWith("Bearer ")
-            ? accessToken
-            : `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({
-          query: AGENT_ACTIVITY_CREATE_MUTATION,
-          variables: { input },
-        }),
+      const body = JSON.stringify({
+        query: AGENT_ACTIVITY_CREATE_MUTATION,
+        variables: { input },
       });
+      let res = await postWithToken(currentToken, body);
+      if (res.status === 401 && onTokenExpired) {
+        const refreshed = await onTokenExpired();
+        if (refreshed) {
+          currentToken = refreshed;
+          res = await postWithToken(currentToken, body);
+        }
+      }
       if (!res.ok) {
         throw new Error(
           `agentActivityCreate http ${res.status}: ${(await res.text()).slice(0, 500)}`,
@@ -72,6 +85,17 @@ export function buildActivityClient(accessToken: string): ActivityClient {
       return { success: json.data?.agentActivityCreate?.success ?? false };
     },
   };
+}
+
+async function postWithToken(token: string, body: string): Promise<Response> {
+  return fetch(LINEAR_GRAPHQL_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: token.startsWith("Bearer ") ? token : `Bearer ${token}`,
+    },
+    body,
+  });
 }
 
 export async function postThought(
@@ -134,6 +158,70 @@ export async function postElicitation(
     agentSessionId,
     content: { type: "elicitation", body },
   });
+}
+
+/**
+ * Mint a Linear AgentSession attached to an issue. Used by the
+ * trigger dispatch path (SYM-295) to create a Linear-side session
+ * when the workflow is initiated by a state transition rather than a
+ * user @-mention — so the agent's activities render in the issue's
+ * timeline the same way they do for mention-initiated runs.
+ *
+ * Mirrors `SymphonyElixir.Linear.AgentAPI.create_session_on_issue`
+ * (lib/symphony_elixir/linear/agent_api.ex:42-65). Linear's input
+ * type is `AgentSessionCreateOnIssue`; only `issueId` is required.
+ */
+const AGENT_SESSION_CREATE_ON_ISSUE_MUTATION = `
+  mutation SymphonyCreateAgentSession($input: AgentSessionCreateOnIssue!) {
+    agentSessionCreateOnIssue(input: $input) {
+      success
+      agentSession {
+        id
+      }
+    }
+  }
+`;
+
+export async function createAgentSessionOnIssue(
+  accessToken: string,
+  issueId: string,
+): Promise<{ success: boolean; sessionId: string | null }> {
+  const res = await fetch(LINEAR_GRAPHQL_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: accessToken.startsWith("Bearer ")
+        ? accessToken
+        : `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      query: AGENT_SESSION_CREATE_ON_ISSUE_MUTATION,
+      variables: { input: { issueId } },
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `agentSessionCreateOnIssue http ${res.status}: ${(await res.text()).slice(0, 500)}`,
+    );
+  }
+  const json = (await res.json()) as {
+    data?: {
+      agentSessionCreateOnIssue?: {
+        success?: boolean;
+        agentSession?: { id?: string };
+      };
+    };
+    errors?: Array<{ message: string }>;
+  };
+  if (json.errors && json.errors.length > 0) {
+    throw new Error(
+      `agentSessionCreateOnIssue graphql: ${json.errors.map((e) => e.message).join("; ")}`,
+    );
+  }
+  return {
+    success: json.data?.agentSessionCreateOnIssue?.success ?? false,
+    sessionId: json.data?.agentSessionCreateOnIssue?.agentSession?.id ?? null,
+  };
 }
 
 /**

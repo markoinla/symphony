@@ -192,6 +192,44 @@ export function buildAdminRouter() {
     });
   });
 
+  /**
+   * Manually tear down a per-issue sandbox. Operator escape hatch
+   * for zombie sandboxes — used when SessionRunner's auto-cleanup
+   * couldn't fire (e.g., the worker was deployed before the cleanup
+   * step existed, or the workflow died in a way that bypassed the
+   * finally). Signs `/run/stop` against the dispatcher.
+   *
+   * Body: { "issue_id": "SYM-305" }
+   */
+  app.post("/admin/sandbox/stop", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as
+      | { issue_id?: unknown }
+      | null;
+    const issueId =
+      body && typeof body.issue_id === "string" && body.issue_id.length > 0
+        ? body.issue_id
+        : null;
+    if (!issueId) {
+      return c.json({ error: "invalid_issue_id" }, 400);
+    }
+    const dispatcher = new DispatcherClient(
+      c.env.DISPATCHER_URL,
+      c.env.DISPATCH_HMAC_SECRET,
+    );
+    try {
+      await dispatcher.stop(issueId);
+    } catch (e) {
+      const message =
+        e instanceof DispatcherError
+          ? `dispatcher_${e.status}: ${typeof e.body === "string" ? e.body : e.body.error}`
+          : e instanceof Error
+            ? e.message
+            : "unknown_error";
+      return c.json({ ok: false, error: message }, 502);
+    }
+    return c.json({ ok: true, issue_id: issueId });
+  });
+
   return app;
 }
 

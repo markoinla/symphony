@@ -165,6 +165,43 @@ export class DispatcherClient {
    * was emitted. In-band failures during the run arrive as `error`
    * events followed by a non-zero `result` and are NOT thrown.
    */
+  /**
+   * Tear down the per-issue sandbox without dispatching a new run.
+   * Hits the dispatcher's `/run/stop` endpoint which calls
+   * `safeDestroy` on the Sandbox DO. Idempotent — destroying a
+   * sandbox that doesn't exist returns 200 ok.
+   *
+   * Called from SessionRunner's outer try/finally so an aborted /
+   * errored / timed-out workflow run can't leave a zombie sandbox
+   * burning CPU. Without this, a hung pi process keeps the dispatcher
+   * IIFE's `for await` blocked, the IIFE never reaches its `finally`,
+   * and the sandbox lives until the in-container 30-min exec timeout
+   * elapses.
+   */
+  async stop(issueId: string): Promise<void> {
+    const body = JSON.stringify({ issue_id: issueId });
+    const sig = await computeSignature(this.secret, body);
+    const fetchFn = this.fetchImpl;
+    const res = await fetchFn(`${stripTrailingSlash(this.url)}/run/stop`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Symphony-Signature": sig,
+      },
+      body,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      let parsed: DispatcherErrorBody | string;
+      try {
+        parsed = JSON.parse(text) as DispatcherErrorBody;
+      } catch {
+        parsed = text;
+      }
+      throw new DispatcherError(res.status, parsed);
+    }
+  }
+
   async *runStream(args: RunArgs): AsyncIterable<NormalizedEvent> {
     const body = JSON.stringify(serializeRunArgs(args));
 

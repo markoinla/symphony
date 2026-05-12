@@ -321,13 +321,13 @@ describe("SessionRunner.run — happy path", () => {
       "load-token",
       "post-initial-thought",
       "resolve-inputs",
-      "transition-to-in-progress",
       "mint-github-token",
       "record-session-start",
       "resolve-linear-mcp-token-1",
       "turn-1",
       "post-terminal-activity",
       "record-session-end",
+      "stop-sandbox",
     ]);
     expect(linearCalls.map((c) => c.content.type)).toEqual([
       "thought",
@@ -403,7 +403,9 @@ describe("SessionRunner.run — abort branches", () => {
 
     const result = await runner.run(makeEvent(event), step as never);
     expect(result).toEqual({ status: "no_token" });
-    expect(ran).toEqual(["load-token"]);
+    // `stop-sandbox` always runs from the outer try/finally even on
+    // early-return paths.
+    expect(ran).toEqual(["load-token", "stop-sandbox"]);
     expect(linearCalls).toHaveLength(0);
   });
 
@@ -443,6 +445,7 @@ describe("SessionRunner.run — abort branches", () => {
       "post-initial-thought",
       "resolve-inputs",
       "post-no-repo-error",
+      "stop-sandbox",
     ]);
     expect(linearCalls.map((c) => c.content.type)).toEqual([
       "thought",
@@ -473,6 +476,7 @@ describe("SessionRunner.run — abort branches", () => {
       "post-initial-thought",
       "resolve-inputs",
       "post-no-prompt-error",
+      "stop-sandbox",
     ]);
     expect(linearCalls.map((c) => c.content.type)).toEqual([
       "thought",
@@ -517,13 +521,13 @@ describe("SessionRunner.run — dispatch failures", () => {
       "load-token",
       "post-initial-thought",
       "resolve-inputs",
-      "transition-to-in-progress",
       "mint-github-token",
       "record-session-start",
       "resolve-linear-mcp-token-1",
       "turn-1",
       "post-terminal-activity",
       "record-session-end",
+      "stop-sandbox",
     ]);
     expect(linearCalls.map((c) => c.content.type)).toEqual([
       "thought",
@@ -619,207 +623,6 @@ describe("SessionRunner.run — dispatch failures", () => {
   });
 });
 
-describe("SessionRunner.run — PR creation (item 4)", () => {
-  it("creates a PR, adds the symphony label, attaches it to Linear, and appends the URL to the response", async () => {
-    const kv = new FakeKV();
-    const db = seededDb();
-
-    const githubCalls: Array<{ url: string; body?: string }> = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = typeof input === "string" ? input : (input as Request).url;
-      const body = init?.body as string | undefined;
-
-      if (url === "https://api.linear.app/graphql") {
-        if (body) {
-          const parsed = JSON.parse(body) as {
-            query?: string;
-            variables?: {
-              input?: {
-                agentSessionId?: string;
-                issueId?: string;
-                url?: string;
-                title?: string;
-                content?: { type: string; body?: string };
-              };
-            };
-          };
-          const input = parsed.variables?.input;
-          if (parsed.query?.includes("agentActivityCreate") && input) {
-            linearCalls.push({
-              agentSessionId: input.agentSessionId ?? "",
-              content: input.content ?? { type: "" },
-            });
-            return new Response(
-              JSON.stringify({
-                data: { agentActivityCreate: { success: true } },
-              }),
-              { status: 200 },
-            );
-          }
-          if (parsed.query?.includes("attachmentCreate") && input) {
-            githubCalls.push({ url: "linear-attachment", body });
-            return new Response(
-              JSON.stringify({
-                data: {
-                  attachmentCreate: {
-                    success: true,
-                    attachment: { id: "att-1", url: input.url },
-                  },
-                },
-              }),
-              { status: 200 },
-            );
-          }
-        }
-        return new Response("{}", { status: 200 });
-      }
-
-      if (url.endsWith("/run")) {
-        return new Response(
-          buildSseBodyStream([
-            { type: "assistant_msg", text: "Fixed the bug." },
-            { type: "turn_end", turn: 1, reason: "completed" },
-            {
-              type: "result",
-              exit_code: 0,
-              duration_ms: 5000,
-              branch: "linear/sym-1",
-              pr_url: null,
-            },
-          ]),
-          { status: 200, headers: { "Content-Type": "text/event-stream" } },
-        );
-      }
-
-      if (url.startsWith("https://api.github.com")) {
-        githubCalls.push({ url, body: body ?? undefined });
-        if (url.endsWith("/pulls")) {
-          return new Response(
-            JSON.stringify({
-              html_url: "https://github.com/markoinla/symphony/pull/99",
-              number: 99,
-            }),
-            { status: 201 },
-          );
-        }
-        if (url.endsWith("/labels")) {
-          return new Response("[]", { status: 200 });
-        }
-      }
-
-      throw new Error(`unexpected fetch in test: ${url}`);
-    });
-
-    const env = makeEnv(kv, { GITHUB_TOKEN: "ghp_test" }, db);
-    const runner = buildRunner(env);
-    const { step, ran } = makeStep();
-
-    const event: AgentSessionEventWebhook = {
-      type: "AgentSessionEvent",
-      organizationId: LINEAR_ORG_ID,
-      action: "created",
-      webhookId: "wh-pr",
-      agentSession: baseSession,
-      promptContext: baseSession.promptContext,
-    };
-
-    const result = await runner.run(makeEvent(event), step as never);
-
-    expect(result.status).toBe("ok");
-    expect(result.pr_url).toBe("https://github.com/markoinla/symphony/pull/99");
-    expect(ran).toContain("create-pr-and-attach");
-
-    // Three github calls expected: PR create, label add, plus the
-    // Linear attachment mutation (logged as "linear-attachment").
-    const prCall = githubCalls.find((c) => c.url.endsWith("/pulls"));
-    const labelCall = githubCalls.find((c) => c.url.endsWith("/labels"));
-    const attachCall = githubCalls.find((c) => c.url === "linear-attachment");
-    expect(prCall).toBeDefined();
-    expect(labelCall).toBeDefined();
-    expect(attachCall).toBeDefined();
-    const labelBody = JSON.parse(labelCall?.body ?? "{}");
-    expect(labelBody.labels).toEqual(["symphony"]);
-
-    // Response activity should include the PR URL in its body.
-    const responseCall = linearCalls.find(
-      (c) => c.content.type === "response",
-    );
-    expect(responseCall?.content.body).toContain(
-      "https://github.com/markoinla/symphony/pull/99",
-    );
-  });
-
-  it("skips PR creation when GITHUB_TOKEN is unset", async () => {
-    const kv = new FakeKV();
-    const db = seededDb();
-    installFetchMock({
-      dispatcherEvents: [
-        { type: "assistant_msg", text: "Done." },
-        { type: "turn_end", turn: 1, reason: "completed" },
-        {
-          type: "result",
-          exit_code: 0,
-          duration_ms: 5000,
-          branch: "linear/sym-1",
-          pr_url: null,
-        },
-      ],
-    });
-
-    const env = makeEnv(kv, {}, db);
-    delete (env as Partial<Env>).GITHUB_TOKEN;
-    const runner = buildRunner(env);
-    const { step, ran } = makeStep();
-
-    const event: AgentSessionEventWebhook = {
-      type: "AgentSessionEvent",
-      organizationId: LINEAR_ORG_ID,
-      action: "created",
-      webhookId: "wh-no-token",
-      agentSession: baseSession,
-      promptContext: baseSession.promptContext,
-    };
-
-    const result = await runner.run(makeEvent(event), step as never);
-    expect(result.pr_url).toBeNull();
-    expect(ran).not.toContain("create-pr-and-attach");
-  });
-
-  it("skips PR creation when result has no branch (no changes)", async () => {
-    const kv = new FakeKV();
-    const db = seededDb();
-    installFetchMock({
-      dispatcherEvents: [
-        { type: "assistant_msg", text: "Nothing to change." },
-        { type: "turn_end", turn: 1, reason: "completed" },
-        {
-          type: "result",
-          exit_code: 0,
-          duration_ms: 5000,
-          branch: null,
-          pr_url: null,
-        },
-      ],
-    });
-
-    const env = makeEnv(kv, { GITHUB_TOKEN: "ghp_test" }, db);
-    const runner = buildRunner(env);
-    const { step, ran } = makeStep();
-
-    const event: AgentSessionEventWebhook = {
-      type: "AgentSessionEvent",
-      organizationId: LINEAR_ORG_ID,
-      action: "created",
-      webhookId: "wh-no-branch",
-      agentSession: baseSession,
-      promptContext: baseSession.promptContext,
-    };
-
-    const result = await runner.run(makeEvent(event), step as never);
-    expect(result.pr_url).toBeNull();
-    expect(ran).not.toContain("create-pr-and-attach");
-  });
-});
 
 describe("SessionRunner.run — multi-turn loop", () => {
   it("re-dispatches when a turn ends with needs_continuation", async () => {

@@ -264,9 +264,16 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
   // Run the dispatch in the background; the response Response object
   // returns the readable end of the pipe immediately so SSE headers
   // flush before the engine even starts.
+  //
+  // Every code path inside the IIFE must reach `emitTerminal` so the
+  // SSE stream closes with a `result` frame. The first await (baseline
+  // lookup) is inside the try/catch on purpose: a failure here used to
+  // orphan the writable side of the TransformStream and let the
+  // Workers runtime kill the request after a hang-detection timeout,
+  // surfacing on the caller as `stream_closed_without_result_frame`.
   void (async () => {
-    const record = await new BaselineStore(env.DB).get(parsed.engine);
     try {
+      const record = await new BaselineStore(env.DB).get(parsed.engine);
       if (!record) {
         await emitTerminal(75 /* EX_TEMPFAIL */, {
           message: `missing_baseline: ${parsed.engine}`,

@@ -20,6 +20,10 @@ import { requireAuth } from "../lib/auth/context";
 import { resolveWorkflow } from "../lib/workflows/resolver";
 import { renderPrompt } from "../lib/workflows/render";
 import {
+  WebhookEventStore,
+  type WebhookEventRecord,
+} from "../lib/store";
+import {
   TriggerCreateSchema,
   TriggerUpdateSchema,
 } from "../schemas/trigger";
@@ -181,6 +185,46 @@ function serializeTrigger(row: TriggerRow): Record<string, unknown> {
 const PreviewRequestSchema = z.object({
   issue_id: z.string().min(1),
 });
+
+const WEBHOOK_BODY_LIST_LIMIT = 8 * 1024;
+
+function parseIntOr(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function serializeWebhookEvent(
+  row: WebhookEventRecord,
+  truncate: boolean,
+): Record<string, unknown> {
+  const body =
+    truncate && row.raw_body && row.raw_body.length > WEBHOOK_BODY_LIST_LIMIT
+      ? row.raw_body.slice(0, WEBHOOK_BODY_LIST_LIMIT) + "…"
+      : row.raw_body;
+  return {
+    id: row.id,
+    received_at: row.received_at,
+    organization_id: row.organization_id,
+    webhook_id: row.webhook_id,
+    envelope_type: row.envelope_type,
+    envelope_action: row.envelope_action,
+    signature_ok: row.signature_ok === 1,
+    deduped: row.deduped === 1,
+    matched_workflow_id: row.matched_workflow_id,
+    matched_trigger_id: row.matched_trigger_id,
+    dispatched_action: row.dispatched_action,
+    agent_session_id: row.agent_session_id,
+    error: row.error,
+    latency_ms: row.latency_ms,
+    event_summary: row.event_summary,
+    raw_body: body,
+    raw_body_truncated:
+      truncate &&
+      !!row.raw_body &&
+      row.raw_body.length > WEBHOOK_BODY_LIST_LIMIT,
+  };
+}
 
 // ────────────────────────────────────────────────────────────────────
 // Router
@@ -670,6 +714,35 @@ export function buildApiV1Router() {
       .bind(existing.id)
       .run();
     return c.json({ ok: true });
+  });
+
+  // ── Webhook events — read-only tail for the dashboard ───────────
+
+  app.get("/api/v1/webhooks", async (c) => {
+    const auth = c.get("auth");
+    const limit = Math.min(parseIntOr(c.req.query("limit"), 50), 200);
+    const envelope = c.req.query("envelope") || undefined;
+    const dispatchedAction = c.req.query("dispatched_action") || undefined;
+
+    const events = await new WebhookEventStore(c.env.DB).list({
+      organizationId: auth.orgId,
+      limit,
+      envelope,
+      dispatched_action: dispatchedAction,
+    });
+    return c.json({
+      webhooks: events.map((e) => serializeWebhookEvent(e, /* truncate */ true)),
+    });
+  });
+
+  app.get("/api/v1/webhooks/:id", async (c) => {
+    const auth = c.get("auth");
+    const row = await new WebhookEventStore(c.env.DB).get(
+      c.req.param("id"),
+      auth.orgId,
+    );
+    if (!row) return c.json({ error: "not_found" }, 404);
+    return c.json({ webhook: serializeWebhookEvent(row, /* truncate */ false) });
   });
 
   return app;

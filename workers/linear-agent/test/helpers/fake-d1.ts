@@ -72,6 +72,25 @@ export interface GitHubInstallRow {
   updated_at: number;
 }
 
+export interface WebhookEventRow {
+  id: string;
+  received_at: number;
+  organization_id: string | null;
+  webhook_id: string | null;
+  envelope_type: string;
+  envelope_action: string | null;
+  signature_ok: number;
+  deduped: number;
+  matched_workflow_id: string | null;
+  matched_trigger_id: string | null;
+  dispatched_action: string;
+  agent_session_id: string | null;
+  error: string | null;
+  latency_ms: number;
+  event_summary: string | null;
+  raw_body: string | null;
+}
+
 export interface AgentSessionRow {
   id: string;
   organization_id: string;
@@ -102,6 +121,7 @@ export class FakeD1 {
   orgCredentials = new Map<string, OrgCredentialRow>();
   githubInstalls = new Map<string, GitHubInstallRow>();
   agentSessions = new Map<string, AgentSessionRow>();
+  webhookEvents = new Map<string, WebhookEventRow>();
 
   prepare(sql: string) {
     return new FakeStatement(this, sql);
@@ -408,6 +428,68 @@ class FakeStatement {
       });
       return { success: true, meta: { changes: 1 } };
     }
+    // ── webhook_events ──────────────────────────────────────────
+    if (/^INSERT INTO webhook_events/i.test(sql)) {
+      const [
+        id,
+        receivedAt,
+        organizationId,
+        webhookId,
+        envelopeType,
+        envelopeAction,
+        signatureOk,
+        eventSummary,
+        rawBody,
+      ] = this.bindings as [
+        string,
+        number,
+        string | null,
+        string | null,
+        string,
+        string | null,
+        number,
+        string | null,
+        string | null,
+      ];
+      this.db.webhookEvents.set(id, {
+        id,
+        received_at: receivedAt,
+        organization_id: organizationId,
+        webhook_id: webhookId,
+        envelope_type: envelopeType,
+        envelope_action: envelopeAction,
+        signature_ok: signatureOk,
+        deduped: 0,
+        matched_workflow_id: null,
+        matched_trigger_id: null,
+        dispatched_action: "pending",
+        agent_session_id: null,
+        error: null,
+        latency_ms: 0,
+        event_summary: eventSummary,
+        raw_body: rawBody,
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (/^UPDATE webhook_events SET/i.test(sql)) {
+      const values = this.bindings.slice();
+      const id = values.pop() as string;
+      const row = this.db.webhookEvents.get(id);
+      if (!row) return { success: true, meta: { changes: 0 } };
+      const setClause = sql
+        .replace(/^UPDATE webhook_events SET\s*/i, "")
+        .replace(/\s*WHERE.*$/i, "");
+      const assignments = setClause.split(",").map((c) => c.trim());
+      for (const assign of assignments) {
+        const [colRaw] = assign.split("=");
+        const col = colRaw?.trim();
+        const value = values.shift();
+        if (!col) continue;
+        applyWebhookEventColumn(row, col, value);
+      }
+      return { success: true, meta: { changes: 1 } };
+    }
+
     if (/^UPDATE agent_sessions SET/i.test(sql)) {
       const values = this.bindings.slice();
       const id = values.pop() as string;
@@ -599,6 +681,42 @@ function applyProjectColumn(row: ProjectRow, col: string, value: unknown): void 
       break;
     case "updated_at":
       row.updated_at = value as number;
+      break;
+  }
+}
+
+function applyWebhookEventColumn(
+  row: WebhookEventRow,
+  col: string,
+  value: unknown,
+): void {
+  switch (col) {
+    case "organization_id":
+      row.organization_id = (value ?? null) as string | null;
+      break;
+    case "deduped":
+      row.deduped = value as number;
+      break;
+    case "matched_workflow_id":
+      row.matched_workflow_id = (value ?? null) as string | null;
+      break;
+    case "matched_trigger_id":
+      row.matched_trigger_id = (value ?? null) as string | null;
+      break;
+    case "dispatched_action":
+      row.dispatched_action = value as string;
+      break;
+    case "agent_session_id":
+      row.agent_session_id = (value ?? null) as string | null;
+      break;
+    case "error":
+      row.error = (value ?? null) as string | null;
+      break;
+    case "latency_ms":
+      row.latency_ms = value as number;
+      break;
+    case "event_summary":
+      row.event_summary = (value ?? null) as string | null;
       break;
   }
 }

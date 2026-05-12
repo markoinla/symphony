@@ -172,7 +172,7 @@ describe("POST /webhook routing", () => {
     expect(sessionRunner.create).toHaveBeenCalledTimes(1);
     expect(sessionRunner.create).toHaveBeenCalledWith({
       id: "session-1",
-      params: { event },
+      params: { mode: "agent_session", event },
     });
 
     const res2 = await app.fetch(await signedWebhookRequest(event), env, makeExecCtx());

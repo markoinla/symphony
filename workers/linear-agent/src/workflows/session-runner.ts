@@ -28,14 +28,12 @@ import type { WorkflowEvent } from "cloudflare:workers";
 import type { Env } from "../index";
 import {
   buildActivityClient,
-  createAttachment,
   postError,
   postResponse,
   postThought,
 } from "../lib/activities";
-import { GitHubError, addLabels, createPr } from "../lib/github";
 import { mintInstallationToken } from "../lib/github-app";
-import { transitionIssue } from "../lib/issues";
+import { refreshInstallToken } from "../lib/install-token";
 import {
   DispatcherClient,
   DispatcherError,
@@ -45,7 +43,6 @@ import {
 import { lastAssistantText, mapToActivity } from "../lib/event-mapper";
 import { resolveLinearMcpToken } from "../lib/linear-token";
 import { resolvePrompt, truncate } from "../lib/session-helpers";
-import { renderPrompt } from "../lib/workflows/render";
 import {
   AgentSessionStore,
   GitHubInstallStore,
@@ -53,49 +50,53 @@ import {
   ProjectStore,
 } from "../lib/store";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
+import type { EventTuple } from "../schemas/event";
+import type { Trigger } from "../schemas/trigger";
+import type { Workflow } from "../schemas/workflow";
 
-export interface SessionRunnerParams {
-  event: AgentSessionEventWebhook;
-  // SYM-295 (track 3): when set, the runner uses this config instead
-  // of the per-project D1 columns. Populated by `dispatchAction` when
-  // a `start_session` trigger fires. Legacy AgentSessionEvent path
-  // leaves this undefined so behavior is unchanged.
-  workflowConfig?: WorkflowConfigSubset;
-}
+export type SessionRunnerParams =
+  | {
+      // @-mention / Linear AgentSessionEvent webhook flow.
+      // The runner posts thoughts/responses/errors back into Linear's
+      // session timeline. `mode` is optional for backwards compat with
+      // any in-flight instances queued without it.
+      //
+      // SYM-295 trigger-initiated runs also queue this mode: the
+      // dispatcher mints a Linear AgentSession first and synthesizes
+      // the webhook envelope so the run appears in Linear's timeline
+      // identically to a real @-mention.
+      mode?: "agent_session";
+      event: AgentSessionEventWebhook;
+    }
+  | {
+      // Headless trigger flow — no Linear-side AgentSession exists,
+      // the runner just drives the dispatcher and writes results to
+      // `agent_sessions`. Currently unused at the call site (the
+      // SYM-295 trigger flow uses `agent_session` mode above with a
+      // synthetic webhook). Kept on the type for future headless
+      // workflows (e.g. cron-fired runs).
+      mode: "trigger";
+      sessionId: string;
+      organizationId: string;
+      workflow: Workflow;
+      trigger: Trigger;
+      event: EventTuple;
+      repoUrl: string;
+      prompt: string;
+      engine: string;
+      model: string | null;
+      maxTurns: number;
+      scope: string;
+      issueIdentifier: string;
+    };
 
-/**
- * Workflow config slice the runner consumes. Mirrors the WORKFLOW.md
- * front matter Symphony already has; expanded as we wire more knobs.
- *
- * Kept in this module so `dispatch.ts` (which builds it) and tests
- * can import it without pulling in the whole Drizzle entity.
- */
-export interface WorkflowConfigSubset {
-  id: string;
-  engine: string;
-  model: string | null;
-  max_turns: number | null;
-  max_continuations: number | null;
-  prompt_template: string | null;
-  allowed_tools: string[] | null;
-  disallowed_tools: string[] | null;
-  permission_mode: string | null;
-  allowed_domains: string[] | null;
-  additional_read_paths: string[] | null;
-  additional_write_paths: string[] | null;
-  hook_after_create: string | null;
-  hook_before_remove: string | null;
-  hook_timeout_ms: number | null;
-  mcp_servers:
-    | Array<{
-        name: string;
-        url?: string;
-        command?: string;
-        args?: string[];
-        env?: Record<string, string>;
-      }>
-    | null;
-}
+// TODO(sym-295-followup): per-workflow engine/model/maxTurns overrides.
+// Track 3 on main had a `WorkflowConfigSubset` on this params type
+// (populated by `dispatchAction`) so trigger runs could deviate from
+// the project row's columns. The option-3 dispatch path
+// (`dispatch-trigger.ts`) renders the prompt here but otherwise lets
+// the project row decide engine/model. Re-introduce a structured
+// override block when we need per-workflow knobs again.
 
 type ResolvedInputs =
   | {
@@ -153,9 +154,76 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     turns?: number;
     pr_url?: string | null;
   }> {
-    const webhookEvent = event.payload.event;
+    const params = event.payload;
+    if (params.mode === "trigger") {
+      return await this.runTriggerMode(params, step);
+    }
+    const webhookEvent = params.event;
     const sessionId = webhookEvent.agentSession.id;
 
+    // Issue identifier is also the sandbox slug key on the dispatcher
+    // side (`runSandboxId(issueId)`). Captured upfront so the cleanup
+    // step in `finally` can always tear down the per-issue sandbox,
+    // even if a step further down throws before `issueIdentifier`
+    // would have been bound below.
+    const cleanupIssueId =
+      webhookEvent.agentSession.issue?.identifier ?? sessionId;
+
+    try {
+      return await this.runAgentSessionMode(webhookEvent, sessionId, step);
+    } finally {
+      await this.stopSandboxQuiet(step, cleanupIssueId);
+    }
+  }
+
+  /**
+   * Best-effort sandbox teardown. Wrapped in a step so the call is
+   * recorded in the workflow timeline (handy when debugging zombie
+   * sandboxes) and swallows all errors — never fail a finally.
+   */
+  private async stopSandboxQuiet(
+    step: WorkflowStep,
+    issueId: string,
+  ): Promise<void> {
+    try {
+      await step.do("stop-sandbox", async () => {
+        const dispatcher = new DispatcherClient(
+          this.env.DISPATCHER_URL,
+          this.env.DISPATCH_HMAC_SECRET,
+        );
+        try {
+          await dispatcher.stop(issueId);
+        } catch (e) {
+          console.error(
+            "stop_sandbox_failed",
+            JSON.stringify({
+              issue_id: issueId,
+              error: e instanceof Error ? e.message : String(e),
+            }),
+          );
+        }
+      });
+    } catch (e) {
+      // step.do itself can throw (Workflows internal error / eviction).
+      // Don't escalate — the finally must never mask the original
+      // error and must never replace a clean return with a throw.
+      console.error(
+        "stop_sandbox_step_failed",
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
+
+  private async runAgentSessionMode(
+    webhookEvent: AgentSessionEventWebhook,
+    sessionId: string,
+    step: WorkflowStep,
+  ): Promise<{
+    status: string;
+    exit_code?: number | null;
+    turns?: number;
+    pr_url?: string | null;
+  }> {
     const installInfo = await step.do("load-token", async () => {
       const linearOrgId = webhookEvent.organizationId;
       if (!linearOrgId) return null;
@@ -164,11 +232,21 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       const install = await installs.getByLinearOrgId(linearOrgId);
       if (!install) return null;
 
+      // Proactively refresh the install access_token. Linear's tokens
+      // expire (typically within a day) and we have no `expires_at`
+      // tracking on the install row, so a stale token would otherwise
+      // 401 inside `post-initial-thought` and silently retry forever.
+      const refreshed = await refreshInstallToken(
+        this.env,
+        install.organization_id,
+      );
+      const accessToken = refreshed?.accessToken ?? install.access_token;
+
       const github = await new GitHubInstallStore(this.env.DB).getByOrgId(
         install.organization_id,
       );
       return {
-        token: install.access_token,
+        token: accessToken,
         organizationId: install.organization_id,
         githubAppInstallationId: github?.install_id ?? null,
       };
@@ -195,8 +273,6 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       );
     });
 
-    const workflowConfig = event.payload.workflowConfig ?? null;
-
     const resolved: ResolvedInputs = await step.do(
       "resolve-inputs",
       async () => {
@@ -210,53 +286,28 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           ? await projects.getByTeamId(organizationId, teamId)
           : null;
 
-        // Repo always comes from the project row — workflows don't own
-        // repo configuration today. If a workflow run is dispatched
-        // for a team that has no project, we still error out the same
-        // way.
+        // Repo always comes from the project row. Workflow-trigger-
+        // initiated runs reach this same code path (their synthetic
+        // webhook carries the rendered prompt inside `promptContext`),
+        // so the team's project row must exist.
         const repoUrl = projectRow?.repo_url ?? null;
         if (!repoUrl) return { kind: "no_repo" } as const;
 
-        // Prompt: when a workflow config carries a template, render it
-        // through Liquid against the issue payload; otherwise fall
-        // back to the legacy `resolvePrompt(webhookEvent)` path.
-        let prompt: string | null;
-        if (workflowConfig?.prompt_template) {
-          const issue = webhookEvent.agentSession.issue;
-          prompt = await renderPrompt(workflowConfig.prompt_template, {
-            issue: {
-              id: issue?.id ?? "",
-              identifier: issue?.identifier ?? null,
-              title: issue?.title ?? null,
-              team_id: issue?.teamId ?? issue?.team?.id ?? null,
-              labels: [],
-              comments: [],
-            },
-            attempt: 1,
-            prompt_context:
-              webhookEvent.agentSession.promptContext ??
-              webhookEvent.promptContext ??
-              "",
-            new_comments: webhookEvent.previousComments ?? [],
-          });
-        } else {
-          prompt = resolvePrompt(webhookEvent);
-        }
+        // `resolvePrompt` reads `agentSession.promptContext` /
+        // `event.promptContext` / comment body / issue description in
+        // priority order. For trigger-initiated runs the dispatcher
+        // pre-renders the workflow's Liquid template and stuffs it
+        // into `promptContext`, so this picks it up verbatim.
+        const prompt = resolvePrompt(webhookEvent);
         if (!prompt) return { kind: "no_prompt" } as const;
 
-        const engine =
-          (workflowConfig?.engine ??
-            projectRow?.engine ??
-            this.env.DEFAULT_ENGINE ??
-            "pi") as "pi" | string;
+        const engine = (projectRow?.engine ?? this.env.DEFAULT_ENGINE ?? "pi") as
+          | "pi"
+          | string;
         const model =
-          workflowConfig?.model ??
-          projectRow?.model ??
-          (this.env.DEFAULT_MODEL || null);
+          projectRow?.model ?? (this.env.DEFAULT_MODEL || null);
         const maxTurns =
-          workflowConfig?.max_turns ??
-          projectRow?.max_turns ??
-          parseMaxTurns(this.env.DEFAULT_MAX_TURNS);
+          projectRow?.max_turns ?? parseMaxTurns(this.env.DEFAULT_MAX_TURNS);
         const scope =
           projectRow?.scope ?? this.env.DEFAULT_SCOPE ?? "default";
 
@@ -298,26 +349,6 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       webhookEvent.agentSession.issue?.identifier ?? sessionId;
     const issueGraphqlId = webhookEvent.agentSession.issue?.id ?? null;
     const maxTurns = resolved.maxTurns;
-
-    // Item 5: move the issue to "In Progress" on `created` deliveries
-    // when it's currently in "Todo". No-op on `prompted` events
-    // (already in flight) and on issues that aren't in Todo (Rework,
-    // In Progress, Human Review, etc. all stay where they are).
-    if (
-      webhookEvent.action === "created" &&
-      issueGraphqlId
-    ) {
-      await step.do("transition-to-in-progress", async () => {
-        try {
-          await transitionIssue(token, issueGraphqlId, "In Progress");
-        } catch (e) {
-          console.error(
-            "transition_in_progress_failed",
-            e instanceof Error ? e.message : String(e),
-          );
-        }
-      });
-    }
 
     // SYM-269: mint a per-org GitHub installation token if the org has
     // installed the Symphony GitHub App. Falls back to env.GITHUB_TOKEN.
@@ -389,6 +420,16 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
 
       // Resolve a fresh Linear OAuth token before each /run so
       // multi-turn sessions never dispatch with an expired credential.
+      //
+      // Preference order:
+      //   1. Per-user Linear OAuth from `accounts` (acts as that human).
+      //   2. The install's app-scoped access_token (acts as the
+      //      Symphony Linear Agent install). Required for trigger-
+      //      initiated runs where no human user is associated and for
+      //      orgs that haven't completed the per-user link flow yet —
+      //      otherwise pi launches with no Linear MCP at all and the
+      //      "use Linear MCP to post the workpad" instruction in the
+      //      prompt is a dead letter.
       const linearMcpCredentials: RunCredentials | null = await step.do(
         `resolve-linear-mcp-token-${turn}`,
         async () => {
@@ -399,13 +440,14 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
               webhookEvent.agentSession.comment?.userId ?? null,
             runTimeoutMs: DEFAULT_TIMEOUT_MS,
           });
-          if (!result) return null;
+          const mcpToken = result?.accessToken ?? token;
+          if (!mcpToken) return null;
           return {
             mcp_servers: [
               {
                 name: "linear",
                 url: "https://mcp.linear.app/sse",
-                token: result.accessToken,
+                token: mcpToken,
               },
             ],
           } as RunCredentials;
@@ -471,109 +513,6 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       };
     }
 
-    // Item 4: if the dispatch produced a branch AND the engine exited
-    // cleanly, create the GitHub PR and attach it to the Linear issue.
-    // Wrapped in its own step so the PR creation is checkpointed
-    // independently from the terminal activity post — a workflow
-    // restart after PR creation but before the Linear post won't make
-    // a duplicate PR (GitHub's 422 fallback uses the existing one),
-    // and a restart between the two ensures the attachment still
-    // lands.
-    let prUrl: string | null = null;
-    if (
-      terminal.kind === "done" &&
-      terminal.result.exit_code === 0 &&
-      terminal.result.branch &&
-      githubToken
-    ) {
-      const branch = terminal.result.branch;
-      const prGithubToken = githubToken;
-      const issueIdent = issueIdentifier;
-      const responseBody = lastAssistant ?? `Symphony agent run for ${issueIdent}`;
-
-      prUrl = (await step.do(
-        "create-pr-and-attach",
-        { retries: { limit: 2, delay: "5 seconds", backoff: "exponential" } },
-        async () => {
-          try {
-            const pr = await createPr({
-              repoUrl: resolved.repoUrl,
-              branch,
-              baseBranch: "main",
-              title: `Symphony: ${issueIdent}`,
-              body:
-                responseBody.slice(0, 4000) +
-                (issueGraphqlId ? `\n\n_Linear: \`${issueIdent}\`_` : ""),
-              token: prGithubToken,
-            });
-            try {
-              await addLabels({
-                repoUrl: resolved.repoUrl,
-                prNumber: pr.number,
-                labels: ["symphony"],
-                token: prGithubToken,
-              });
-            } catch (e) {
-              // Label failure is non-fatal — the PR still exists.
-              console.error(
-                "label_add_failed",
-                e instanceof Error ? e.message : String(e),
-              );
-            }
-            if (issueGraphqlId) {
-              try {
-                await createAttachment(token, {
-                  issueId: issueGraphqlId,
-                  url: pr.url,
-                  title: `PR: ${issueIdent}`,
-                  subtitle: "Created by Symphony Agent",
-                });
-              } catch (e) {
-                console.error(
-                  "attachment_create_failed",
-                  e instanceof Error ? e.message : String(e),
-                );
-              }
-            }
-            return pr.url;
-          } catch (e) {
-            const msg =
-              e instanceof GitHubError
-                ? `github_${e.status}`
-                : e instanceof Error
-                  ? e.message
-                  : "unknown_github_error";
-            console.error("create_pr_failed", msg);
-            return null;
-          }
-        },
-      )) as string | null;
-    }
-
-    // Item 5: once the PR is up and Linear's attachment is in place,
-    // advance the issue to "Human Review" so a human takes the
-    // approve/reject branch. We skip when there's no PR (no changes
-    // to review) or when issueGraphqlId is missing (can't address the
-    // issue). Errors don't fail the run — the human can move it
-    // manually if Linear API hiccups.
-    if (
-      terminal.kind === "done" &&
-      terminal.result.exit_code === 0 &&
-      prUrl &&
-      issueGraphqlId
-    ) {
-      await step.do("transition-to-human-review", async () => {
-        try {
-          await transitionIssue(token, issueGraphqlId, "Human Review");
-        } catch (e) {
-          console.error(
-            "transition_human_review_failed",
-            e instanceof Error ? e.message : String(e),
-          );
-        }
-      });
-    }
-
     await step.do("post-terminal-activity", async () => {
       const linear = buildActivityClient(token);
       if (terminal.kind === "dispatch_error") {
@@ -585,7 +524,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         const summary =
           lastAssistant ||
           `Run finished in ${(result.duration_ms / 1000).toFixed(1)}s.`;
-        const withPr = prUrl ? `${summary}\n\nPR: ${prUrl}` : summary;
+        const withPr = summary;
         await postResponse(linear, sessionId, withPr);
       } else {
         const detail =
@@ -638,7 +577,185 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       exit_code:
         terminal.kind === "dispatch_error" ? null : terminal.result.exit_code,
       turns: turnsRun,
-      pr_url: prUrl,
+      pr_url: null,
+    };
+  }
+
+  /**
+   * Trigger-initiated flow (SYM-295). No Linear AgentSession exists,
+   * so this path never calls into Linear's activity API. The session
+   * row was already INSERTed by `dispatchTrigger`; we just drive the
+   * dispatcher and write the terminal status back to D1.
+   */
+  private async runTriggerMode(
+    params: Extract<SessionRunnerParams, { mode: "trigger" }>,
+    step: WorkflowStep,
+  ): Promise<{
+    status: string;
+    exit_code?: number | null;
+    turns?: number;
+    pr_url?: null;
+  }> {
+    try {
+      return await this.runTriggerModeInner(params, step);
+    } finally {
+      await this.stopSandboxQuiet(step, params.issueIdentifier);
+    }
+  }
+
+  private async runTriggerModeInner(
+    params: Extract<SessionRunnerParams, { mode: "trigger" }>,
+    step: WorkflowStep,
+  ): Promise<{
+    status: string;
+    exit_code?: number | null;
+    turns?: number;
+    pr_url?: null;
+  }> {
+    const {
+      sessionId,
+      organizationId,
+      repoUrl,
+      prompt,
+      model,
+      maxTurns,
+      scope,
+      issueIdentifier,
+    } = params;
+
+    const githubAppInstallationId: number | null = await step.do(
+      "trigger-load-github-install",
+      async () => {
+        const gh = await new GitHubInstallStore(this.env.DB).getByOrgId(
+          organizationId,
+        );
+        return gh?.install_id ?? null;
+      },
+    );
+
+    const githubToken: string | null = await step.do(
+      "trigger-mint-github-token",
+      async () => {
+        if (
+          githubAppInstallationId &&
+          this.env.GITHUB_APP_ID &&
+          this.env.GITHUB_APP_PRIVATE_KEY
+        ) {
+          try {
+            return await mintInstallationToken(
+              githubAppInstallationId,
+              this.env.GITHUB_APP_ID,
+              this.env.GITHUB_APP_PRIVATE_KEY,
+            );
+          } catch (e) {
+            console.error(
+              "github_app_token_mint_failed_trigger",
+              e instanceof Error ? e.message : String(e),
+            );
+          }
+        }
+        return this.env.GITHUB_TOKEN ?? null;
+      },
+    );
+
+    let currentPrompt = prompt;
+    let lastAssistant: string | null = null;
+    let terminal: TurnOutcome | null = null;
+    let turnsRun = 0;
+    const allEventSummaries: EventSummaryItem[] = [];
+
+    for (let turn = 1; turn <= maxTurns; turn++) {
+      turnsRun = turn;
+      const captured = currentPrompt;
+
+      const outcome: TurnOutcome = await step.do(
+        `trigger-turn-${turn}`,
+        { retries: { limit: 0, delay: "1 second", backoff: "constant" } },
+        async () =>
+          runTurnHeadless(this.env, {
+            scope,
+            issueId: issueIdentifier,
+            repoUrl,
+            prompt: captured,
+            engine: "pi",
+            model,
+            githubToken,
+            credentials: null,
+            turn,
+          }),
+      );
+
+      if (outcome.kind === "dispatch_error") {
+        terminal = outcome;
+        break;
+      }
+      allEventSummaries.push(...outcome.eventSummary);
+      if (outcome.lastAssistant) lastAssistant = outcome.lastAssistant;
+
+      if (outcome.kind === "done") {
+        terminal = outcome;
+        break;
+      }
+
+      if (turn >= maxTurns) {
+        terminal = {
+          kind: "done",
+          result: outcome.result,
+          lastAssistant: outcome.lastAssistant,
+          inbandError: "max_turns_reached",
+          eventSummary: [],
+        };
+        break;
+      }
+
+      currentPrompt = buildContinuationPrompt(prompt, outcome.lastAssistant);
+    }
+
+    if (!terminal) {
+      terminal = {
+        kind: "dispatch_error",
+        message: "unreachable_no_terminal_outcome",
+      };
+    }
+
+    await step.do("trigger-record-session-end", async () => {
+      try {
+        const finalStatus =
+          terminal!.kind === "dispatch_error"
+            ? "error"
+            : terminal!.kind === "done" &&
+                terminal!.result.exit_code === 0
+              ? "completed"
+              : "error";
+        const errorMsg =
+          terminal!.kind === "dispatch_error"
+            ? terminal!.message
+            : terminal!.kind === "done" && terminal!.inbandError
+              ? terminal!.inbandError
+              : null;
+        await new AgentSessionStore(this.env.DB).update(sessionId, {
+          status: finalStatus,
+          completedAt: Math.floor(Date.now() / 1000),
+          error: errorMsg,
+          messages:
+            allEventSummaries.length > 0
+              ? JSON.stringify(allEventSummaries)
+              : null,
+        });
+      } catch (e) {
+        console.error(
+          "trigger_session_record_end_failed",
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    });
+
+    return {
+      status: terminal.kind === "dispatch_error" ? "error" : "ok",
+      exit_code:
+        terminal.kind === "dispatch_error" ? null : terminal.result.exit_code,
+      turns: turnsRun,
+      pr_url: null,
     };
   }
 }
@@ -718,6 +835,90 @@ async function runTurn(
             content: activity,
           }),
         );
+      }
+    }
+  } catch (e) {
+    const message =
+      e instanceof DispatcherError
+        ? `Dispatcher error (${e.status}): ${typeof e.body === "string" ? e.body : e.body.error}`
+        : e instanceof Error
+          ? e.message
+          : "unknown_dispatcher_error";
+    return { kind: "dispatch_error", message };
+  }
+
+  if (!result) {
+    return {
+      kind: "dispatch_error",
+      message: "stream_closed_without_result_frame",
+    };
+  }
+
+  const lastAssistant = lastAssistantText(events);
+  const eventSummary = summarizeEvents(events);
+
+  if (turnEndReason === "needs_continuation" && result.exit_code === 0) {
+    return { kind: "needs_continuation", result, lastAssistant, eventSummary };
+  }
+  return { kind: "done", result, lastAssistant, inbandError, eventSummary };
+}
+
+/**
+ * Headless turn — drives the dispatcher SSE stream like `runTurn` but
+ * never posts back into Linear. Used by trigger-initiated sessions
+ * which have no Linear AgentSession id to attach activities to.
+ */
+async function runTurnHeadless(
+  env: Env,
+  args: {
+    scope: string;
+    issueId: string;
+    repoUrl: string;
+    prompt: string;
+    engine: "pi";
+    model: string | null;
+    githubToken: string | null;
+    credentials: RunCredentials | null;
+    turn: number;
+  },
+): Promise<TurnOutcome> {
+  const dispatcher = new DispatcherClient(
+    env.DISPATCHER_URL,
+    env.DISPATCH_HMAC_SECRET,
+  );
+
+  const events: NormalizedEvent[] = [];
+  let result: TurnResult | null = null;
+  let inbandError: string | null = null;
+  let turnEndReason: "completed" | "needs_continuation" | "error" | null = null;
+
+  try {
+    for await (const ev of dispatcher.runStream({
+      scope: args.scope,
+      issueId: args.issueId,
+      repoUrl: args.repoUrl,
+      prompt: args.prompt,
+      engine: args.engine,
+      model: args.model,
+      githubToken: args.githubToken,
+      credentials: args.credentials,
+    })) {
+      events.push(ev);
+      if (ev.type === "result") {
+        result = {
+          exit_code: ev.exit_code,
+          duration_ms: ev.duration_ms,
+          branch: ev.branch,
+          pr_url: ev.pr_url,
+        };
+        continue;
+      }
+      if (ev.type === "turn_end") {
+        turnEndReason = ev.reason;
+        continue;
+      }
+      if (ev.type === "error") {
+        inbandError = ev.message;
       }
     }
   } catch (e) {
