@@ -19,6 +19,7 @@ import type { AuthVariables } from "../lib/auth/context";
 import { requireAuth } from "../lib/auth/context";
 import { resolveWorkflow } from "../lib/workflows/resolver";
 import { renderPrompt } from "../lib/workflows/render";
+import type { WorkflowConfigSubset } from "../workflows/session-runner";
 import {
   TriggerCreateSchema,
   TriggerUpdateSchema,
@@ -180,6 +181,14 @@ function serializeTrigger(row: TriggerRow): Record<string, unknown> {
 // this since it's API-layer-only.
 const PreviewRequestSchema = z.object({
   issue_id: z.string().min(1),
+});
+
+// Body schema for `/test-run` — issue_id and prompt are both optional;
+// omitting issue_id synthesises a throwaway session id so callers can
+// exercise the dispatch path without a real Linear issue.
+const TestRunRequestSchema = z.object({
+  issue_id: z.string().min(1).optional(),
+  prompt: z.string().optional(),
 });
 
 // ────────────────────────────────────────────────────────────────────
@@ -490,10 +499,95 @@ export function buildApiV1Router() {
     return c.json({ rendered });
   });
 
-  // ── Test-run — stubbed until Track 3's runner accepts overrides ─
+  // ── Test-run — dispatch a real SESSION_RUNNER instance ──────────
+  //
+  // Synthesises an AgentSessionEventWebhook carrying the workflow's
+  // config so the session-runner uses it instead of the legacy project
+  // columns. This is the same path `dispatchAction` uses when a live
+  // trigger fires — the only difference is the caller rather than a
+  // Linear webhook.
+  //
+  // Prerequisites for a run to complete end-to-end:
+  //   - A per-engine baseline must be registered in the
+  //     sandbox-dispatcher (it returns 412 otherwise).
+  //   - The org must have a project row with a repo_url for the team
+  //     referenced by issue_id, or the runner exits with "no_repo".
 
   app.post("/api/v1/workflows/:id/test-run", async (c) => {
-    return c.json({ error: "not yet implemented" }, 501);
+    const auth = c.get("auth");
+    const id = c.req.param("id");
+    const row = await getWorkflow(c.env.DB, id, auth.orgId);
+    if (!row) return c.json({ error: "not_found" }, 404);
+
+    const raw = await c.req.json().catch(() => ({}));
+    const parsed = TestRunRequestSchema.safeParse(raw ?? {});
+    if (!parsed.success) {
+      return c.json(
+        { error: "invalid_body", issues: parsed.error.issues },
+        400,
+      );
+    }
+
+    const issueId = parsed.data.issue_id ?? `test:${id}`;
+    const instanceId = `${auth.orgId}:${issueId}:test:${Date.now()}`;
+
+    const workflowConfig: WorkflowConfigSubset = {
+      id: row.id,
+      engine: row.engine,
+      model: row.model,
+      max_turns: row.max_turns,
+      max_continuations: row.max_continuations,
+      prompt_template: row.prompt_template,
+      allowed_tools: asJsonArray(row.allowed_tools) as string[] | null,
+      disallowed_tools: asJsonArray(row.disallowed_tools) as string[] | null,
+      permission_mode: row.permission_mode,
+      allowed_domains: asJsonArray(row.allowed_domains) as string[] | null,
+      additional_read_paths:
+        asJsonArray(row.additional_read_paths) as string[] | null,
+      additional_write_paths:
+        asJsonArray(row.additional_write_paths) as string[] | null,
+      hook_after_create: row.hook_after_create,
+      hook_before_remove: row.hook_before_remove,
+      hook_timeout_ms: row.hook_timeout_ms,
+      mcp_servers:
+        asJsonArray(row.mcp_servers) as WorkflowConfigSubset["mcp_servers"],
+    };
+
+    const syntheticEvent = {
+      type: "AgentSessionEvent" as const,
+      action: "created" as const,
+      webhookId: `test-run:${instanceId}`,
+      organizationId: auth.orgId,
+      agentSession: {
+        id: instanceId,
+        ...(parsed.data.issue_id
+          ? {
+              issue: {
+                id: parsed.data.issue_id,
+                identifier: parsed.data.issue_id,
+                title: `Test run for workflow "${row.name}"`,
+              },
+            }
+          : {}),
+        promptContext:
+          parsed.data.prompt ?? `Test run for workflow "${row.name}"`,
+      },
+    };
+
+    try {
+      await c.env.SESSION_RUNNER.create({
+        id: instanceId,
+        params: { event: syntheticEvent, workflowConfig },
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!/instance.*exists|already/i.test(msg)) {
+        return c.json({ error: "dispatch_failed", message: msg }, 502);
+      }
+      // Instance already running — treat as success (idempotent).
+    }
+
+    return c.json({ ok: true, instance_id: instanceId });
   });
 
   // ── Resolve — debug helper ──────────────────────────────────────

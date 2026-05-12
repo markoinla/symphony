@@ -660,21 +660,124 @@ describe("/api/v1/workflows", () => {
     expect(db.versions[0]?.workflow_id).toBe(workflow.id);
   });
 
-  it("test-run returns 501 + not yet implemented", async () => {
+  it("test-run dispatches SESSION_RUNNER and returns instance_id", async () => {
     asUser("org-1");
     const db = new ApiD1();
-    // Seed a workflow to make sure the 501 isn't masking a 404.
     db.workflows.set("w1", baseWorkflow({ id: "w1", organization_id: "org-1" }));
+
+    const create = vi.fn().mockResolvedValue(undefined);
+    const env = makeEnv(db, {
+      SESSION_RUNNER: { create } as unknown as Workflow,
+    });
+
+    const res = await buildApp().fetch(
+      new Request("https://agent.example/api/v1/workflows/w1/test-run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issue_id: "TEST-123" }),
+      }),
+      env,
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; instance_id: string };
+    expect(body.ok).toBe(true);
+    expect(body.instance_id).toContain("TEST-123");
+
+    expect(create).toHaveBeenCalledOnce();
+    const call = (create.mock.calls[0] as [{ id: string; params: { event: unknown; workflowConfig: { id: string; engine: string } } }])[0];
+    expect(call.id).toContain("TEST-123");
+    expect(call.params.workflowConfig.id).toBe("w1");
+    expect(call.params.workflowConfig.engine).toBe("pi");
+  });
+
+  it("test-run with no issue_id synthesises a throwaway session id", async () => {
+    asUser("org-1");
+    const db = new ApiD1();
+    db.workflows.set("w1", baseWorkflow({ id: "w1", organization_id: "org-1" }));
+
+    const create = vi.fn().mockResolvedValue(undefined);
+    const env = makeEnv(db, {
+      SESSION_RUNNER: { create } as unknown as Workflow,
+    });
 
     const res = await buildApp().fetch(
       new Request("https://agent.example/api/v1/workflows/w1/test-run", {
         method: "POST",
       }),
+      env,
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean; instance_id: string };
+    expect(body.ok).toBe(true);
+    expect(body.instance_id).toContain("test:w1");
+    expect(create).toHaveBeenCalledOnce();
+  });
+
+  it("test-run returns 404 when workflow not found", async () => {
+    asUser("org-1");
+    const db = new ApiD1();
+
+    const res = await buildApp().fetch(
+      new Request("https://agent.example/api/v1/workflows/no-such-wf/test-run", {
+        method: "POST",
+      }),
       makeEnv(db),
       makeExecCtx(),
     );
-    expect(res.status).toBe(501);
-    expect(await res.json()).toEqual({ error: "not yet implemented" });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "not_found" });
+  });
+
+  it("test-run treats SESSION_RUNNER already-exists error as success", async () => {
+    asUser("org-1");
+    const db = new ApiD1();
+    db.workflows.set("w1", baseWorkflow({ id: "w1", organization_id: "org-1" }));
+
+    const create = vi
+      .fn()
+      .mockRejectedValue(new Error("instance already exists"));
+    const env = makeEnv(db, {
+      SESSION_RUNNER: { create } as unknown as Workflow,
+    });
+
+    const res = await buildApp().fetch(
+      new Request("https://agent.example/api/v1/workflows/w1/test-run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issue_id: "TEST-1" }),
+      }),
+      env,
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+  });
+
+  it("test-run returns 502 when SESSION_RUNNER create throws an unexpected error", async () => {
+    asUser("org-1");
+    const db = new ApiD1();
+    db.workflows.set("w1", baseWorkflow({ id: "w1", organization_id: "org-1" }));
+
+    const create = vi.fn().mockRejectedValue(new Error("internal worker error"));
+    const env = makeEnv(db, {
+      SESSION_RUNNER: { create } as unknown as Workflow,
+    });
+
+    const res = await buildApp().fetch(
+      new Request("https://agent.example/api/v1/workflows/w1/test-run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issue_id: "TEST-2" }),
+      }),
+      env,
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(502);
+    const body = (await res.json()) as { error: string; message: string };
+    expect(body.error).toBe("dispatch_failed");
   });
 
   it("rejects cross-org workflow access (orgId scoping)", async () => {
