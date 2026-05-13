@@ -213,11 +213,12 @@ describe("GET /github/install/callback", () => {
       }),
       makeExecCtx(),
     );
-    // The handler redirects to the dashboard integrations tab after a
-    // successful install verification.
+    // The handler redirects back to /dashboard/settings with a
+    // `github_oauth=success` flag the settings page reads to surface
+    // a toast (see dashboard/src/pages/settings.tsx).
     expect(res.status).toBe(302);
     expect(res.headers.get("Location")).toBe(
-      "/dashboard/settings/integrations",
+      "/dashboard/settings?github_oauth=success",
     );
 
     const ghInstall = db.githubInstalls.get("org-1");
