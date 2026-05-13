@@ -467,10 +467,10 @@ describe("POST /run (engine: pi)", () => {
 });
 
 describe("POST /run (engine: claude)", () => {
-  it("restores the claude baseline, writes Claude MCP config, and runs claude", async () => {
+  it("restores the shared pi baseline, writes Claude MCP config, and runs claude", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBaseline(db, "claude");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-338"));
     sandbox.execQueue = [
@@ -535,6 +535,30 @@ describe("POST /run (engine: claude)", () => {
     expect(claudeCall?.cmd).toContain("--allowed-tools 'Bash' 'Read'");
     expect(claudeCall?.cmd).toContain("--disallowed-tools 'WebFetch'");
     expect(claudeCall?.cmd).toContain("Implement Claude support.\nSYMPHONY_PROMPT_EOF");
+  });
+
+  it("412s with both engine and baseline_engine when the pi baseline is absent", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+
+    const body = JSON.stringify({
+      issue_id: "SYM-338",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "claude",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(412);
+    expect(await res.json()).toEqual({
+      error: "missing_baseline",
+      engine: "claude",
+      baseline_engine: "pi",
+    });
   });
 });
 

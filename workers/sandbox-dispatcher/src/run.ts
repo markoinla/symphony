@@ -3,6 +3,7 @@ import { getSandbox, parseSSEStream } from "@cloudflare/sandbox";
 
 import type { Env } from "./index";
 import { BaselineStore } from "./storage";
+import { resolveBaselineEngine } from "./baseline-alias";
 import { SANDBOX_HOME, safeDestroy, sanitizeScopeForId } from "./sandbox-helpers";
 import { createClaudeEngineAdapter } from "./engines/claude";
 import { piEngineAdapter } from "./engines/pi";
@@ -115,9 +116,19 @@ export function buildRunRouter() {
     }
 
     const store = new BaselineStore(c.env.DB);
-    const record = await store.get(parsed.engine);
+    const baselineEngine = resolveBaselineEngine(parsed.engine);
+    const record = await store.get(baselineEngine);
     if (!record) {
-      return c.json({ error: "missing_baseline", engine: parsed.engine }, 412);
+      return c.json(
+        {
+          error: "missing_baseline",
+          engine: parsed.engine,
+          ...(baselineEngine !== parsed.engine
+            ? { baseline_engine: baselineEngine }
+            : {}),
+        },
+        412,
+      );
     }
 
     const sandbox = getSandbox(c.env.Sandbox, runSandboxId(parsed.issueId));
@@ -294,11 +305,14 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
         type: "thought",
         text: "Spinning up a sandbox…",
       });
-      const record = await new BaselineStore(env.DB).get(parsed.engine);
+      const baselineEngine = resolveBaselineEngine(parsed.engine);
+      const record = await new BaselineStore(env.DB).get(baselineEngine);
       if (!record) {
-        await emitTerminal(75 /* EX_TEMPFAIL */, {
-          message: `missing_baseline: ${parsed.engine}`,
-        });
+        const message =
+          baselineEngine === parsed.engine
+            ? `missing_baseline: ${parsed.engine}`
+            : `missing_baseline: ${baselineEngine} (engine ${parsed.engine})`;
+        await emitTerminal(75 /* EX_TEMPFAIL */, { message });
         return;
       }
 

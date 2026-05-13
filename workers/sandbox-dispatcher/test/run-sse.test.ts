@@ -274,7 +274,7 @@ describe("POST /run (Accept: text/event-stream)", () => {
   it("lets the claude adapter emit turn_end without adding a synthetic one", async () => {
     const app = buildApp();
     const db = new FakeD1();
-    seedBaseline(db, "claude");
+    seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-338"));
     sandbox.streamScript = [
