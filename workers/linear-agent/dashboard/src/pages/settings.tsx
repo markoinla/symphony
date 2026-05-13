@@ -43,6 +43,7 @@ import { formatQueryError, isPositiveInteger } from '../lib/helpers'
 import {
   Badge,
   Button,
+  Checkbox,
   Card,
   CardContent,
   CardHeader,
@@ -54,6 +55,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
   Tabs,
   TabsContent,
   TabsList,
@@ -513,15 +515,12 @@ function GitHubOAuthSection() {
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {connected && settingsUrl ? (
-                <a
-                  href={settingsUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-th-border bg-th-surface px-3 text-[13px] font-medium text-th-text-2 shadow-sm transition-all hover:bg-th-muted hover:text-th-text-1"
-                >
-                  Manage on GitHub
-                  <ExternalLink className="h-3 w-3" />
-                </a>
+                <Button asChild size="sm" variant="outline">
+                  <a href={settingsUrl} target="_blank" rel="noopener noreferrer">
+                    Manage on GitHub
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                </Button>
               ) : null}
               <Button
                 onClick={handleInstall}
@@ -997,31 +996,33 @@ function ProxySection() {
 
       <CardContent className="space-y-4">
         <div className="flex items-center gap-3">
-        <Button
-          disabled={toggleMutation.isPending}
-          onClick={() => {
-            setPingResult(null)
-            void toggleMutation.mutateAsync(!proxyEnabled)
-          }}
-          size="sm"
-          type="button"
-          variant={proxyEnabled ? 'destructive' : 'secondary'}
-        >
-          {proxyEnabled ? 'Disable proxy' : 'Enable proxy'}
-        </Button>
-        <Button
-          disabled={pingMutation.isPending}
-          onClick={() => {
-            setPingResult(null)
-            void pingMutation.mutateAsync()
-          }}
-          size="sm"
-          type="button"
-          variant="ghost"
-        >
-          {pingMutation.isPending ? 'Testing...' : 'Test connectivity'}
-        </Button>
-      </div>
+          <div className="flex items-center gap-2 rounded-lg border border-th-border bg-th-surface px-3 py-2">
+            <Switch
+              checked={proxyEnabled}
+              disabled={toggleMutation.isPending}
+              id="proxy-enabled"
+              onCheckedChange={(checked) => {
+                setPingResult(null)
+                void toggleMutation.mutateAsync(checked)
+              }}
+            />
+            <label className="cursor-pointer text-sm font-medium text-th-text-2" htmlFor="proxy-enabled">
+              {proxyEnabled ? 'Proxy enabled' : 'Proxy disabled'}
+            </label>
+          </div>
+          <Button
+            disabled={pingMutation.isPending}
+            onClick={() => {
+              setPingResult(null)
+              void pingMutation.mutateAsync()
+            }}
+            size="sm"
+            type="button"
+            variant="ghost"
+          >
+            {pingMutation.isPending ? 'Testing...' : 'Test connectivity'}
+          </Button>
+        </div>
 
       {pingResult ? (
         <div className="space-y-2">
@@ -1292,23 +1293,23 @@ function ApiTokensSection() {
                 {SCOPE_OPTIONS.map((option) => {
                   const checked = scopes.has(option.value)
                   return (
-                    <label
-                      className="flex cursor-pointer items-start gap-3 rounded-lg border border-th-border bg-th-surface px-3 py-2.5 transition-colors hover:bg-th-muted"
+                    <div
+                      className="flex items-start gap-3 rounded-lg border border-th-border bg-th-surface px-3 py-2.5 transition-colors hover:bg-th-muted"
                       key={option.value}
                     >
-                      <input
+                      <Checkbox
                         checked={checked}
-                        className="mt-0.5 h-4 w-4 accent-th-accent"
-                        onChange={() => toggleScope(option.value)}
-                        type="checkbox"
+                        className="mt-0.5"
+                        id={`token-scope-${option.value}`}
+                        onCheckedChange={() => toggleScope(option.value)}
                       />
-                      <div className="min-w-0">
+                      <label className="min-w-0 cursor-pointer" htmlFor={`token-scope-${option.value}`}>
                         <div className="text-sm font-medium text-th-text-1">
                           {option.label}
                         </div>
                         <div className="text-xs text-th-text-3">{option.description}</div>
-                      </div>
-                    </label>
+                      </label>
+                    </div>
                   )
                 })}
               </div>
