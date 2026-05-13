@@ -89,12 +89,70 @@ function projectToDraft(project: Project): ProjectDraft {
 // Pickers
 // ---------------------------------------------------------------------------
 
+function fallbackLinearProject(
+  value: string | null,
+  label: string | null,
+): LinearProject | null {
+  if (!value && !label) return null
+
+  const fallbackValue = value ?? label ?? ''
+  return {
+    id: fallbackValue,
+    name: label ?? fallbackValue,
+    slug_id: fallbackValue,
+    slug: fallbackValue,
+    url: '',
+    state: '',
+    organization_slug: null,
+    team_id: value,
+    team_key: null,
+  }
+}
+
+function normalizeGitHubRepoFullName(value: string | null): string | null {
+  const trimmed = value?.trim()
+  if (!trimmed) return null
+
+  const withoutGit = trimmed.replace(/\.git$/i, '')
+
+  try {
+    const url = new URL(withoutGit)
+    if (url.hostname.toLowerCase() === 'github.com') {
+      const parts = url.pathname.split('/').filter(Boolean)
+      return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : withoutGit
+    }
+  } catch {
+    // Fall through for owner/repo values.
+  }
+
+  return withoutGit.replace(/^github\.com\//i, '').replace(/^\/+|\/+$/g, '')
+}
+
+function fallbackGitHubRepo(value: string | null): GitHubRepo | null {
+  const fullName = normalizeGitHubRepoFullName(value)
+  if (!fullName) return null
+
+  const [owner = '', name = ''] = fullName.split('/')
+  return {
+    id: -1,
+    full_name: fullName,
+    name,
+    owner,
+    description: null,
+    private: false,
+    default_branch: '',
+    url: fullName,
+  }
+}
+
 function LinearProjectPicker({
   onSelect,
   selectedLabel,
+  selectedValue,
 }: {
   onSelect: (project: LinearProject) => void
   selectedLabel: string | null
+  selectedValue: string | null
 }) {
   const { data, isLoading } = useQuery({
     queryKey: ['linear-projects'],
@@ -102,9 +160,15 @@ function LinearProjectPicker({
     staleTime: 60_000,
   })
   const items = data?.projects ?? []
-  const selectedItem = selectedLabel
-    ? (items.find((p) => p.name === selectedLabel) ?? null)
-    : null
+  const selectedItem = selectedValue
+    ? (items.find(
+        (p) =>
+          p.team_id === selectedValue ||
+          p.slug === selectedValue ||
+          p.slug_id === selectedValue ||
+          p.id === selectedValue,
+      ) ?? fallbackLinearProject(selectedValue, selectedLabel))
+    : fallbackLinearProject(null, selectedLabel)
 
   return (
     <Combobox<LinearProject>
@@ -143,10 +207,10 @@ function LinearProjectPicker({
 
 function GitHubRepoPicker({
   onSelect,
-  selectedLabel,
+  selectedValue,
 }: {
   onSelect: (repo: GitHubRepo) => void
-  selectedLabel: string | null
+  selectedValue: string | null
 }) {
   const { data, isLoading } = useQuery({
     queryKey: ['github-repos'],
@@ -154,8 +218,13 @@ function GitHubRepoPicker({
     staleTime: 60_000,
   })
   const items = data?.repos ?? []
-  const selectedItem = selectedLabel
-    ? (items.find((r) => r.full_name === selectedLabel) ?? null)
+  const selectedFullName = normalizeGitHubRepoFullName(selectedValue)
+  const selectedItem = selectedFullName
+    ? (items.find(
+        (r) =>
+          r.full_name === selectedFullName ||
+          normalizeGitHubRepoFullName(r.url) === selectedFullName,
+      ) ?? fallbackGitHubRepo(selectedFullName))
     : null
 
   return (
@@ -230,8 +299,8 @@ function ProjectFormDialog({
     setLastEditId(editId)
     if (editingProject) {
       setDraft(projectToDraft(editingProject))
-      setSelectedLinearName(editingProject.linear_project_slug)
-      setSelectedGitHubName(editingProject.github_repo)
+      setSelectedLinearName(editingProject.name)
+      setSelectedGitHubName(normalizeGitHubRepoFullName(editingProject.github_repo))
       // Show advanced if any advanced fields are populated
       setShowAdvanced(
         editingProject.linear_filter_by === 'label' ||
@@ -316,6 +385,7 @@ function ProjectFormDialog({
               <LinearProjectPicker
                 onSelect={handleLinearProjectSelect}
                 selectedLabel={selectedLinearName}
+                selectedValue={draft.linear_project_slug}
               />
             </Field>
           ) : null}
@@ -324,7 +394,7 @@ function ProjectFormDialog({
             <Field label="GitHub repository">
               <GitHubRepoPicker
                 onSelect={handleGitHubRepoSelect}
-                selectedLabel={selectedGitHubName}
+                selectedValue={selectedGitHubName ?? draft.github_repo}
               />
             </Field>
           ) : (
