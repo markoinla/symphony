@@ -167,17 +167,21 @@ export function buildAdminRouter() {
         c.env.DISPATCH_HMAC_SECRET,
       );
       for await (const ev of dispatcher.runStream({
-        scope: "smoke-test-no-such-scope",
+        // Bogus repo that passes URL validation but 404s on clone.
+        // The dispatcher restores the baseline, attempts the clone,
+        // and emits a terminal `result` frame with a non-zero exit
+        // code — short-circuits before the engine ever runs (~25s
+        // total, dominated by baseline restore).
+        scope: "smoke-test",
         issueId: "smoke-test",
-        repoUrl: "https://github.com/markoinla/symphony.git",
-        prompt: "smoke test — should never run",
+        repoUrl: "https://github.com/symphony-smoke/does-not-exist.git",
+        prompt: "smoke",
         engine: "pi",
         model: null,
       })) {
         events.push(ev);
-        // Safety brake: a healthy dispatcher exits in ≤3 events; cap
-        // at 50 so a misbehaving dispatcher can't hold the
-        // connection forever.
+        // Safety brake: cap at 50 so a misbehaving dispatcher can't
+        // hold the connection forever.
         if (events.length > 50) break;
       }
     } catch (e) {
@@ -190,10 +194,13 @@ export function buildAdminRouter() {
     }
 
     const finalEvent = events[events.length - 1] ?? null;
+    // Wire is healthy if the HMAC handshake succeeded (connect_error
+    // is null) and the stream produced a terminal `result` frame. We
+    // don't require an `error` event — the dispatcher doesn't 401 on
+    // an unknown scope, so the only way to get an in-band error is to
+    // also fail the clone, and we already exercise that path here.
     const sseWireOk =
-      connectError === null &&
-      events.some((e) => e.type === "result") &&
-      events.some((e) => e.type === "error");
+      connectError === null && events.some((e) => e.type === "result");
 
     return c.json({
       sse_wire_ok: sseWireOk,

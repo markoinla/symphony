@@ -62,6 +62,7 @@ fi
 
 echo ""
 echo "✗ deploy completed but post-deploy smoke FAILED" >&2
-echo "  This is the symptom of the wrangler-resets-secret bug." >&2
-echo "  Recover with:  scripts/rotate-dispatch-secret.sh" >&2
+echo "  Inspect the smoke output above. If connect_error mentions" >&2
+echo "  invalid_signature, it's the wrangler-resets-secret bug —" >&2
+echo "  recover with:  scripts/rotate-dispatch-secret.sh" >&2
 exit 1

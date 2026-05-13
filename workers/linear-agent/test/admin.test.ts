@@ -316,7 +316,7 @@ describe("/admin/smoke", () => {
     expect(json.connect_error).toContain("dispatcher_401");
   });
 
-  it("returns sse_wire_ok=false when stream closes without error+result combo", async () => {
+  it("returns sse_wire_ok=true when a result frame arrives even without an error event", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = typeof input === "string" ? input : (input as Request).url;
       if (url.endsWith("/run")) {
@@ -341,7 +341,7 @@ describe("/admin/smoke", () => {
       makeExecCtx(),
     );
     const json = (await res.json()) as { sse_wire_ok: boolean };
-    expect(json.sse_wire_ok).toBe(false);
+    expect(json.sse_wire_ok).toBe(true);
   });
 
   it("requires the admin bearer", async () => {
