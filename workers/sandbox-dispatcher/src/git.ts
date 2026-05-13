@@ -37,7 +37,7 @@
 
 import type { Sandbox as SandboxType } from "@cloudflare/sandbox";
 
-import { shellQuote } from "./run";
+import { redactToken, shellQuote } from "./run";
 
 export interface PushResult {
   branch: string;
@@ -164,8 +164,9 @@ export async function commitAndPush(
   // 8. Push with embedded PAT auth. We DO NOT echo the URL anywhere —
   // the sandbox exec output is captured by the streaming branch as
   // stdout chunks the linear-agent might surface in the timeline, so
-  // keeping the token off stdout is mandatory. Stderr is redirected to
-  // /dev/null so even a git failure message can't leak the PAT.
+  // keeping the token off stdout is mandatory. Stdout is dropped, and
+  // stderr is captured and scrubbed via `redactToken` before surfacing
+  // so the PAT can't leak even if git echoes the URL on failure.
   //
   // `git remote set-url` would mutate `.git/config`; we avoid that and
   // build the auth URL inline instead, so the credential never lands
@@ -174,11 +175,14 @@ export async function commitAndPush(
     `cd ${shellQuote(workspaceDir)} && ` +
       `origin_url=$(git remote get-url origin) && ` +
       `auth_url=$(echo "$origin_url" | sed "s|https://|https://x-access-token:${shellEscapeForDoubleQuotes(args.githubToken)}@|") && ` +
-      `git push "$auth_url" HEAD:refs/heads/${shellQuote(branchName)} >/dev/null 2>&1`,
+      `git push "$auth_url" HEAD:refs/heads/${shellQuote(branchName)} >/dev/null`,
   );
   if (remoteResult.exitCode !== 0) {
+    const stderr = redactToken(remoteResult.stderr ?? "", args.githubToken)
+      .trim()
+      .slice(0, 500);
     throw new Error(
-      `git_push_failed (${remoteResult.exitCode}): see container logs (stderr redacted to avoid leaking PAT)`,
+      `git_push_failed (${remoteResult.exitCode})${stderr ? `: ${stderr}` : ""}`,
     );
   }
 

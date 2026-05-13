@@ -86,9 +86,11 @@ describe("commitAndPush — pi already committed (HEAD ahead of upstream)", () =
     expect(sandbox.execCalls[3]).toContain("commit --amend --reset-author");
     expect(sandbox.execCalls[4]).toContain("git rev-parse HEAD");
     expect(sandbox.execCalls[5]).toContain("git push");
-    // The push command must redirect stderr to /dev/null to keep the
-    // PAT out of any captured stream.
-    expect(sandbox.execCalls[5]).toContain(">/dev/null 2>&1");
+    // Push command drops stdout (which can contain the auth URL on
+    // success) but keeps stderr so failure diagnostics can flow through
+    // `redactToken` before surfacing.
+    expect(sandbox.execCalls[5]).toContain(">/dev/null");
+    expect(sandbox.execCalls[5]).not.toContain("2>&1");
   });
 
   it("uses the issue id in the branch name with lowercase", async () => {
@@ -204,14 +206,64 @@ describe("commitAndPush — push security", () => {
     });
 
     const pushCmd = sandbox.execCalls[5]!;
-    // The PAT must appear inside a sed replacement, but the command
-    // must also redirect stderr — otherwise a git failure message
-    // would leak the URL (with the PAT) into the dispatcher's stdout.
+    // The PAT must appear inside a sed replacement, and stdout must be
+    // dropped so a git success line can't echo the URL onto the SSE wire.
+    // Stderr is intentionally NOT redirected — we capture it and run it
+    // through `redactToken` before surfacing (see the redaction test below).
     expect(pushCmd).toContain("ghp_super_secret_pat");
-    expect(pushCmd).toContain(">/dev/null 2>&1");
+    expect(pushCmd).toContain(">/dev/null");
+    expect(pushCmd).not.toContain("2>&1");
     // It should NOT use `git remote set-url` (would persist the PAT to
     // .git/config on disk).
     expect(pushCmd).not.toContain("remote set-url");
+  });
+
+  it("redacts the PAT from push stderr surfaced in the error message", async () => {
+    const sandbox = new FakeSandbox();
+    sandbox.execScript = [
+      { exitCode: 0, stdout: "1\n", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "sha\n", stderr: "" },
+      {
+        exitCode: 128,
+        stdout: "",
+        stderr:
+          "remote: Permission to org/repo.git denied to token ghp_super_secret_pat.\nfatal: unable to access 'https://x-access-token:ghp_super_secret_pat@github.com/org/repo.git/': The requested URL returned error: 403",
+      },
+    ];
+
+    await expect(
+      commitAndPush(sandbox as never, "/workspace/SYM-4", {
+        ...baseArgs,
+        githubToken: "ghp_super_secret_pat",
+      }),
+    ).rejects.toThrow(/git_push_failed \(128\):.*\*\*\*.*403/s);
+
+    let caught: unknown;
+    try {
+      sandbox.execScript = [
+        { exitCode: 0, stdout: "1\n", stderr: "" },
+        { exitCode: 0, stdout: "", stderr: "" },
+        { exitCode: 0, stdout: "", stderr: "" },
+        { exitCode: 0, stdout: "", stderr: "" },
+        { exitCode: 0, stdout: "sha\n", stderr: "" },
+        {
+          exitCode: 128,
+          stdout: "",
+          stderr:
+            "fatal: unable to access 'https://x-access-token:ghp_super_secret_pat@github.com/org/repo.git/': 403",
+        },
+      ];
+      await commitAndPush(sandbox as never, "/workspace/SYM-5", {
+        ...baseArgs,
+        githubToken: "ghp_super_secret_pat",
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(String(caught)).not.toContain("ghp_super_secret_pat");
   });
 });
 
