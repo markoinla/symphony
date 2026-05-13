@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 
 import type { Env } from "../index";
+import { buildActivityClient, postResponse } from "../lib/activities";
+import { DispatcherClient } from "../lib/dispatcher";
 import { dispatchTrigger } from "../lib/dispatch-trigger";
 import {
   isIssueEnvelope,
@@ -8,7 +10,11 @@ import {
   type IssueWebhookEnvelope,
 } from "../lib/event-mapper-inbound";
 import { verifyLinearSignature } from "../lib/signature";
-import { LinearAgentInstallStore, WebhookEventStore } from "../lib/store";
+import {
+  AgentSessionStore,
+  LinearAgentInstallStore,
+  WebhookEventStore,
+} from "../lib/store";
 import { resolveWorkflow } from "../lib/workflows/resolver";
 import { ensureDefaultWorkflow } from "../lib/workflows/seed";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
@@ -199,6 +205,29 @@ async function handleAgentSession(
     return c.json({ ok: true, ignored: true, action: event.action });
   }
 
+  // Linear's `stop` signal arrives as a `prompted` action whose
+  // underlying activity carries `signal: "stop"`. We handle the stop
+  // path entirely from the webhook scope: Cloudflare's
+  // WorkflowInstance.terminate() does NOT reliably run the workflow's
+  // `finally` blocks, so cleanup (sandbox kill, final activity post,
+  // DB status update) must happen here rather than inside the runner.
+  if (event.action === "prompted" && extractStopSignal(event)) {
+    return await handleStopSignal(c, event, logId, events, startedMs);
+  }
+
+  if (event.action === "prompted") {
+    // Follow-up message inside an existing session. If the runner is
+    // still alive (running or waiting for a follow-up event), forward
+    // the webhook payload into the workflow via sendEvent so the
+    // `step.waitForEvent` inside `runAgentSessionMode` unblocks and
+    // queues another turn batch. If the runner already wrapped up
+    // (complete / errored / terminated / never existed), spin up a
+    // fresh instance with a `:rN` suffix so the user can keep talking
+    // to us after the conversation closed.
+    return await handlePromptedFollowUp(c, event, logId, events, startedMs);
+  }
+
+  // event.action === "created" — initial session start.
   try {
     await c.env.SESSION_RUNNER.create({
       id: event.agentSession.id,
@@ -225,6 +254,246 @@ async function handleAgentSession(
     latencyMs: Date.now() - startedMs,
   });
   return c.json({ ok: true, scheduled: true });
+}
+
+/**
+ * Forward a `prompted` follow-up to a running SessionRunner instance,
+ * or spin up a fresh instance if the previous one has already wrapped
+ * up. Returns the webhook response unchanged shape-wise.
+ */
+async function handlePromptedFollowUp(
+  c: { env: Env; json: (b: unknown, s?: number) => Response },
+  event: AgentSessionEventWebhook,
+  logId: string,
+  events: WebhookEventStore,
+  startedMs: number,
+): Promise<Response> {
+  const sessionId = event.agentSession.id;
+
+  // Try to find the live instance. `Workflow.get(id)` rejects if no
+  // instance exists with that id — we treat that as "session has
+  // never run or has long since been GC'd" and spin up a fresh one.
+  let liveStatus: string | null = null;
+  let instance: Awaited<ReturnType<Workflow["get"]>> | null = null;
+  try {
+    instance = await c.env.SESSION_RUNNER.get(sessionId);
+    const status = await instance.status();
+    liveStatus = status.status;
+  } catch (e) {
+    console.log(
+      "session_runner_instance_missing",
+      sessionId,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+
+  if (
+    instance &&
+    (liveStatus === "running" || liveStatus === "waiting")
+  ) {
+    try {
+      await instance.sendEvent({ type: "linear.prompted", payload: event });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("session_runner_send_event_failed", sessionId, msg);
+      await events.update(logId, {
+        dispatchedAction: "error",
+        error: msg,
+        latencyMs: Date.now() - startedMs,
+      });
+      throw e;
+    }
+    await events.update(logId, {
+      dispatchedAction: "forwarded_to_running_instance",
+      agentSessionId: sessionId,
+      eventSummary: `AgentSessionEvent prompted (forwarded)`,
+      latencyMs: Date.now() - startedMs,
+    });
+    return c.json({ ok: true, forwarded: true });
+  }
+
+  // No live instance — kick off a fresh one with a derived id so the
+  // user can keep the conversation going after the runner has wrapped
+  // up. The `:rN` suffix is monotonic per-millisecond so repeated
+  // restarts don't collide.
+  const resumeId = `${sessionId}:r${Date.now()}`;
+  try {
+    await c.env.SESSION_RUNNER.create({
+      id: resumeId,
+      params: { mode: "agent_session", event },
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!/instance.*exists|already/i.test(msg)) {
+      console.error("workflow_create_failed_resume", msg);
+      await events.update(logId, {
+        dispatchedAction: "error",
+        error: msg,
+        latencyMs: Date.now() - startedMs,
+      });
+      throw e;
+    }
+    console.log("workflow_resume_already_exists", resumeId);
+  }
+  await events.update(logId, {
+    dispatchedAction: "start_session_resume",
+    agentSessionId: sessionId,
+    eventSummary: `AgentSessionEvent prompted (resume, prior status=${liveStatus ?? "missing"})`,
+    latencyMs: Date.now() - startedMs,
+  });
+  return c.json({ ok: true, scheduled: true, resume_id: resumeId });
+}
+
+/**
+ * Handle Linear's `stop` signal: terminate the running workflow
+ * instance, kill the sandbox, post a final `response` activity, and
+ * mark the agent_sessions row stopped. All cleanup happens here
+ * because Cloudflare doesn't guarantee `finally` runs after a
+ * `terminate()`.
+ */
+async function handleStopSignal(
+  c: { env: Env; json: (b: unknown, s?: number) => Response },
+  event: AgentSessionEventWebhook,
+  logId: string,
+  events: WebhookEventStore,
+  startedMs: number,
+): Promise<Response> {
+  const sessionId = event.agentSession.id;
+  const issueIdentifier =
+    event.agentSession.issue?.identifier ?? sessionId;
+  console.log("stop_signal_received", sessionId);
+
+  // 1. Terminate the workflow instance if it's still alive.
+  try {
+    const instance = await c.env.SESSION_RUNNER.get(sessionId);
+    const status = await instance.status();
+    if (status.status === "running" || status.status === "waiting") {
+      try {
+        await instance.terminate();
+      } catch (e) {
+        // terminate() throws if the instance is already
+        // complete/errored/terminated; ignore — we still want to do
+        // the rest of the cleanup.
+        console.log(
+          "stop_signal_terminate_noop",
+          sessionId,
+          e instanceof Error ? e.message : String(e),
+        );
+      }
+    }
+  } catch (e) {
+    console.log(
+      "stop_signal_no_instance",
+      sessionId,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+
+  // 2. Tear down the dispatcher's per-issue sandbox so a hung pi
+  //    process doesn't keep burning CPU after we tell the user we
+  //    stopped. Mirrors `stopSandboxQuiet` in the workflow.
+  try {
+    const dispatcher = new DispatcherClient(
+      c.env.DISPATCHER_URL,
+      c.env.DISPATCH_HMAC_SECRET,
+    );
+    await dispatcher.stop(issueIdentifier);
+  } catch (e) {
+    console.error(
+      "stop_signal_dispatcher_stop_failed",
+      sessionId,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+
+  // 3. Resolve the install token + post a final `response` activity
+  //    so the Linear session timeline shows we acknowledged the stop.
+  if (event.organizationId) {
+    try {
+      const install = await new LinearAgentInstallStore(
+        c.env.DB,
+      ).getByLinearOrgId(event.organizationId);
+      if (install?.access_token) {
+        const linear = buildActivityClient(install.access_token);
+        await postResponse(
+          linear,
+          sessionId,
+          "Stopped at user request.",
+        );
+      } else {
+        console.warn(
+          "stop_signal_no_install_token",
+          event.organizationId,
+        );
+      }
+    } catch (e) {
+      console.error(
+        "stop_signal_post_response_failed",
+        sessionId,
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
+
+  // 4. Mark the agent_sessions row as stopped so the dashboard
+  //    reflects user-driven disengagement vs natural completion.
+  try {
+    await new AgentSessionStore(c.env.DB).update(sessionId, {
+      status: "stopped",
+      completedAt: Math.floor(Date.now() / 1000),
+    });
+  } catch (e) {
+    console.error(
+      "stop_signal_session_update_failed",
+      sessionId,
+      e instanceof Error ? e.message : String(e),
+    );
+  }
+
+  await events.update(logId, {
+    dispatchedAction: "stopped_by_signal",
+    agentSessionId: sessionId,
+    eventSummary: "AgentSessionEvent prompted (stop signal)",
+    latencyMs: Date.now() - startedMs,
+  });
+  return c.json({ ok: true, stopped: true });
+}
+
+/**
+ * Extract the `signal` field off an incoming `prompted` webhook.
+ *
+ * Linear sends the user's new activity as part of the prompted event,
+ * but the exact JSON path is not pinned in our typed envelope today.
+ * Mirroring the Elixir-side `webhook_dispatcher.ex#extract_signal/1`
+ * we probe three locations in priority order:
+ *
+ *   1. `event.agentActivity.signal`
+ *   2. `event.data.agentActivity.signal` (some Linear webhooks wrap
+ *      the activity under `data`)
+ *   3. `event.signal` (top-level fallback)
+ *
+ * TODO: once we have a captured live `prompted` webhook fixture with
+ * a stop signal, narrow this to the single observed path and add
+ * the field to the typed `AgentSessionEventWebhook` envelope.
+ */
+function extractStopSignal(event: AgentSessionEventWebhook): boolean {
+  const e = event as unknown as Record<string, unknown>;
+  const fromNested = (
+    parent: Record<string, unknown> | undefined,
+  ): string | undefined => {
+    if (!parent || typeof parent !== "object") return undefined;
+    const activity = parent.agentActivity as
+      | Record<string, unknown>
+      | undefined;
+    if (!activity || typeof activity !== "object") return undefined;
+    const sig = activity.signal;
+    return typeof sig === "string" ? sig : undefined;
+  };
+  const fromAgentActivity = fromNested(e);
+  const fromData = fromNested(e.data as Record<string, unknown> | undefined);
+  const topLevel = typeof e.signal === "string" ? (e.signal as string) : undefined;
+  const signal = fromAgentActivity ?? fromData ?? topLevel;
+  return signal === "stop";
 }
 
 async function handleIssueEnvelope(

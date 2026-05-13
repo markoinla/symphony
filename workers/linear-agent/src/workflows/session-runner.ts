@@ -626,97 +626,170 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     let turnsRun = 0;
     const allEventSummaries: EventSummaryItem[] = [];
 
-    for (let turn = 1; turn <= maxTurns; turn++) {
-      turnsRun = turn;
-      const turnLabel = `turn-${turn}`;
-      const captured = prompt;
+    /**
+     * Run a batch of turns starting at `startTurn` until either the
+     * engine reports `done`, a dispatch error occurs, or the global
+     * `maxTurns` cap is hit. `turnsRun` is updated in-place. Always
+     * normalizes `needs_continuation` at `maxTurns` to `done`, so the
+     * return type excludes that variant.
+     */
+    type BatchTerminal = Exclude<TurnOutcome, { kind: "needs_continuation" }>;
+    const runTurnBatch = async (startTurn: number): Promise<BatchTerminal> => {
+      let batchTerminal: BatchTerminal | null = null;
+      for (let turn = startTurn; turn <= maxTurns; turn++) {
+        turnsRun = turn;
+        const turnLabel = `turn-${turn}`;
+        const captured = prompt;
 
-      // Resolve a fresh Linear OAuth token before each /run so
-      // multi-turn sessions never dispatch with an expired credential.
-      //
-      // Preference order:
-      //   1. Per-user Linear OAuth from `accounts` (acts as that human).
-      //   2. The install's app-scoped access_token (acts as the
-      //      Symphony Linear Agent install). Required for trigger-
-      //      initiated runs where no human user is associated and for
-      //      orgs that haven't completed the per-user link flow yet —
-      //      otherwise the engine launches without any Linear auth and
-      //      can't call the GraphQL API the prompt directs it to use.
-      //
-      // The token is delivered to the sandbox as the `LINEAR_API_TOKEN`
-      // env var (dispatcher maps `linear_token` → that env). The Linear
-      // MCP is no longer attached; the engine calls
-      // https://api.linear.app/graphql directly via curl using the
-      // cheatsheet baked into the prompt.
-      const linearMcpCredentials: RunCredentials | null = await step.do(
-        `resolve-linear-mcp-token-${turn}`,
-        async () => {
-          const result = await resolveLinearMcpToken({
-            env: this.env,
-            organizationId,
-            triggeringUserId:
-              webhookEvent.agentSession.comment?.userId ?? null,
-            runTimeoutMs: DEFAULT_TIMEOUT_MS,
-          });
-          const linearToken = result?.accessToken ?? token;
-          if (!linearToken) return null;
-          return { linear_token: linearToken } as RunCredentials;
-        },
-      );
+        // Resolve a fresh Linear OAuth token before each /run so
+        // multi-turn sessions never dispatch with an expired credential.
+        //
+        // Preference order:
+        //   1. Per-user Linear OAuth from `accounts` (acts as that human).
+        //   2. The install's app-scoped access_token (acts as the
+        //      Symphony Linear Agent install). Required for trigger-
+        //      initiated runs where no human user is associated and for
+        //      orgs that haven't completed the per-user link flow yet —
+        //      otherwise the engine launches without any Linear auth and
+        //      can't call the GraphQL API the prompt directs it to use.
+        //
+        // The token is delivered to the sandbox as the `LINEAR_API_TOKEN`
+        // env var (dispatcher maps `linear_token` → that env). The Linear
+        // MCP is no longer attached; the engine calls
+        // https://api.linear.app/graphql directly via curl using the
+        // cheatsheet baked into the prompt.
+        const linearMcpCredentials: RunCredentials | null = await step.do(
+          `resolve-linear-mcp-token-${turn}`,
+          async () => {
+            const result = await resolveLinearMcpToken({
+              env: this.env,
+              organizationId,
+              triggeringUserId:
+                webhookEvent.agentSession.comment?.userId ?? null,
+              runTimeoutMs: DEFAULT_TIMEOUT_MS,
+            });
+            const linearToken = result?.accessToken ?? token;
+            if (!linearToken) return null;
+            return { linear_token: linearToken } as RunCredentials;
+          },
+        );
 
-      const outcome: TurnOutcome = await step.do(
-        turnLabel,
-        { retries: { limit: 0, delay: "1 second", backoff: "constant" } },
-        async () =>
-          runTurn(this.env, sessionId, token, {
-            scope: resolved.scope,
-            issueId: issueIdentifier,
-            repoUrl: resolved.repoUrl,
-            prompt: captured,
-            engine: resolved.engine,
-            model: resolved.model,
-            githubToken,
-            credentials: linearMcpCredentials,
-            turn,
-          }),
-      );
+        const outcome: TurnOutcome = await step.do(
+          turnLabel,
+          { retries: { limit: 0, delay: "1 second", backoff: "constant" } },
+          async () =>
+            runTurn(this.env, sessionId, token, {
+              scope: resolved.scope,
+              issueId: issueIdentifier,
+              repoUrl: resolved.repoUrl,
+              prompt: captured,
+              engine: resolved.engine,
+              model: resolved.model,
+              githubToken,
+              credentials: linearMcpCredentials,
+              turn,
+            }),
+        );
 
-      if (outcome.kind === "dispatch_error") {
-        terminal = outcome;
-        break;
+        if (outcome.kind === "dispatch_error") {
+          batchTerminal = outcome;
+          break;
+        }
+        allEventSummaries.push(...outcome.eventSummary);
+        if (outcome.lastAssistant) lastAssistant = outcome.lastAssistant;
+
+        if (outcome.kind === "done") {
+          batchTerminal = outcome;
+          break;
+        }
+
+        // needs_continuation
+        if (turn >= maxTurns) {
+          // Treat hitting max_turns as done (engine ran out of budget;
+          // surface the last assistant message as the response).
+          batchTerminal = {
+            kind: "done",
+            result: outcome.result,
+            lastAssistant: outcome.lastAssistant,
+            inbandError: "max_turns_reached",
+            eventSummary: [],
+          };
+          break;
+        }
+
+        // Build the next-turn prompt. Symphony's
+        // `comment_watch.ex#continuation_section/1` is the reference;
+        // for pi we only have the previous assistant message to weave
+        // in (no Linear comment ingestion yet — that's item 7).
+        prompt = buildContinuationPrompt(resolved.prompt, outcome.lastAssistant);
       }
-      allEventSummaries.push(...outcome.eventSummary);
-      if (outcome.lastAssistant) lastAssistant = outcome.lastAssistant;
-
-      if (outcome.kind === "done") {
-        terminal = outcome;
-        break;
-      }
-
-      // needs_continuation
-      if (turn >= maxTurns) {
-        // Treat hitting max_turns as done (engine ran out of budget;
-        // surface the last assistant message as the response).
-        terminal = {
-          kind: "done",
-          result: outcome.result,
-          lastAssistant: outcome.lastAssistant,
-          inbandError: "max_turns_reached",
-          eventSummary: [],
+      if (!batchTerminal) {
+        // Unreachable in practice — the for-loop above always sets
+        // `batchTerminal` on completion or break. Defensive default
+        // for the type checker / paranoid eviction paths.
+        batchTerminal = {
+          kind: "dispatch_error",
+          message: "unreachable_no_terminal_outcome",
         };
+      }
+      return batchTerminal;
+    };
+
+    terminal = await runTurnBatch(1);
+
+    // Bounded wait for a follow-up `prompted` webhook between turn
+    // batches. Linear marks sessions stale after ~30 minutes so we
+    // wait just under that. If the user sends a new message in this
+    // window we re-run the turn loop with the new prompt; otherwise
+    // the wait rejects and we fall through to post-terminal-activity
+    // exactly as before. We only re-enter while:
+    //   - the previous batch ended cleanly (`done`, not dispatch_error)
+    //   - we still have budget on the global `maxTurns` cap
+    //
+    // `turnsRun` is NOT reset across the wait — total turns include
+    // follow-ups so a runaway conversation can't bypass the cap.
+    while (
+      terminal.kind === "done" &&
+      !terminal.inbandError &&
+      turnsRun < maxTurns
+    ) {
+      let followup: AgentSessionEventWebhook | null = null;
+      try {
+        const event = await step.waitForEvent<AgentSessionEventWebhook>(
+          `wait-for-prompted-${turnsRun}`,
+          { type: "linear.prompted", timeout: "25 minutes" },
+        );
+        followup = event.payload as AgentSessionEventWebhook;
+      } catch {
+        // Timeout (or any other step.waitForEvent rejection) → fall
+        // through to post-terminal-activity. We deliberately do NOT
+        // log here at error level; a 25-minute idle is the common
+        // case for a one-shot session.
         break;
       }
 
-      // Build the next-turn prompt. Symphony's
-      // `comment_watch.ex#continuation_section/1` is the reference;
-      // for pi we only have the previous assistant message to weave
-      // in (no Linear comment ingestion yet — that's item 7).
-      prompt = buildContinuationPrompt(resolved.prompt, outcome.lastAssistant);
+      // Re-derive the prompt from the follow-up payload. If the
+      // follow-up carries no prompt (rare — Linear should always
+      // include one) we fall back to the previous prompt so the
+      // engine at least has something to work with.
+      const followupPrompt = resolvePrompt(followup) ?? resolved.prompt;
+      // Re-apply the Linear GraphQL skill marker on the new prompt
+      // so follow-ups stay wired to the Linear skill. Idempotent.
+      prompt = withLinearGraphqlReference(followupPrompt, {
+        issueId: webhookEvent.agentSession.issue?.id ?? null,
+        issueIdentifier: webhookEvent.agentSession.issue?.identifier ?? null,
+        teamId:
+          webhookEvent.agentSession.issue?.teamId ??
+          webhookEvent.agentSession.issue?.team?.id ??
+          null,
+      });
+
+      terminal = await runTurnBatch(turnsRun + 1);
     }
 
     if (!terminal) {
-      // Should be unreachable — the for-loop above always sets `terminal`
-      // on completion or break. Defensive default for the type checker.
+      // Should be unreachable — runTurnBatch always returns a terminal.
+      // Defensive default for the type checker.
       terminal = {
         kind: "dispatch_error",
         message: "unreachable_no_terminal_outcome",

@@ -11,14 +11,19 @@
  *
  *   NormalizedEvent              → Linear AgentActivityContent
  *   thought       → { type: "thought", body }
- *   tool_call     → { type: "action",  action: tool, parameter }
- *   tool_result   → { type: "action",  action: "tool_result", parameter, result }
+ *   tool_call     → { type: "action",  action: tool, parameter, ephemeral: true }
+ *   tool_result   → { type: "action",  action: "tool_result", parameter, result, ephemeral: true }
  *                   (ok=false → { type: "error", body })
  *   assistant_msg → null (held back; surfaced as the terminal
  *                         `response` activity by SessionRunner)
  *   turn_end      → null (turn boundary is implicit in subsequent activities)
  *   error         → { type: "error", body }
  *   result        → null (handled separately by SessionRunner)
+ *
+ * Interim tool activities (`tool_call`, successful `tool_result`) are
+ * marked `ephemeral: true` so Linear can collapse / hide them once the
+ * session moves on, per the agent-interaction docs. Thoughts, errors,
+ * and failed tool results stay non-ephemeral so they remain visible.
  */
 
 import type { AgentActivityContent } from "../types/agent-session";
@@ -37,10 +42,15 @@ export function mapToActivity(
       return { type: "thought", body: truncate(event.text, THOUGHT_LIMIT) };
 
     case "tool_call":
+      // Interim tool activities are marked `ephemeral` so Linear can
+      // collapse / hide them once the session moves on, keeping the
+      // timeline readable on long runs. Final response/error stays
+      // non-ephemeral so users always have a record of the outcome.
       return {
         type: "action",
         action: event.tool,
         parameter: truncate(stringifyArgs(event.args), TOOL_PARAM_LIMIT),
+        ephemeral: true,
       };
 
     case "tool_result":
@@ -50,8 +60,10 @@ export function mapToActivity(
           action: "tool_result",
           parameter: event.tool_id ?? "",
           result: truncate(event.result ?? "", TOOL_RESULT_LIMIT),
+          ephemeral: true,
         };
       }
+      // Tool failures stay non-ephemeral — errors must stick.
       return {
         type: "error",
         body: truncate(event.result ?? "tool_call_failed", ERROR_LIMIT),

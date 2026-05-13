@@ -16,7 +16,7 @@ describe("mapToActivity", () => {
     expect(activity?.body?.endsWith("…")).toBe(true);
   });
 
-  it("maps tool_call to an action activity with serialized args", () => {
+  it("maps tool_call to an ephemeral action activity with serialized args", () => {
     expect(
       mapToActivity({
         type: "tool_call",
@@ -27,10 +27,11 @@ describe("mapToActivity", () => {
       type: "action",
       action: "read_file",
       parameter: '{"path":"README.md"}',
+      ephemeral: true,
     });
   });
 
-  it("maps successful tool_result to an action activity", () => {
+  it("maps successful tool_result to an ephemeral action activity", () => {
     expect(
       mapToActivity({
         type: "tool_result",
@@ -43,24 +44,31 @@ describe("mapToActivity", () => {
       action: "tool_result",
       parameter: "call_1",
       result: "file contents",
+      ephemeral: true,
     });
   });
 
-  it("maps failed tool_result to an error activity", () => {
-    expect(
-      mapToActivity({
-        type: "tool_result",
-        tool_id: "call_2",
-        ok: false,
-        result: "ENOENT",
-      }),
-    ).toEqual({ type: "error", body: "ENOENT" });
+  it("maps failed tool_result to a non-ephemeral error activity", () => {
+    const activity = mapToActivity({
+      type: "tool_result",
+      tool_id: "call_2",
+      ok: false,
+      result: "ENOENT",
+    });
+    expect(activity).toEqual({ type: "error", body: "ENOENT" });
+    expect(activity).not.toHaveProperty("ephemeral");
   });
 
-  it("maps error events to error activities", () => {
-    expect(
-      mapToActivity({ type: "error", message: "engine died" }),
-    ).toEqual({ type: "error", body: "engine died" });
+  it("maps error events to non-ephemeral error activities", () => {
+    const activity = mapToActivity({ type: "error", message: "engine died" });
+    expect(activity).toEqual({ type: "error", body: "engine died" });
+    expect(activity).not.toHaveProperty("ephemeral");
+  });
+
+  it("leaves thought activities non-ephemeral", () => {
+    const activity = mapToActivity({ type: "thought", text: "thinking" });
+    expect(activity).toEqual({ type: "thought", body: "thinking" });
+    expect(activity).not.toHaveProperty("ephemeral");
   });
 
   it("drops assistant_msg / turn_end / result (SessionRunner handles them)", () => {
