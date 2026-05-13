@@ -4,6 +4,7 @@ import type { Env } from "../index";
 import { buildActivityClient, postResponse } from "../lib/activities";
 import { DispatcherClient } from "../lib/dispatcher";
 import { dispatchTrigger } from "../lib/dispatch-trigger";
+import { refreshInstallToken } from "../lib/install-token";
 import {
   isIssueEnvelope,
   mapIssueUpdateToEvent,
@@ -414,7 +415,18 @@ async function handleStopSignal(
         c.env.DB,
       ).getByLinearOrgId(event.organizationId);
       if (install?.access_token) {
-        const linear = buildActivityClient(install.access_token);
+        // Best-effort refresh closure: if Linear rotated the token
+        // since we last persisted, the activity post will 401 and the
+        // helper will fetch a fresh one through this callback.
+        const orgId = install.organization_id;
+        const refreshLinearToken = async () => {
+          const r = await refreshInstallToken(c.env, orgId);
+          return r?.accessToken ?? null;
+        };
+        const linear = buildActivityClient(
+          install.access_token,
+          refreshLinearToken,
+        );
         await postResponse(
           linear,
           sessionId,

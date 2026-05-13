@@ -31,19 +31,24 @@ export interface LinearAgentInstallRecord {
   status: string;
   installed_at: number;
   refreshed_at: number;
+  // Unix seconds when the current access_token expires. NULL on rows
+  // installed before migration 0006 or when Linear's token response
+  // omitted `expires_in`. NULL signals "unknown — refresh on next use".
+  expires_at: number | null;
 }
 
 export class LinearAgentInstallStore {
   constructor(private readonly db: D1Database) {}
 
   private static readonly COLUMNS =
-    "id, organization_id, linear_organization_id, access_token, refresh_token, scopes, installed_by_user_id, status, installed_at, refreshed_at";
+    "id, organization_id, linear_organization_id, access_token, refresh_token, scopes, installed_by_user_id, status, installed_at, refreshed_at, expires_at";
 
   async upsert(input: {
     organizationId: string;
     linearOrganizationId: string;
     accessToken: string;
     refreshToken?: string | null;
+    expiresAt?: number | null;
     scopes: string;
     installedByUserId: string;
   }): Promise<void> {
@@ -52,8 +57,8 @@ export class LinearAgentInstallStore {
       .prepare(
         `INSERT INTO linear_agent_installs
            (id, organization_id, linear_organization_id, access_token, refresh_token,
-            scopes, installed_by_user_id, status, installed_at, refreshed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+            scopes, installed_by_user_id, status, installed_at, refreshed_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
          ON CONFLICT(linear_organization_id) DO UPDATE SET
            organization_id      = excluded.organization_id,
            access_token         = excluded.access_token,
@@ -61,7 +66,8 @@ export class LinearAgentInstallStore {
            scopes               = excluded.scopes,
            installed_by_user_id = excluded.installed_by_user_id,
            status               = 'active',
-           refreshed_at         = excluded.refreshed_at`,
+           refreshed_at         = excluded.refreshed_at,
+           expires_at           = excluded.expires_at`,
       )
       .bind(
         crypto.randomUUID(),
@@ -73,6 +79,7 @@ export class LinearAgentInstallStore {
         input.installedByUserId,
         now,
         now,
+        input.expiresAt ?? null,
       )
       .run();
   }
@@ -103,15 +110,49 @@ export class LinearAgentInstallStore {
     id: string,
     accessToken: string,
     refreshToken?: string | null,
+    expiresAt?: number | null,
   ): Promise<void> {
+    // Sentinel −1 lets us distinguish "caller passed undefined" (keep
+    // existing expiry) from "caller passed null" (clear it explicitly).
+    // SQLite has no NULL-vs-missing parameter; we encode it via COALESCE
+    // against a sentinel binding the same way `refresh_token` works.
+    const expiresArg = expiresAt === undefined ? null : expiresAt;
+    const preserveExpires = expiresAt === undefined;
     await this.db
       .prepare(
         `UPDATE linear_agent_installs
-         SET access_token = ?, refresh_token = COALESCE(?, refresh_token),
-             refreshed_at = ?
+         SET access_token = ?,
+             refresh_token = COALESCE(?, refresh_token),
+             refreshed_at = ?,
+             expires_at = CASE WHEN ? THEN expires_at ELSE ? END,
+             status = 'active'
          WHERE id = ?`,
       )
-      .bind(accessToken, refreshToken ?? null, Math.floor(Date.now() / 1000), id)
+      .bind(
+        accessToken,
+        refreshToken ?? null,
+        Math.floor(Date.now() / 1000),
+        preserveExpires ? 1 : 0,
+        expiresArg,
+        id,
+      )
+      .run();
+  }
+
+  /**
+   * Mark the install as needing user-driven reconnect (e.g. Linear's
+   * refresh endpoint returned `invalid_grant`). Future refresh attempts
+   * short-circuit on `status='reconnect_required'`, so this is sticky
+   * until a fresh OAuth callback re-upserts the row with status='active'.
+   */
+  async markReconnectRequired(id: string): Promise<void> {
+    await this.db
+      .prepare(
+        `UPDATE linear_agent_installs
+         SET status = 'reconnect_required'
+         WHERE id = ?`,
+      )
+      .bind(id)
       .run();
   }
 

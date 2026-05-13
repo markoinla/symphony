@@ -405,6 +405,7 @@ describe("POST /webhook stop signal", () => {
       status: "active",
       installed_at: now,
       refreshed_at: now,
+      expires_at: null,
     });
     return { orgId, linearOrgId };
   }

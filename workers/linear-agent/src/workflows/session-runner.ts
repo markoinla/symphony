@@ -35,7 +35,11 @@ import {
 } from "../lib/activities";
 import { resolveAgentViewerId } from "../lib/agent-viewer";
 import { mintInstallationToken } from "../lib/github-app";
-import { refreshInstallToken } from "../lib/install-token";
+import {
+  refreshInstallToken,
+  refreshInstallTokenIfNeeded,
+} from "../lib/install-token";
+import type { LinearTokenRefresher } from "../lib/linear-graphql";
 import {
   DispatcherClient,
   DispatcherError,
@@ -261,13 +265,16 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       const install = await installs.getByLinearOrgId(linearOrgId);
       if (!install) return null;
 
-      // Proactively refresh the install access_token. Linear's tokens
-      // expire (typically within a day) and we have no `expires_at`
-      // tracking on the install row, so a stale token would otherwise
-      // 401 inside `post-initial-thought` and silently retry forever.
-      const refreshed = await refreshInstallToken(
+      // Proactive refresh, but only when the stored expiry is inside
+      // our run-timeout + safety window. Migration 0006 added
+      // `expires_at`; legacy rows with null expiry are refreshed too
+      // (treated as unknown). This skips Linear's `/oauth/token` on
+      // every session start once the column is populated — important
+      // because each call burns a refresh_token rotation.
+      const refreshed = await refreshInstallTokenIfNeeded(
         this.env,
         install.organization_id,
+        DEFAULT_TIMEOUT_MS,
       );
       const accessToken = refreshed?.accessToken ?? install.access_token;
 
@@ -289,12 +296,34 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       return { status: "no_token" };
     }
 
-    const token = installInfo.token;
+    // `token` is mutated by the refresh closure so subsequent top-level
+    // helper calls (updateIssue, updateAgentSession, …) pick up the
+    // rotated token even though they take a plain string arg. Inside a
+    // single helper, `linearGraphQL`'s 401 retry already refreshes on
+    // demand; the latching here is for cross-helper reuse within one
+    // workflow instance.
+    let token = installInfo.token;
     const organizationId = installInfo.organizationId;
     const githubAppInstallationId = installInfo.githubAppInstallationId;
 
+    // Refresh closure threaded into every Linear GraphQL helper used
+    // below. Mirrors `SymphonyElixir.Linear.AgentAPI.handle_unauthorized`
+    // (lib/symphony_elixir/linear/agent_api.ex:180) — on 401, fetch a
+    // fresh token via the OAuth refresh flow, update the latched
+    // `token`, and let the helper retry once.
+    //
+    // `refreshInstallToken` is single-flight per org-id within this
+    // module's lifetime, so the dozens of activity posts that fire
+    // off the dispatcher SSE stream in `runTurn` will collapse onto
+    // one refresh call when the token expires mid-session.
+    const refreshLinearToken: LinearTokenRefresher = async () => {
+      const r = await refreshInstallToken(this.env, organizationId);
+      if (r) token = r.accessToken;
+      return r?.accessToken ?? null;
+    };
+
     await step.do("post-initial-thought", async () => {
-      const linear = buildActivityClient(token);
+      const linear = buildActivityClient(token, refreshLinearToken);
       await postThought(
         linear,
         sessionId,
@@ -331,6 +360,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
                   token,
                   linearOrgId,
                   this.env.LINEAR_TOKENS,
+                  refreshLinearToken,
                 )
               : null;
 
@@ -338,7 +368,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
               await updateIssue(token, {
                 issueId,
                 delegateId: viewerId,
-              }).catch((e) => {
+              }, refreshLinearToken).catch((e) => {
                 console.error(
                   "issue_update_failed",
                   JSON.stringify({
@@ -372,7 +402,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
                   url: `${publicUrl.replace(/\/$/, "")}/dashboard/sessions/${sessionId}`,
                 },
               ],
-            });
+            }, refreshLinearToken);
           } catch (e) {
             console.error(
               "agent_session_external_urls_failed",
@@ -396,7 +426,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
               { content: "Preparing sandbox", status: "completed" },
               { content: "Running agent", status: "inProgress" },
             ],
-          });
+          }, refreshLinearToken);
         } catch (e) {
           console.error(
             "agent_session_plan_init_failed",
@@ -511,7 +541,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       // a conversational nudge the user can reply to in-thread.
       await step.do("post-no-repo-error", async () => {
         await postElicitation(
-          buildActivityClient(token),
+          buildActivityClient(token, refreshLinearToken),
           sessionId,
           "No repository is configured for this team yet. Add a project row in the Symphony dashboard (Projects tab), then re-mention me to retry.",
         );
@@ -524,7 +554,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       // issue description and re-mention. Elicitation, not error.
       await step.do("post-no-prompt-error", async () => {
         await postElicitation(
-          buildActivityClient(token),
+          buildActivityClient(token, refreshLinearToken),
           sessionId,
           "I didn't find a prompt in this session. Reply with the task you'd like me to do, or add a description to the issue and re-mention me.",
         );
@@ -673,7 +703,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
             timeout: "35 minutes",
           },
           async () =>
-            runTurn(this.env, sessionId, token, {
+            runTurn(this.env, sessionId, token, refreshLinearToken, {
               scope: resolved.scope,
               issueId: issueIdentifier,
               repoUrl: resolved.repoUrl,
@@ -807,7 +837,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     }
 
     await step.do("post-terminal-activity", async () => {
-      const linear = buildActivityClient(token);
+      const linear = buildActivityClient(token, refreshLinearToken);
       if (terminal.kind === "dispatch_error") {
         await postError(linear, sessionId, terminal.message);
         return;
@@ -854,7 +884,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
                 status: succeeded ? "completed" : "canceled",
               },
             ],
-          });
+          }, refreshLinearToken);
         } catch (e) {
           console.error(
             "agent_session_plan_final_failed",
@@ -1130,6 +1160,7 @@ async function runTurn(
   env: Env,
   sessionId: string,
   token: string,
+  refreshLinearToken: LinearTokenRefresher,
   args: {
     scope: string;
     issueId: string;
@@ -1143,7 +1174,7 @@ async function runTurn(
     turn: number;
   },
 ): Promise<TurnOutcome> {
-  const linear = buildActivityClient(token);
+  const linear = buildActivityClient(token, refreshLinearToken);
   const dispatcher = new DispatcherClient(
     env.DISPATCHER_URL,
     env.DISPATCH_HMAC_SECRET,

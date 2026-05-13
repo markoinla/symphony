@@ -19,16 +19,41 @@ export interface OAuthRefreshParams {
 export interface OAuthRefreshResult {
   accessToken: string;
   refreshToken: string | null;
+  /** ISO timestamp — convenient for the `tokenNeedsRefresh` helper. */
   expiresAt: string | null;
+  /** Unix seconds — what we persist on `linear_agent_installs.expires_at`. */
+  expiresAtUnix: number | null;
 }
 
 export class OAuthRefreshError extends Error {
+  /**
+   * True when Linear returned `error: invalid_grant` or
+   * `error: unauthorized_client` on the OAuth token endpoint —
+   * the refresh_token is permanently dead and the user must reconnect.
+   * Mirrors `SymphonyElixir.Linear.OAuth.Refresher.invalid_grant?/2`.
+   */
+  public readonly invalidGrant: boolean;
+
   constructor(
     public readonly status: number,
     public readonly body: string,
   ) {
     super(`oauth_refresh_failed: ${status} ${body}`);
     this.name = "OAuthRefreshError";
+    this.invalidGrant = isInvalidGrant(status, body);
+  }
+}
+
+function isInvalidGrant(status: number, body: string): boolean {
+  if (status !== 400 && status !== 401) return false;
+  // Linear's token endpoint returns JSON; if for some reason the body
+  // is not JSON we fall back to substring matching so the classification
+  // still fires on the common case.
+  try {
+    const parsed = JSON.parse(body) as { error?: string };
+    return parsed.error === "invalid_grant" || parsed.error === "unauthorized_client";
+  } catch {
+    return /\b(invalid_grant|unauthorized_client)\b/.test(body);
   }
 }
 
@@ -65,14 +90,15 @@ export async function refreshOAuthToken(
     throw new OAuthRefreshError(0, "missing_access_token_in_response");
   }
 
-  const expiresAt = json.expires_in
-    ? new Date(Date.now() + json.expires_in * 1000).toISOString()
-    : null;
+  const expiresAtMs = json.expires_in ? Date.now() + json.expires_in * 1000 : null;
+  const expiresAt = expiresAtMs ? new Date(expiresAtMs).toISOString() : null;
+  const expiresAtUnix = expiresAtMs ? Math.floor(expiresAtMs / 1000) : null;
 
   return {
     accessToken: json.access_token,
     refreshToken: json.refresh_token ?? null,
     expiresAt,
+    expiresAtUnix,
   };
 }
 
@@ -87,4 +113,22 @@ export function tokenNeedsRefresh(
   const expiry = new Date(expiresAt).getTime();
   if (isNaN(expiry)) return false;
   return expiry < Date.now() + runTimeoutMs + safetyMarginMs;
+}
+
+/**
+ * Unix-seconds variant of `tokenNeedsRefresh`. Matches the column type
+ * on `linear_agent_installs.expires_at` so callers can pass the row
+ * directly without converting through Date.
+ *
+ * Conservative on unknown expiries: returns `true` when `expiresAt` is
+ * null so legacy install rows (pre migration 0006) refresh on their
+ * next use instead of riding a possibly-stale stored token to a 401.
+ */
+export function tokenNeedsRefreshUnix(
+  expiresAt: number | null,
+  runTimeoutMs: number,
+  safetyMarginMs: number = DEFAULT_SAFETY_MARGIN_MS,
+): boolean {
+  if (expiresAt === null) return true;
+  return expiresAt * 1000 < Date.now() + runTimeoutMs + safetyMarginMs;
 }

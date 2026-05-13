@@ -15,8 +15,16 @@
  */
 
 import { createAgentSessionOnIssue } from "./activities";
-import { refreshInstallToken } from "./install-token";
+import {
+  refreshInstallToken,
+  refreshInstallTokenIfNeeded,
+} from "./install-token";
 import { LinearAgentInstallStore } from "./store";
+
+// Conservative timeout floor for the dispatch path. Mirrors the
+// session-runner's `DEFAULT_TIMEOUT_MS` so a session-start-time refresh
+// uses the same safety window the runner itself does.
+const DISPATCH_RUN_TIMEOUT_MS = 10 * 60 * 1000;
 import { renderPrompt } from "./workflows/render";
 import { ProjectStore } from "./store";
 import type { Env } from "../index";
@@ -104,17 +112,28 @@ export async function dispatchTrigger(
     };
   }
 
-  // Resolve a fresh install access token. Linear tokens expire ~24h
-  // and we have no `expires_at` tracking on `linear_agent_installs`,
-  // so we refresh unconditionally before any GraphQL call that uses
-  // the install actor.
+  // Resolve a fresh install access token. Linear tokens expire ~24h —
+  // migration 0006 added `expires_at` so we only refresh when the
+  // stored expiry is inside the run-timeout window. The refresh closure
+  // injected into `createAgentSessionOnIssue` below handles the
+  // mid-call expiry edge case too (e.g. row was fresh at load time but
+  // expired before this mutation ran).
   const installs = new LinearAgentInstallStore(env.DB);
   const install = await installs.getByOrgId(orgId);
   if (!install) {
     return { outcome: "error", error: "no_install" };
   }
-  const refreshed = await refreshInstallToken(env, orgId);
-  const accessToken = refreshed?.accessToken ?? install.access_token;
+  const refreshed = await refreshInstallTokenIfNeeded(
+    env,
+    orgId,
+    DISPATCH_RUN_TIMEOUT_MS,
+  );
+  let accessToken = refreshed?.accessToken ?? install.access_token;
+  const refreshLinearToken = async () => {
+    const r = await refreshInstallToken(env, orgId);
+    if (r) accessToken = r.accessToken;
+    return r?.accessToken ?? null;
+  };
 
   // Mint a Linear-side AgentSession on the issue. Returns a UUID that
   // we use both as the SESSION_RUNNER workflow instance id (so Linear
@@ -123,7 +142,11 @@ export async function dispatchTrigger(
   // detail page lines up with the Linear session URL).
   let linearSessionId: string;
   try {
-    const result = await createAgentSessionOnIssue(accessToken, issue.id);
+    const result = await createAgentSessionOnIssue(
+      accessToken,
+      issue.id,
+      refreshLinearToken,
+    );
     if (!result.success || !result.sessionId) {
       return {
         outcome: "error",
