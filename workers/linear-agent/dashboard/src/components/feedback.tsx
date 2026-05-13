@@ -1,4 +1,4 @@
-import { Loader2, AlertCircle, CheckCircle2, Info } from 'lucide-react'
+import { Loader2, AlertCircle } from 'lucide-react'
 
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { cn } from '@/lib/utils'
@@ -27,28 +27,6 @@ export function ErrorPanel({ detail, title }: { detail: string; title: string })
       <AlertDescription className="whitespace-pre-wrap break-words">
         {detail}
       </AlertDescription>
-    </Alert>
-  )
-}
-
-export function FeedbackBanner({
-  message,
-  variant = 'info',
-}: {
-  message: string
-  variant?: 'info' | 'success' | 'error'
-}) {
-  const Icon = variant === 'error' ? AlertCircle : variant === 'success' ? CheckCircle2 : Info
-  return (
-    <Alert
-      variant={variant === 'error' ? 'destructive' : 'default'}
-      className={cn(
-        variant === 'success' &&
-          'border-[color-mix(in_oklab,var(--th-success)_20%,transparent)] bg-[color-mix(in_oklab,var(--th-success)_8%,transparent)] text-[var(--th-success)] *:data-[slot=alert-description]:text-[color-mix(in_oklab,var(--th-success)_85%,var(--foreground))]',
-      )}
-    >
-      <Icon aria-hidden />
-      <AlertTitle>{message}</AlertTitle>
     </Alert>
   )
 }
