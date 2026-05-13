@@ -54,7 +54,41 @@ export function resolvePrompt(event: AgentSessionEventWebhook): string | null {
     typeof event.guidance === "string" && event.guidance.trim().length > 0
       ? event.guidance.trim()
       : null;
-  return guidance ? `${base}\n\n---\nGuidance:\n${guidance}` : base;
+  const withGuidance = guidance
+    ? `${base}\n\n---\nGuidance:\n${guidance}`
+    : base;
+
+  const priorBlock = renderPreviousComments(event.previousComments);
+  return priorBlock ? `${priorBlock}\n\n---\n\n${withGuidance}` : withGuidance;
+}
+
+/**
+ * Render the "Prior comments:" preamble Linear gives us on the webhook
+ * envelope (`event.previousComments`, chronological). Caps at the 10
+ * most recent comments and truncates each body to keep the prompt
+ * compact — long threads regularly run past the context budget.
+ *
+ * Returns `null` when the array is missing or has no usable entries
+ * so callers can compose `priorBlock ? ... : original` cleanly.
+ */
+function renderPreviousComments(
+  comments: AgentSessionEventWebhook["previousComments"],
+): string | null {
+  if (!Array.isArray(comments) || comments.length === 0) return null;
+  // Linear sends comments in chronological order — take the tail so
+  // we surface the most recent context first when truncated.
+  const recent = comments.slice(-10);
+  const lines: string[] = [];
+  for (const c of recent) {
+    if (!c || typeof c.body !== "string") continue;
+    const stripped = c.body.replace(/@[A-Za-z0-9_-]+/g, "").trim();
+    if (stripped.length === 0) continue;
+    const truncated = truncate(stripped, 500);
+    const userTag = c.userId ? `(userId: ${c.userId}) ` : "";
+    lines.push(`- ${userTag}${truncated}`);
+  }
+  if (lines.length === 0) return null;
+  return `Prior comments:\n${lines.join("\n")}`;
 }
 
 interface PiMessageContent {

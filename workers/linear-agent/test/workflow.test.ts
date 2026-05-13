@@ -195,28 +195,10 @@ function installFetchMock(opts: {
     const body = init?.body as string | undefined;
 
     if (url === "https://api.linear.app/graphql") {
-      if (body) {
-        const parsed = JSON.parse(body) as {
-          variables?: {
-            input?: {
-              agentSessionId: string;
-              content: {
-                type: string;
-                body?: string;
-                action?: string;
-                parameter?: string;
-                result?: string;
-              };
-            };
-          };
-        };
-        const input = parsed.variables?.input;
-        if (input) linearCalls.push(input);
-      }
-      return new Response(
-        JSON.stringify({ data: { agentActivityCreate: { success: true } } }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+      return new Response(routeLinearGraphql(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
     if (url.endsWith("/run")) {
@@ -234,6 +216,77 @@ function installFetchMock(opts: {
 
     throw new Error(`unexpected fetch in test: ${url}`);
   });
+}
+
+interface ParsedLinearBody {
+  query?: string;
+  variables?: {
+    input?: {
+      agentSessionId?: string;
+      content?: {
+        type: string;
+        body?: string;
+        action?: string;
+        parameter?: string;
+        result?: string;
+      };
+    };
+  };
+}
+
+/**
+ * Dispatch a Linear GraphQL POST body to the appropriate canned
+ * response. T3 added several non-activity mutations (workflowStates
+ * query, issueUpdate, agentSessionUpdate, viewer query); all are
+ * answered with success and only `agentActivityCreate` calls get
+ * pushed into `linearCalls` so the existing assertions about timeline
+ * activities keep working.
+ */
+function routeLinearGraphql(body: string | undefined): string {
+  if (!body) {
+    return JSON.stringify({
+      data: { agentActivityCreate: { success: true } },
+    });
+  }
+  let parsed: ParsedLinearBody;
+  try {
+    parsed = JSON.parse(body) as ParsedLinearBody;
+  } catch {
+    return JSON.stringify({});
+  }
+  const query = parsed.query ?? "";
+
+  if (query.includes("AgentActivityCreate")) {
+    const input = parsed.variables?.input;
+    if (input && input.agentSessionId && input.content) {
+      linearCalls.push({
+        agentSessionId: input.agentSessionId,
+        content: input.content,
+      });
+    }
+    return JSON.stringify({ data: { agentActivityCreate: { success: true } } });
+  }
+  if (query.includes("WorkflowStates")) {
+    return JSON.stringify({
+      data: {
+        workflowStates: {
+          nodes: [{ id: "started-1", name: "In Progress", position: 1, type: "started" }],
+        },
+      },
+    });
+  }
+  if (query.includes("IssueUpdate")) {
+    return JSON.stringify({ data: { issueUpdate: { success: true } } });
+  }
+  if (query.includes("AgentSessionUpdate")) {
+    return JSON.stringify({
+      data: { agentSessionUpdate: { success: true } },
+    });
+  }
+  if (query.includes("viewer")) {
+    return JSON.stringify({ data: { viewer: { id: "agent-viewer-1" } } });
+  }
+  return JSON.stringify({ data: {} });
 }
 
 beforeEach(() => {
@@ -336,12 +389,14 @@ describe("SessionRunner.run — happy path", () => {
     expect(ran).toEqual([
       "load-token",
       "post-initial-thought",
+      "start-session-side-effects",
       "resolve-inputs",
       "mint-github-token",
       "record-session-start",
       "resolve-linear-mcp-token-1",
       "turn-1",
       "post-terminal-activity",
+      "update-final-plan",
       "record-session-end",
       "stop-sandbox",
     ]);
@@ -459,15 +514,18 @@ describe("SessionRunner.run — abort branches", () => {
     expect(ran).toEqual([
       "load-token",
       "post-initial-thought",
+      "start-session-side-effects",
       "resolve-inputs",
       "post-no-repo-error",
       "stop-sandbox",
     ]);
     expect(linearCalls.map((c) => c.content.type)).toEqual([
       "thought",
-      "error",
+      "elicitation",
     ]);
-    expect(linearCalls[1]?.content.body).toContain("No repository is configured");
+    expect(linearCalls[1]?.content.body).toContain(
+      "No repository is configured for this team yet",
+    );
   });
 
   it("posts thought + error when no prompt is in the payload", async () => {
@@ -490,15 +548,18 @@ describe("SessionRunner.run — abort branches", () => {
     expect(ran).toEqual([
       "load-token",
       "post-initial-thought",
+      "start-session-side-effects",
       "resolve-inputs",
       "post-no-prompt-error",
       "stop-sandbox",
     ]);
     expect(linearCalls.map((c) => c.content.type)).toEqual([
       "thought",
-      "error",
+      "elicitation",
     ]);
-    expect(linearCalls[1]?.content.body).toContain("Couldn't find a prompt");
+    expect(linearCalls[1]?.content.body).toContain(
+      "I didn't find a prompt in this session",
+    );
   });
 });
 
@@ -536,12 +597,14 @@ describe("SessionRunner.run — dispatch failures", () => {
     expect(ran).toEqual([
       "load-token",
       "post-initial-thought",
+      "start-session-side-effects",
       "resolve-inputs",
       "mint-github-token",
       "record-session-start",
       "resolve-linear-mcp-token-1",
       "turn-1",
       "post-terminal-activity",
+      "update-final-plan",
       "record-session-end",
       "stop-sandbox",
     ]);
@@ -654,22 +717,10 @@ describe("SessionRunner.run — multi-turn loop", () => {
       const body = init?.body as string | undefined;
 
       if (url === "https://api.linear.app/graphql") {
-        if (body) {
-          const parsed = JSON.parse(body) as {
-            variables?: {
-              input?: {
-                agentSessionId: string;
-                content: { type: string; body?: string };
-              };
-            };
-          };
-          const input = parsed.variables?.input;
-          if (input) linearCalls.push(input);
-        }
-        return new Response(
-          JSON.stringify({ data: { agentActivityCreate: { success: true } } }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
+        return new Response(routeLinearGraphql(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
       if (url.endsWith("/run")) {
@@ -743,19 +794,10 @@ describe("SessionRunner.run — multi-turn loop", () => {
       const body = init?.body as string | undefined;
 
       if (url === "https://api.linear.app/graphql") {
-        if (body) {
-          const parsed = JSON.parse(body) as {
-            variables?: {
-              input?: { agentSessionId: string; content: { type: string; body?: string } };
-            };
-          };
-          const input = parsed.variables?.input;
-          if (input) linearCalls.push(input);
-        }
-        return new Response(
-          JSON.stringify({ data: { agentActivityCreate: { success: true } } }),
-          { status: 200 },
-        );
+        return new Response(routeLinearGraphql(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
       if (url.endsWith("/run")) {
@@ -938,10 +980,10 @@ function captureDispatcherRunBodies(
     const body = init?.body as string | undefined;
 
     if (url === "https://api.linear.app/graphql") {
-      return new Response(
-        JSON.stringify({ data: { agentActivityCreate: { success: true } } }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
+      return new Response(routeLinearGraphql(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
     if (url.endsWith("/run")) {
@@ -971,3 +1013,367 @@ function captureDispatcherRunBodies(
     throw new Error(`unexpected fetch in test: ${url}`);
   });
 }
+
+// Tests for T3's start-session-side-effects step: status transition,
+// delegate assignment, dashboard externalUrls, and initial plan
+// posting. Captures every Linear GraphQL POST so we can verify which
+// mutations fired with which variables — rather than relying on the
+// stripped-down `linearCalls` array that only records
+// `agentActivityCreate`.
+interface CapturedMutation {
+  operation: string;
+  variables: Record<string, unknown>;
+}
+
+function installFetchMockCapturing(opts: {
+  dispatcherEvents?: NormalizedEvent[];
+  publicUrl?: string;
+  startedStateId?: string | null;
+  viewerId?: string | null;
+}): CapturedMutation[] {
+  const captured: CapturedMutation[] = [];
+  const startedStateId =
+    opts.startedStateId === undefined ? "started-1" : opts.startedStateId;
+  const viewerId = opts.viewerId === undefined ? "agent-viewer-1" : opts.viewerId;
+
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = typeof input === "string" ? input : (input as Request).url;
+    const body = init?.body as string | undefined;
+
+    if (url === "https://api.linear.app/graphql") {
+      if (body) {
+        const parsed = JSON.parse(body) as {
+          query?: string;
+          variables?: Record<string, unknown>;
+        };
+        const query = parsed.query ?? "";
+        let operation = "unknown";
+        if (query.includes("AgentActivityCreate")) operation = "agentActivityCreate";
+        else if (query.includes("WorkflowStates")) operation = "workflowStates";
+        else if (query.includes("IssueUpdate")) operation = "issueUpdate";
+        else if (query.includes("AgentSessionUpdate")) operation = "agentSessionUpdate";
+        else if (query.includes("viewer")) operation = "viewer";
+        captured.push({ operation, variables: parsed.variables ?? {} });
+
+        if (operation === "agentActivityCreate") {
+          const input = (parsed.variables?.input ?? {}) as {
+            agentSessionId?: string;
+            content?: {
+              type: string;
+              body?: string;
+              action?: string;
+              parameter?: string;
+              result?: string;
+            };
+          };
+          if (input.agentSessionId && input.content) {
+            linearCalls.push({
+              agentSessionId: input.agentSessionId,
+              content: input.content,
+            });
+          }
+        }
+      }
+
+      // Canned responses per operation.
+      const parsed = JSON.parse(body ?? "{}") as { query?: string };
+      const q = parsed.query ?? "";
+      if (q.includes("WorkflowStates")) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              workflowStates: {
+                nodes: startedStateId
+                  ? [
+                      {
+                        id: startedStateId,
+                        name: "In Progress",
+                        position: 1,
+                        type: "started",
+                      },
+                    ]
+                  : [],
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (q.includes("viewer")) {
+        return new Response(
+          JSON.stringify({
+            data: { viewer: viewerId ? { id: viewerId } : null },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (q.includes("IssueUpdate")) {
+        return new Response(
+          JSON.stringify({ data: { issueUpdate: { success: true } } }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (q.includes("AgentSessionUpdate")) {
+        return new Response(
+          JSON.stringify({
+            data: { agentSessionUpdate: { success: true } },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({ data: { agentActivityCreate: { success: true } } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    if (url.endsWith("/run")) {
+      return new Response(
+        buildSseBodyStream(
+          opts.dispatcherEvents ?? [
+            { type: "assistant_msg", text: "ok" },
+            { type: "turn_end", turn: 1, reason: "completed" },
+            {
+              type: "result",
+              exit_code: 0,
+              duration_ms: 1,
+              branch: null,
+              pr_url: null,
+            },
+          ],
+        ),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+      );
+    }
+
+    throw new Error(`unexpected fetch in test: ${url}`);
+  });
+
+  return captured;
+}
+
+describe("SessionRunner.run — start-session-side-effects", () => {
+  it("on `created`: queries viewer + workflowStates, then issueUpdate + agentSessionUpdate (externalUrls + plan)", async () => {
+    const kv = new FakeKV();
+    const db = seededDb();
+    const captured = installFetchMockCapturing({});
+
+    const runner = buildRunner(makeEnv(kv, {}, db));
+    const { step, ran } = makeStep();
+
+    const event: AgentSessionEventWebhook = {
+      type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
+      action: "created",
+      webhookId: "wh-side-effects",
+      agentSession: baseSession,
+      promptContext: baseSession.promptContext,
+    };
+
+    await runner.run(makeEvent(event), step as never);
+
+    expect(ran).toContain("start-session-side-effects");
+    expect(ran).toContain("update-final-plan");
+
+    // Status: fetchTeamStartedState was called with the team id.
+    const wfStates = captured.find((c) => c.operation === "workflowStates");
+    expect(wfStates?.variables).toEqual({ teamId: "team-abc" });
+
+    // Viewer id was fetched (no cached entry on the cold KV).
+    expect(captured.some((c) => c.operation === "viewer")).toBe(true);
+
+    // issueUpdate: both stateId (from workflowStates) and delegateId
+    // (from viewer) end up in the input.
+    const issueUpdate = captured.find((c) => c.operation === "issueUpdate");
+    expect(issueUpdate).toBeDefined();
+    expect(issueUpdate!.variables).toMatchObject({
+      id: "issue-1",
+      input: { stateId: "started-1", delegateId: "agent-viewer-1" },
+    });
+
+    // agentSessionUpdate must fire at least twice: once with the
+    // externalUrls and once with the initial plan (start-side-effects).
+    // A third call with the final plan happens after the terminal step.
+    const sessionUpdates = captured.filter(
+      (c) => c.operation === "agentSessionUpdate",
+    );
+    expect(sessionUpdates.length).toBeGreaterThanOrEqual(2);
+
+    // Externally-linkable URL points to the dashboard for this session.
+    const extCall = sessionUpdates.find(
+      (c) =>
+        (c.variables.input as { externalUrls?: unknown[] })?.externalUrls !==
+        undefined,
+    );
+    expect(extCall).toBeDefined();
+    expect(extCall!.variables).toMatchObject({
+      id: "session-1",
+      input: {
+        externalUrls: [
+          {
+            label: "Open in Symphony",
+            url: "https://agent.example/dashboard/sessions/session-1",
+          },
+        ],
+      },
+    });
+
+    // Initial plan: two items, second still in progress at start.
+    const planInitCall = sessionUpdates.find((c) => {
+      const plan = (c.variables.input as { plan?: Array<{ status: string }> })
+        ?.plan;
+      return (
+        Array.isArray(plan) &&
+        plan.length === 2 &&
+        plan[1]?.status === "inProgress"
+      );
+    });
+    expect(planInitCall).toBeDefined();
+
+    // Final plan: both items completed (engine exit_code 0).
+    const planFinalCall = sessionUpdates.find((c) => {
+      const plan = (c.variables.input as { plan?: Array<{ status: string }> })
+        ?.plan;
+      return (
+        Array.isArray(plan) &&
+        plan.length === 2 &&
+        plan[1]?.status === "completed"
+      );
+    });
+    expect(planFinalCall).toBeDefined();
+  });
+
+  it("on `prompted`: skips start-session-side-effects entirely (status/delegate untouched)", async () => {
+    const kv = new FakeKV();
+    const db = seededDb();
+    const captured = installFetchMockCapturing({});
+
+    const runner = buildRunner(makeEnv(kv, {}, db));
+    const { step, ran } = makeStep();
+
+    const event: AgentSessionEventWebhook = {
+      type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
+      action: "prompted",
+      webhookId: "wh-prompted",
+      agentSession: baseSession,
+      promptContext: baseSession.promptContext,
+    };
+
+    await runner.run(makeEvent(event), step as never);
+
+    expect(ran).not.toContain("start-session-side-effects");
+    expect(ran).not.toContain("update-final-plan");
+    expect(captured.find((c) => c.operation === "issueUpdate")).toBeUndefined();
+    expect(
+      captured.find((c) => c.operation === "agentSessionUpdate"),
+    ).toBeUndefined();
+    expect(captured.find((c) => c.operation === "workflowStates")).toBeUndefined();
+    expect(captured.find((c) => c.operation === "viewer")).toBeUndefined();
+  });
+
+  it("skips externalUrls when env.URL is unset and continues running", async () => {
+    const kv = new FakeKV();
+    const db = seededDb();
+    const captured = installFetchMockCapturing({});
+
+    // Empty string disables the externalUrls call.
+    const env = makeEnv(kv, { URL: "" }, db);
+    const runner = buildRunner(env);
+    const { step } = makeStep();
+
+    const event: AgentSessionEventWebhook = {
+      type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
+      action: "created",
+      webhookId: "wh-no-url",
+      agentSession: baseSession,
+      promptContext: baseSession.promptContext,
+    };
+
+    await runner.run(makeEvent(event), step as never);
+
+    // No agentSessionUpdate call with externalUrls — but plan calls
+    // still happen.
+    const externalCall = captured.find(
+      (c) =>
+        c.operation === "agentSessionUpdate" &&
+        (c.variables.input as { externalUrls?: unknown })?.externalUrls !==
+          undefined,
+    );
+    expect(externalCall).toBeUndefined();
+
+    // Plan was still posted (init + final).
+    const planCalls = captured.filter(
+      (c) =>
+        c.operation === "agentSessionUpdate" &&
+        (c.variables.input as { plan?: unknown })?.plan !== undefined,
+    );
+    expect(planCalls.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it("caches viewer id in KV across runs (second run skips the viewer query)", async () => {
+    const kv = new FakeKV();
+    const db = seededDb();
+    const captured = installFetchMockCapturing({});
+
+    const runner = buildRunner(makeEnv(kv, {}, db));
+    const { step } = makeStep();
+
+    const event1: AgentSessionEventWebhook = {
+      type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
+      action: "created",
+      webhookId: "wh-cache-1",
+      agentSession: baseSession,
+      promptContext: baseSession.promptContext,
+    };
+    const event2: AgentSessionEventWebhook = {
+      ...event1,
+      webhookId: "wh-cache-2",
+    };
+
+    await runner.run(makeEvent(event1), step as never);
+    const firstViewerCalls = captured.filter((c) => c.operation === "viewer");
+
+    await runner.run(makeEvent(event2), step as never);
+    const totalViewerCalls = captured.filter((c) => c.operation === "viewer");
+
+    // First run fetches the viewer; second uses the KV cache and skips.
+    expect(firstViewerCalls.length).toBe(1);
+    expect(totalViewerCalls.length).toBe(1);
+    // KV has the cached entry.
+    expect(await kv.get(`viewer:${LINEAR_ORG_ID}`)).toBe("agent-viewer-1");
+  });
+
+  it("continues on workflowStates failure (skips stateId but still tries delegate)", async () => {
+    const kv = new FakeKV();
+    const db = seededDb();
+    const captured = installFetchMockCapturing({ startedStateId: null });
+
+    const runner = buildRunner(makeEnv(kv, {}, db));
+    const { step } = makeStep();
+
+    const event: AgentSessionEventWebhook = {
+      type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
+      action: "created",
+      webhookId: "wh-no-state",
+      agentSession: baseSession,
+      promptContext: baseSession.promptContext,
+    };
+
+    const result = await runner.run(makeEvent(event), step as never);
+    expect(result.status).toBe("ok");
+
+    const issueUpdate = captured.find((c) => c.operation === "issueUpdate");
+    // No stateId in the input, but delegateId still set.
+    expect(issueUpdate?.variables).toMatchObject({
+      id: "issue-1",
+      input: { delegateId: "agent-viewer-1" },
+    });
+    expect(
+      (issueUpdate?.variables.input as { stateId?: string }).stateId,
+    ).toBeUndefined();
+  });
+});

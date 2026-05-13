@@ -28,10 +28,12 @@ import type { WorkflowEvent } from "cloudflare:workers";
 import type { Env } from "../index";
 import {
   buildActivityClient,
+  postElicitation,
   postError,
   postResponse,
   postThought,
 } from "../lib/activities";
+import { resolveAgentViewerId } from "../lib/agent-viewer";
 import { mintInstallationToken } from "../lib/github-app";
 import { refreshInstallToken } from "../lib/install-token";
 import {
@@ -41,6 +43,11 @@ import {
   type RunCredentials,
 } from "../lib/dispatcher";
 import { lastAssistantText, mapToActivity } from "../lib/event-mapper";
+import {
+  fetchTeamStartedState,
+  updateAgentSession,
+  updateIssue,
+} from "../lib/linear-mutations";
 import { resolveLinearMcpToken } from "../lib/linear-token";
 import { withLinearGraphqlReference } from "../lib/prompts/linear-graphql";
 import { resolvePrompt, truncate } from "../lib/session-helpers";
@@ -297,6 +304,123 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       );
     });
 
+    // Side-effects that make the session look "owned" in Linear's UI:
+    // move the issue to the team's first `started` state, set the
+    // agent as the issue's delegate, attach the dashboard link, and
+    // post an initial 2-item plan. All best-effort — every failure
+    // here is logged but never throws, since the actual run is the
+    // real product and these are polish.
+    //
+    // Only on `created` (the kickoff webhook). `prompted` follow-ups
+    // must NOT stomp user-driven status changes between turns.
+    if (webhookEvent.action === "created") {
+      await step.do("start-session-side-effects", async () => {
+        const issueId = webhookEvent.agentSession.issue?.id ?? null;
+        const teamId =
+          webhookEvent.agentSession.issue?.teamId ??
+          webhookEvent.agentSession.issue?.team?.id ??
+          null;
+        const linearOrgId = webhookEvent.organizationId ?? null;
+
+        // Issue status + delegate. Both need the issue id; delegate
+        // additionally needs the agent's viewer id (KV-cached) and
+        // status needs the team's first started state.
+        if (issueId) {
+          try {
+            const [startedState, viewerId] = await Promise.all([
+              teamId
+                ? fetchTeamStartedState(token, teamId).catch((e) => {
+                    console.error(
+                      "fetch_team_started_state_failed",
+                      e instanceof Error ? e.message : String(e),
+                    );
+                    return null;
+                  })
+                : Promise.resolve(null),
+              linearOrgId
+                ? resolveAgentViewerId(token, linearOrgId, this.env.LINEAR_TOKENS)
+                : Promise.resolve(null),
+            ]);
+
+            const updateInput: {
+              issueId: string;
+              stateId?: string;
+              delegateId?: string;
+            } = { issueId };
+            if (startedState?.id) updateInput.stateId = startedState.id;
+            if (viewerId) updateInput.delegateId = viewerId;
+
+            // Skip the round-trip if there's nothing to change — Linear
+            // accepts no-op input but we save a request.
+            if (updateInput.stateId || updateInput.delegateId) {
+              await updateIssue(token, updateInput).catch((e) => {
+                console.error(
+                  "issue_update_failed",
+                  JSON.stringify({
+                    session_id: sessionId,
+                    issue_id: issueId,
+                    error: e instanceof Error ? e.message : String(e),
+                  }),
+                );
+              });
+            }
+          } catch (e) {
+            console.error(
+              "start_session_status_delegate_failed",
+              e instanceof Error ? e.message : String(e),
+            );
+          }
+        }
+
+        // externalUrls — link the session header to our dashboard.
+        // `env.URL` is the deployed origin (also reused for OAuth
+        // callback). Skip silently when absent (e.g. local smoke runs
+        // that didn't set the binding).
+        const publicUrl = this.env.URL;
+        if (publicUrl) {
+          try {
+            await updateAgentSession(token, {
+              agentSessionId: sessionId,
+              externalUrls: [
+                {
+                  label: "Open in Symphony",
+                  url: `${publicUrl.replace(/\/$/, "")}/dashboard/sessions/${sessionId}`,
+                },
+              ],
+            });
+          } catch (e) {
+            console.error(
+              "agent_session_external_urls_failed",
+              e instanceof Error ? e.message : String(e),
+            );
+          }
+        } else {
+          console.warn(
+            "agent_session_external_urls_skipped_no_public_url",
+            JSON.stringify({ session_id: sessionId }),
+          );
+        }
+
+        // Initial plan — deliberately minimal. Finer-grained per-event
+        // plan updates are out of scope; this is enough to give the
+        // session timeline a visible structure.
+        try {
+          await updateAgentSession(token, {
+            agentSessionId: sessionId,
+            plan: [
+              { content: "Preparing sandbox", status: "completed" },
+              { content: "Running agent", status: "inProgress" },
+            ],
+          });
+        } catch (e) {
+          console.error(
+            "agent_session_plan_init_failed",
+            e instanceof Error ? e.message : String(e),
+          );
+        }
+      });
+    }
+
     const resolved: ResolvedInputs = await step.do(
       "resolve-inputs",
       async () => {
@@ -408,22 +532,27 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     );
 
     if (resolved.kind === "no_repo") {
+      // Recoverable: ask the user to set up a project, then re-mention.
+      // Posted as `elicitation` (not `error`) so Linear renders it as
+      // a conversational nudge the user can reply to in-thread.
       await step.do("post-no-repo-error", async () => {
-        await postError(
+        await postElicitation(
           buildActivityClient(token),
           sessionId,
-          "No repository is configured for this team. Add a project row via the admin API or dashboard.",
+          "No repository is configured for this team yet. Add a project row in the Symphony dashboard (Projects tab), then re-mention me to retry.",
         );
       });
       return { status: "no_repo" };
     }
 
     if (resolved.kind === "no_prompt") {
+      // Recoverable: the user can reply with a task or fill in the
+      // issue description and re-mention. Elicitation, not error.
       await step.do("post-no-prompt-error", async () => {
-        await postError(
+        await postElicitation(
           buildActivityClient(token),
           sessionId,
-          "Couldn't find a prompt in the session payload (no promptContext, comment body, or issue description).",
+          "I didn't find a prompt in this session. Reply with the task you'd like me to do, or add a description to the issue and re-mention me.",
         );
       });
       return { status: "no_prompt" };
@@ -620,6 +749,37 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         );
       }
     });
+
+    // Plan update is intentionally a separate step from the terminal
+    // activity so a Linear API hiccup on one doesn't block the other.
+    // Same `created`-only guard as `start-session-side-effects`: we
+    // only own the plan on the first dispatch — prompted follow-ups
+    // shouldn't rewrite it.
+    if (webhookEvent.action === "created") {
+      await step.do("update-final-plan", async () => {
+        try {
+          const succeeded =
+            terminal!.kind === "done" &&
+            terminal!.result.exit_code === 0 &&
+            !terminal!.inbandError;
+          await updateAgentSession(token, {
+            agentSessionId: sessionId,
+            plan: [
+              { content: "Preparing sandbox", status: "completed" },
+              {
+                content: "Running agent",
+                status: succeeded ? "completed" : "canceled",
+              },
+            ],
+          });
+        } catch (e) {
+          console.error(
+            "agent_session_plan_final_failed",
+            e instanceof Error ? e.message : String(e),
+          );
+        }
+      });
+    }
 
     await step.do("record-session-end", async () => {
       try {
