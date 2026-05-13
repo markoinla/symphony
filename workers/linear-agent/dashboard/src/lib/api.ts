@@ -60,7 +60,8 @@ export type Setting = {
 }
 
 export type AgentSettingsDefaults = {
-  max_concurrent_agents: number
+  default_engine: string
+  default_model: string | null
   max_turns: number
 }
 
@@ -651,24 +652,30 @@ export async function getWebhook(id: string): Promise<{ webhook: WebhookEvent }>
   return requestJson<{ webhook: WebhookEvent }>(`/api/v1/webhooks/${id}`)
 }
 
-// ── Settings (no Worker equivalent yet) ─────────────────────────────
+// ── Settings ────────────────────────────────────────────────────────
 
 export function getSettings(): Promise<SettingsPayload> {
-  warnUnimplemented('getSettings')
-  return Promise.resolve({
-    settings: [],
-    agent_defaults: { max_concurrent_agents: 1, max_turns: 10 },
-  })
+  return requestJson<SettingsPayload>('/dashboard/api/settings')
 }
 
-export function upsertSetting(_key: string, _value: string): Promise<{ setting: Setting }> {
-  warnUnimplemented('upsertSetting')
-  return Promise.reject(new ApiError(501, null, 'Settings KV not implemented on Worker'))
+export function upsertSetting(
+  key: string,
+  value: string,
+): Promise<{ setting: Setting }> {
+  return requestJson<{ setting: Setting }>(
+    `/dashboard/api/settings/${encodeURIComponent(key)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    },
+  )
 }
 
-export function deleteSetting(_key: string) {
-  warnUnimplemented('deleteSetting')
-  return Promise.reject(new ApiError(501, null, 'Settings KV not implemented on Worker'))
+export function deleteSetting(key: string): Promise<{ ok: boolean }> {
+  return requestJson<{ ok: boolean }>(
+    `/dashboard/api/settings/${encodeURIComponent(key)}`,
+    { method: 'DELETE' },
+  )
 }
 
 // ── OAuth status (derived from /dashboard/api/integrations) ─────────

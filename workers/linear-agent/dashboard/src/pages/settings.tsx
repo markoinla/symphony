@@ -39,6 +39,11 @@ import {
   CardTitle,
   CardDescription,
   Input,
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
   Tabs,
   TabsContent,
   TabsList,
@@ -52,31 +57,52 @@ import {
 } from '../components/feedback'
 import { Field } from '../components/field'
 
+type AgentSettingKey =
+  | 'agent.default_engine'
+  | 'agent.default_model'
+  | 'agent.max_turns'
+
 type AgentSettingDefinition = {
-  key: 'agent.max_concurrent_agents' | 'agent.max_turns'
+  key: AgentSettingKey
   label: string
   description: string
+  input: 'engine_select' | 'model_text' | 'integer'
   defaultValueKey: keyof AgentSettingsDefaults
 }
 
 const agentSettingDefinitions: AgentSettingDefinition[] = [
   {
-    key: 'agent.max_concurrent_agents',
-    label: 'Number of agents',
-    description: 'Limits how many issues Symphony can run at the same time.',
-    defaultValueKey: 'max_concurrent_agents',
+    key: 'agent.default_engine',
+    label: 'Default engine',
+    description:
+      'Engine to run when no workflow override is in effect. Only `pi` is supported end-to-end today; codex and claude-code support is planned.',
+    input: 'engine_select',
+    defaultValueKey: 'default_engine',
+  },
+  {
+    key: 'agent.default_model',
+    label: 'Default model',
+    description:
+      'Provider/model id passed to the engine when no workflow override is in effect. Format: `provider/id` (e.g. `cloudflare-workers-ai/@cf/moonshotai/kimi-k2.6`).',
+    input: 'model_text',
+    defaultValueKey: 'default_model',
   },
   {
     key: 'agent.max_turns',
     label: 'Max turns',
-    description: 'Caps how many Codex turns a single issue can use before stopping.',
+    description:
+      'Caps how many turns a single issue can use before stopping. Workflow rows override this when a trigger matches.',
+    input: 'integer',
     defaultValueKey: 'max_turns',
   },
 ]
 
+const SUPPORTED_ENGINES = ['pi'] as const
+
 const fallbackAgentSettings: AgentSettingsDefaults = {
-  max_concurrent_agents: 10,
-  max_turns: 20,
+  default_engine: 'pi',
+  default_model: null,
+  max_turns: 10,
 }
 
 function settingValue(settings: Setting[] | undefined, key: string) {
@@ -87,10 +113,15 @@ function agentSettingLabel(key: string) {
   return agentSettingDefinitions.find((setting) => setting.key === key)?.label ?? key
 }
 
-function agentSettingDefaultValue(key: string, agentDefaults?: AgentSettingsDefaults) {
+function agentSettingDefaultValue(
+  key: AgentSettingKey,
+  agentDefaults?: AgentSettingsDefaults,
+): string {
   const definition = agentSettingDefinitions.find((setting) => setting.key === key)
-  if (!definition) return 1
-  return (agentDefaults ?? fallbackAgentSettings)[definition.defaultValueKey]
+  if (!definition) return ''
+  const resolved = (agentDefaults ?? fallbackAgentSettings)[definition.defaultValueKey]
+  if (resolved === null || resolved === undefined) return ''
+  return String(resolved)
 }
 
 function buildAgentSettingDrafts(
@@ -100,9 +131,30 @@ function buildAgentSettingDrafts(
   return Object.fromEntries(
     agentSettingDefinitions.map((setting) => [
       setting.key,
-      settingValue(settings, setting.key) ?? String(agentSettingDefaultValue(setting.key, agentDefaults)),
+      settingValue(settings, setting.key) ??
+        agentSettingDefaultValue(setting.key, agentDefaults),
     ]),
   )
+}
+
+function validateAgentSettingDraft(
+  definition: AgentSettingDefinition,
+  draft: string,
+): string | null {
+  const trimmed = draft.trim()
+  switch (definition.input) {
+    case 'engine_select':
+      if (!SUPPORTED_ENGINES.includes(trimmed as (typeof SUPPORTED_ENGINES)[number])) {
+        return 'Only `pi` is supported today.'
+      }
+      return null
+    case 'model_text':
+      if (trimmed.length === 0) return 'Model must not be empty.'
+      return null
+    case 'integer':
+      if (!isPositiveInteger(trimmed)) return 'Enter a whole number greater than 0.'
+      return null
+  }
 }
 
 export function SettingsView() {
@@ -503,10 +555,12 @@ function AgentSettingsSection() {
   }, [agentDefaults, settings])
 
   const saveMutation = useMutation({
-    mutationFn: ({ key, value }: { key: string; value: string }) => {
-      const trimmed = value.trim()
-      if (!isPositiveInteger(trimmed)) throw new Error('Enter a whole number greater than 0.')
-      return upsertSetting(key, trimmed)
+    mutationFn: ({ key, value }: { key: AgentSettingKey; value: string }) => {
+      const definition = agentSettingDefinitions.find((d) => d.key === key)
+      if (!definition) throw new Error(`Unknown setting key: ${key}`)
+      const error = validateAgentSettingDraft(definition, value)
+      if (error) throw new Error(error)
+      return upsertSetting(key, value.trim())
     },
     onSuccess: async (_result, variables) => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
@@ -546,40 +600,77 @@ function AgentSettingsSection() {
         {agentSettingDefinitions.map((setting) => {
           const persistedValue = settingValue(settings, setting.key)
           const defaultValue = agentSettingDefaultValue(setting.key, agentDefaults)
-          const draftValue = drafts[setting.key] ?? String(defaultValue)
+          const draftValue = drafts[setting.key] ?? defaultValue
           const trimmedDraft = draftValue.trim()
           const validationMessage =
-            trimmedDraft === '' || isPositiveInteger(trimmedDraft)
-              ? null
-              : 'Enter a whole number greater than 0.'
+            trimmedDraft === '' ? null : validateAgentSettingDraft(setting, draftValue)
+          const displayedDefault = defaultValue === '' ? '(not set)' : defaultValue
 
           return (
-            <div className="flex flex-col gap-4 py-5 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between" key={setting.key}>
+            <div className="flex flex-col gap-4 py-5 first:pt-0 last:pb-0 sm:flex-row sm:items-start sm:justify-between" key={setting.key}>
               <div className="space-y-1 sm:max-w-sm">
                 <h3 className="text-sm font-medium text-th-text-1">{setting.label}</h3>
                 <p className="text-[13px] text-th-text-3">{setting.description}</p>
                 <p className="text-xs text-th-text-4">
                   {persistedValue === null
-                    ? `Default: ${defaultValue}`
-                    : `Override: ${persistedValue} (default: ${defaultValue})`}
+                    ? `Default: ${displayedDefault}`
+                    : `Override: ${persistedValue} (default: ${displayedDefault})`}
                 </p>
                 {validationMessage ? (
                   <p className="text-xs text-th-danger">{validationMessage}</p>
                 ) : null}
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <Input
-                  className="w-24 text-center"
-                  inputMode="numeric"
-                  min={1}
-                  onChange={(event) => {
-                    setDrafts((current) => ({ ...current, [setting.key]: event.target.value }))
-                    setFeedback(null)
-                  }}
-                  step={1}
-                  type="number"
-                  value={draftValue}
-                />
+                {setting.input === 'engine_select' ? (
+                  <Select
+                    value={draftValue}
+                    onValueChange={(value) => {
+                      setDrafts((current) => ({ ...current, [setting.key]: value }))
+                      setFeedback(null)
+                    }}
+                  >
+                    <SelectTrigger className="w-32">
+                      <SelectValue placeholder={defaultValue || 'Select…'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SUPPORTED_ENGINES.map((engine) => (
+                        <SelectItem key={engine} value={engine}>
+                          {engine}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : setting.input === 'model_text' ? (
+                  <Input
+                    className="w-72 font-mono text-xs"
+                    onChange={(event) => {
+                      setDrafts((current) => ({
+                        ...current,
+                        [setting.key]: event.target.value,
+                      }))
+                      setFeedback(null)
+                    }}
+                    placeholder={defaultValue || 'provider/model-id'}
+                    type="text"
+                    value={draftValue}
+                  />
+                ) : (
+                  <Input
+                    className="w-24 text-center"
+                    inputMode="numeric"
+                    min={1}
+                    onChange={(event) => {
+                      setDrafts((current) => ({
+                        ...current,
+                        [setting.key]: event.target.value,
+                      }))
+                      setFeedback(null)
+                    }}
+                    step={1}
+                    type="number"
+                    value={draftValue}
+                  />
+                )}
                 <Button
                   disabled={
                     settingsQuery.isPending ||
@@ -671,7 +762,8 @@ function AdvancedSettingsSection() {
     'github_oauth.client_id',
     'github_oauth.client_secret',
     'github_oauth.expires_at',
-    'agent.max_concurrent_agents',
+    'agent.default_engine',
+    'agent.default_model',
     'agent.max_turns',
   ])
 

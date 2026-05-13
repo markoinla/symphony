@@ -93,10 +93,52 @@ Tables (v1 multi-tenant schema in `0002_multi_tenant.sql`):
 | `installations` | Per-org `actor=app` OAuth tokens |
 | `users` | Dashboard logins with per-user `actor=user` OAuth tokens |
 | `dashboard_sessions` | Session tokens mapping to users (httpOnly cookie storage) |
-| `projects` | Per-team config (repo URL, branch, engine/model overrides) |
+| `projects` | Per-team config (repo URL, branch). `engine`/`model`/`max_turns` columns still exist but the runner no longer reads them — see the resolution chain below. |
 | `org_credentials` | Envelope-encrypted per-org secrets |
 | `sessions` | Agent session runs with status and cost |
 | `usage` | Aggregated turns/minutes per org per billing period |
+| `workflows` | Trigger-fired workflow rows (engine, model, max_turns, prompt template, tool policy). See `0002_workflows.sql`. |
+| `settings` | Org-scoped key/value settings. Backs the Agent tab on the dashboard. See `0004_settings.sql`. |
+
+## Engine / model / max_turns resolution
+
+Every agent session resolves three runtime fields — `engine`, `model`,
+`max_turns` — through the same precedence chain. Higher entries win.
+
+| Source | When it applies | Notes |
+|---|---|---|
+| `workflow_overrides` on the runner params | Trigger-fired runs only | `dispatch-trigger.ts` snapshots `workflow.engine` / `.model` / `.max_turns` from the resolved workflow row onto the session params at queue time. Frozen at dispatch — edits to the workflow row mid-run don't perturb in-flight sessions. NULL on `workflow.model` means "inherit", so dispatch-trigger omits the field in that case. |
+| `settings('agent.default_engine')` / `('agent.default_model')` / `('agent.max_turns')` | All runs | Per-org overrides set via the Agent tab on the dashboard. Stored in the `settings` D1 table; one row per `(organization_id, key)`. |
+| `env.DEFAULT_ENGINE` / `DEFAULT_MODEL` / `DEFAULT_MAX_TURNS` | All runs | Worker-wide floor configured in `wrangler.jsonc`. |
+| Baked-in literal | Last resort | `engine = "pi"`, `model = null`, `max_turns = 10`. |
+
+The `projects` table's `engine` / `model` / `max_turns` columns are
+**not** consulted. They remain in D1 to avoid a destructive migration
+but the runner ignores them; per-team customization should live on
+workflow rows (the workflow editor exposes `team_id` scope) or org
+settings.
+
+### Settings API
+
+```
+GET    /dashboard/api/settings           → { settings: [{key,value}], agent_defaults: {...} }
+PUT    /dashboard/api/settings/:key      body: { "value": "…" } → { setting: { key, value } }
+DELETE /dashboard/api/settings/:key      → { ok: true } (404 when absent)
+```
+
+`agent_defaults` is derived server-side from `env.DEFAULT_*` and surfaced
+so the dashboard can render "Default: X" when the org has no override.
+
+Curated key validation (server-side):
+
+- `agent.default_engine` — must equal `pi` (sandbox-dispatcher only
+  supports `pi` end-to-end today)
+- `agent.default_model` — non-empty trimmed string
+- `agent.max_turns` — positive integer in `[1, 100]`
+
+Other keys (e.g. `tracker.api_key`, `proxy.enabled`, `domain`) are
+accepted as-is — the Advanced tab on the dashboard exposes them
+generically.
 
 ## Development
 

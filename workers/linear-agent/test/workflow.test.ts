@@ -126,11 +126,27 @@ function makeStep() {
   return { step, ran };
 }
 
-function makeEvent(webhookEvent: AgentSessionEventWebhook) {
+function makeEvent(
+  arg:
+    | AgentSessionEventWebhook
+    | {
+        mode?: "agent_session";
+        event: AgentSessionEventWebhook;
+        workflow_overrides?: {
+          engine?: string;
+          model?: string;
+          max_turns?: number;
+        };
+      },
+) {
+  // Accept either a bare webhookEvent (legacy shorthand) or a full
+  // params object so resolution-chain tests can pass workflow_overrides.
+  const params =
+    "agentSession" in arg ? { event: arg } : arg;
   return {
-    payload: { event: webhookEvent },
+    payload: params,
     timestamp: new Date(),
-    instanceId: webhookEvent.agentSession.id,
+    instanceId: params.event.agentSession.id,
   };
 }
 
@@ -777,9 +793,21 @@ describe("SessionRunner.run — multi-turn loop", () => {
       default_branch: "main",
       engine: "pi",
       model: null,
-      max_turns: 2,
+      // max_turns on the project row is no longer consulted by the
+      // runner — see session-runner.ts resolve-inputs. Keep the
+      // column populated so the fixture stays valid; the effective
+      // cap below comes from the settings row.
+      max_turns: 10,
       scope: null,
       system_prompt_override: null,
+      created_at: NOW_SEC(),
+      updated_at: NOW_SEC(),
+    });
+    db.settings.set(`${ORG_ID}:agent.max_turns`, {
+      id: "setting-max-turns",
+      organization_id: ORG_ID,
+      key: "agent.max_turns",
+      value: "2",
       created_at: NOW_SEC(),
       updated_at: NOW_SEC(),
     });
@@ -803,3 +831,143 @@ describe("SessionRunner.run — multi-turn loop", () => {
     expect(lastCall?.content.body).toContain("max_turns_reached");
   });
 });
+
+// Resolution chain assertions: workflow_overrides > settings > env.
+// We capture the dispatcher `/run` request body to read which model
+// the runner picked.
+describe("SessionRunner.run — model resolution", () => {
+  it("uses env.DEFAULT_MODEL when no settings row and no overrides", async () => {
+    const kv = new FakeKV();
+    const db = seededDb();
+    const capturedBodies: Record<string, unknown>[] = [];
+    captureDispatcherRunBodies(capturedBodies);
+
+    const env = makeEnv(kv, {}, db);
+    const runner = buildRunner(env);
+    const { step } = makeStep();
+
+    const event: AgentSessionEventWebhook = {
+      type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
+      action: "created",
+      webhookId: "wh-resolution-env",
+      agentSession: baseSession,
+      promptContext: baseSession.promptContext,
+    };
+
+    await runner.run(makeEvent(event), step as never);
+    expect(capturedBodies[0]?.model).toBe(env.DEFAULT_MODEL);
+  });
+
+  it("prefers settings('agent.default_model') over env", async () => {
+    const kv = new FakeKV();
+    const db = seededDb();
+    db.settings.set(`${ORG_ID}:agent.default_model`, {
+      id: "s-model",
+      organization_id: ORG_ID,
+      key: "agent.default_model",
+      value: "anthropic/claude-haiku-from-settings",
+      created_at: NOW_SEC(),
+      updated_at: NOW_SEC(),
+    });
+    const capturedBodies: Record<string, unknown>[] = [];
+    captureDispatcherRunBodies(capturedBodies);
+
+    const runner = buildRunner(makeEnv(kv, {}, db));
+    const { step } = makeStep();
+
+    const event: AgentSessionEventWebhook = {
+      type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
+      action: "created",
+      webhookId: "wh-resolution-settings",
+      agentSession: baseSession,
+      promptContext: baseSession.promptContext,
+    };
+
+    await runner.run(makeEvent(event), step as never);
+    expect(capturedBodies[0]?.model).toBe("anthropic/claude-haiku-from-settings");
+  });
+
+  it("prefers workflow_overrides.model over settings and env", async () => {
+    const kv = new FakeKV();
+    const db = seededDb();
+    db.settings.set(`${ORG_ID}:agent.default_model`, {
+      id: "s-model",
+      organization_id: ORG_ID,
+      key: "agent.default_model",
+      value: "anthropic/claude-haiku-from-settings",
+      created_at: NOW_SEC(),
+      updated_at: NOW_SEC(),
+    });
+    const capturedBodies: Record<string, unknown>[] = [];
+    captureDispatcherRunBodies(capturedBodies);
+
+    const runner = buildRunner(makeEnv(kv, {}, db));
+    const { step } = makeStep();
+
+    const event: AgentSessionEventWebhook = {
+      type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
+      action: "created",
+      webhookId: "wh-resolution-workflow",
+      agentSession: baseSession,
+      promptContext: baseSession.promptContext,
+    };
+
+    await runner.run(
+      makeEvent({
+        mode: "agent_session",
+        event,
+        workflow_overrides: { model: "workflow-explicit-model" },
+      }),
+      step as never,
+    );
+    expect(capturedBodies[0]?.model).toBe("workflow-explicit-model");
+  });
+});
+
+// Capture dispatcher `/run` POST bodies for resolution-chain
+// assertions. Mirrors installFetchMock but pushes the parsed body
+// into the provided sink instead of just returning canned events.
+function captureDispatcherRunBodies(
+  sink: Record<string, unknown>[],
+): void {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = typeof input === "string" ? input : (input as Request).url;
+    const body = init?.body as string | undefined;
+
+    if (url === "https://api.linear.app/graphql") {
+      return new Response(
+        JSON.stringify({ data: { agentActivityCreate: { success: true } } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    if (url.endsWith("/run")) {
+      if (body) {
+        try {
+          sink.push(JSON.parse(body) as Record<string, unknown>);
+        } catch {
+          // ignore — body parse failure surfaces via the assertion
+        }
+      }
+      return new Response(
+        buildSseBodyStream([
+          { type: "assistant_msg", text: "done" },
+          { type: "turn_end", turn: 1, reason: "completed" },
+          {
+            type: "result",
+            exit_code: 0,
+            duration_ms: 100,
+            branch: null,
+            pr_url: null,
+          },
+        ]),
+        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+      );
+    }
+
+    throw new Error(`unexpected fetch in test: ${url}`);
+  });
+}

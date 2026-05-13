@@ -49,11 +49,27 @@ import {
   GitHubInstallStore,
   LinearAgentInstallStore,
   ProjectStore,
+  SettingStore,
 } from "../lib/store";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
 import type { EventTuple } from "../schemas/event";
 import type { Trigger } from "../schemas/trigger";
 import type { Workflow } from "../schemas/workflow";
+
+// Per-workflow overrides snapshot. Populated by `dispatch-trigger`
+// when a workflow resolved before queueing the runner; absent on
+// non-trigger runs (manual @-mention, dashboard rerun). The runner
+// reads these first, falls back to settings('agent.default_*'),
+// then to env.DEFAULT_*. Frozen at dispatch time — edits to the
+// workflow row mid-run don't perturb in-flight sessions.
+export interface WorkflowOverrides {
+  engine?: string;
+  // Omit `model` when the workflow row's model is NULL ("inherit").
+  // A present value is always an explicit override; `null` should
+  // never be sent.
+  model?: string;
+  max_turns?: number;
+}
 
 export type SessionRunnerParams =
   | {
@@ -65,9 +81,12 @@ export type SessionRunnerParams =
       // SYM-295 trigger-initiated runs also queue this mode: the
       // dispatcher mints a Linear AgentSession first and synthesizes
       // the webhook envelope so the run appears in Linear's timeline
-      // identically to a real @-mention.
+      // identically to a real @-mention. Those runs additionally
+      // carry `workflow_overrides` so the resolved workflow's
+      // engine/model/max_turns reach the runner.
       mode?: "agent_session";
       event: AgentSessionEventWebhook;
+      workflow_overrides?: WorkflowOverrides;
     }
   | {
       // Headless trigger flow — no Linear-side AgentSession exists,
@@ -91,13 +110,10 @@ export type SessionRunnerParams =
       issueIdentifier: string;
     };
 
-// TODO(sym-295-followup): per-workflow engine/model/maxTurns overrides.
-// Track 3 on main had a `WorkflowConfigSubset` on this params type
-// (populated by `dispatchAction`) so trigger runs could deviate from
-// the project row's columns. The option-3 dispatch path
-// (`dispatch-trigger.ts`) renders the prompt here but otherwise lets
-// the project row decide engine/model. Re-introduce a structured
-// override block when we need per-workflow knobs again.
+// Per-workflow engine/model/max_turns overrides flow in via
+// `workflow_overrides` on the agent_session params (populated by
+// `dispatch-trigger.ts`). Org-level defaults come from the
+// `settings` table; the worker-wide floor stays on env.DEFAULT_*.
 
 type ResolvedInputs =
   | {
@@ -171,7 +187,12 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       webhookEvent.agentSession.issue?.identifier ?? sessionId;
 
     try {
-      return await this.runAgentSessionMode(webhookEvent, sessionId, step);
+      return await this.runAgentSessionMode(
+        params,
+        webhookEvent,
+        sessionId,
+        step,
+      );
     } finally {
       await this.stopSandboxQuiet(step, cleanupIssueId);
     }
@@ -216,6 +237,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
   }
 
   private async runAgentSessionMode(
+    params: Extract<SessionRunnerParams, { event: AgentSessionEventWebhook }>,
     webhookEvent: AgentSessionEventWebhook,
     sessionId: string,
     step: WorkflowStep,
@@ -225,6 +247,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     turns?: number;
     pr_url?: string | null;
   }> {
+    const workflowOverrides = params.workflow_overrides;
     const installInfo = await step.do("load-token", async () => {
       const linearOrgId = webhookEvent.organizationId;
       if (!linearOrgId) return null;
@@ -315,21 +338,69 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           teamId: teamId,
         });
 
-        const engine = (projectRow?.engine ?? this.env.DEFAULT_ENGINE ?? "pi") as
-          | "pi"
-          | string;
+        // Resolution chain for engine / model / max_turns:
+        //   1. workflow_overrides (snapshot of resolved workflow row,
+        //      populated by dispatch-trigger when a trigger fired)
+        //   2. settings('agent.default_*') — org-level defaults from
+        //      the Agent settings page
+        //   3. env.DEFAULT_* — worker-wide floor from wrangler.jsonc
+        //   4. baked-in default
+        //
+        // projects.{engine,model,max_turns} are no longer consulted;
+        // the columns stay in the schema for compat but the runner
+        // ignores them. See SettingStore + the dashboard's Agent
+        // settings tab.
+        const settingStore = new SettingStore(this.env.DB);
+        const orgSettings = await settingStore.list(organizationId);
+        const settingByKey = new Map(orgSettings.map((s) => [s.key, s.value]));
+
+        const engineFromSettings = settingByKey.get("agent.default_engine");
+        const engine =
+          workflowOverrides?.engine ??
+          engineFromSettings ??
+          this.env.DEFAULT_ENGINE ??
+          "pi";
+
+        // Model is the only field with NULL-means-inherit semantics
+        // at the workflow level. dispatch-trigger omits `model` from
+        // workflow_overrides when workflow.model is NULL, so any
+        // truthy value here is an explicit override.
+        const modelFromSettings = settingByKey.get("agent.default_model");
         const model =
-          projectRow?.model ?? (this.env.DEFAULT_MODEL || null);
+          workflowOverrides?.model ??
+          modelFromSettings ??
+          (this.env.DEFAULT_MODEL || null);
+
+        const maxTurnsFromSettings = settingByKey.get("agent.max_turns");
         const maxTurns =
-          projectRow?.max_turns ?? parseMaxTurns(this.env.DEFAULT_MAX_TURNS);
+          workflowOverrides?.max_turns ??
+          (maxTurnsFromSettings
+            ? parseMaxTurns(maxTurnsFromSettings)
+            : parseMaxTurns(this.env.DEFAULT_MAX_TURNS));
+
+        // Scope still comes from the project row (not part of the
+        // engine/model/max_turns precedence migration). Sandbox
+        // namespacing is per-team by design.
         const scope =
           projectRow?.scope ?? this.env.DEFAULT_SCOPE ?? "default";
 
+        // sandbox-dispatcher only supports `pi` end-to-end today.
+        // The settings API validator enforces this for org-level
+        // defaults; non-pi values can still arrive via
+        // `workflow_overrides` (workflow editor accepts codex /
+        // claude-code) so we coerce here. When the dispatcher gains
+        // additional adapters, broaden the ResolvedInputs union.
+        if (engine !== "pi") {
+          console.warn(
+            "engine_coerced_to_pi",
+            JSON.stringify({ requested: engine, session_id: sessionId }),
+          );
+        }
         return {
           kind: "ok",
           repoUrl,
           prompt,
-          engine: engine === "pi" ? "pi" : "pi",
+          engine: "pi",
           model,
           maxTurns,
           scope,

@@ -7,6 +7,7 @@ import {
   LinearAgentInstallStore,
   GitHubInstallStore,
   ProjectStore,
+  SettingStore,
 } from "../lib/store";
 
 
@@ -405,7 +406,127 @@ export function buildDashboardApiRouter() {
     return c.json({ repos });
   });
 
+  // ── Settings (org-scoped key/value store) ───────────────────────
+  //
+  // Free-form k/v: the Advanced settings UI accepts arbitrary keys
+  // (proxy.enabled, domain, tracker.api_key, …) so the upsert path
+  // does not gate on a key allowlist. Curated keys consumed by the
+  // runtime (agent.default_engine / .default_model / .max_turns)
+  // get per-key value validation below.
+
+  app.get("/dashboard/api/settings", async (c) => {
+    const user = await requireOrg(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
+
+    const settings = await new SettingStore(c.env.DB).list(user.organizationId);
+    return c.json({
+      settings,
+      agent_defaults: buildAgentDefaults(c.env),
+    });
+  });
+
+  app.put("/dashboard/api/settings/:key", async (c) => {
+    const user = await requireOrg(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
+
+    const key = c.req.param("key");
+    if (!key || key.length > 200) {
+      return c.json({ error: "invalid_key" }, 400);
+    }
+
+    const body = await c.req.json<{ value?: unknown }>().catch(() => null);
+    if (!body || typeof body.value !== "string") {
+      return c.json({ error: "invalid_body" }, 400);
+    }
+
+    const validationError = validateSettingValue(key, body.value);
+    if (validationError) {
+      return c.json(
+        { error: "validation_failed", message: validationError },
+        400,
+      );
+    }
+
+    await new SettingStore(c.env.DB).upsert(
+      user.organizationId,
+      key,
+      body.value,
+    );
+    return c.json({ setting: { key, value: body.value } });
+  });
+
+  app.delete("/dashboard/api/settings/:key", async (c) => {
+    const user = await requireOrg(c);
+    if (!user) return c.json({ error: "unauthorized" }, 401);
+
+    const key = c.req.param("key");
+    if (!key) return c.json({ error: "invalid_key" }, 400);
+
+    const removed = await new SettingStore(c.env.DB).delete(
+      user.organizationId,
+      key,
+    );
+    if (!removed) return c.json({ error: "not_found" }, 404);
+    return c.json({ ok: true });
+  });
+
   return app;
+}
+
+// Compute the env-derived floor surfaced to the dashboard as
+// `agent_defaults`. Each setting row in the UI shows "Default: X"
+// when no org-level override exists; the runner uses these same
+// values as the final fallback after `workflow_overrides` and
+// `settings('agent.*')`.
+function buildAgentDefaults(env: Env): {
+  default_engine: string;
+  default_model: string | null;
+  max_turns: number;
+} {
+  const rawMaxTurns = env.DEFAULT_MAX_TURNS;
+  let maxTurns = 10;
+  if (rawMaxTurns) {
+    const n = parseInt(rawMaxTurns, 10);
+    if (Number.isFinite(n) && n >= 1) maxTurns = Math.min(n, 100);
+  }
+  return {
+    default_engine: env.DEFAULT_ENGINE || "pi",
+    default_model: env.DEFAULT_MODEL || null,
+    max_turns: maxTurns,
+  };
+}
+
+// Per-key value validation for curated runtime settings. Returns
+// null when the value is acceptable, or a human-readable error
+// string otherwise. Non-curated keys are stored as-is.
+function validateSettingValue(key: string, value: string): string | null {
+  switch (key) {
+    case "agent.default_engine":
+      // sandbox-dispatcher only supports `pi` today. Reject other
+      // engines outright rather than letting them silently fail at
+      // dispatch.
+      if (value !== "pi") {
+        return "Only `pi` is supported as the default engine today.";
+      }
+      return null;
+    case "agent.default_model":
+      if (value.trim().length === 0) {
+        return "Model must be a non-empty string.";
+      }
+      return null;
+    case "agent.max_turns": {
+      const n = parseInt(value, 10);
+      if (!Number.isFinite(n) || n < 1 || String(n) !== value.trim()) {
+        return "Max turns must be a positive integer.";
+      }
+      if (n > 100) {
+        return "Max turns is capped at 100.";
+      }
+      return null;
+    }
+    default:
+      return null;
+  }
 }
 
 function validateProject(

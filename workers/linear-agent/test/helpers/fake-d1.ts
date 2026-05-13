@@ -111,6 +111,15 @@ export interface AgentSessionRow {
   error: string | null;
 }
 
+export interface SettingRow {
+  id: string;
+  organization_id: string;
+  key: string;
+  value: string;
+  created_at: number;
+  updated_at: number;
+}
+
 export class FakeD1 {
   // Keyed by `organization_id` for getByOrgId convenience, but we also
   // scan for getByLinearOrgId.
@@ -122,6 +131,8 @@ export class FakeD1 {
   githubInstalls = new Map<string, GitHubInstallRow>();
   agentSessions = new Map<string, AgentSessionRow>();
   webhookEvents = new Map<string, WebhookEventRow>();
+  // Keyed by `${organization_id}:${key}`.
+  settings = new Map<string, SettingRow>();
 
   prepare(sql: string) {
     return new FakeStatement(this, sql);
@@ -509,6 +520,35 @@ class FakeStatement {
       return { success: true, meta: { changes: 1 } };
     }
 
+    if (/^INSERT INTO settings/i.test(sql)) {
+      const [id, organization_id, key, value, created_at, updated_at] =
+        this.bindings as [string, string, string, string, number, number];
+      const k = `${organization_id}:${key}`;
+      const existing = this.db.settings.get(k);
+      if (existing) {
+        // ON CONFLICT(organization_id, key) DO UPDATE
+        existing.value = value;
+        existing.updated_at = updated_at;
+      } else {
+        this.db.settings.set(k, {
+          id,
+          organization_id,
+          key,
+          value,
+          created_at,
+          updated_at,
+        });
+      }
+      return { success: true, meta: { changes: 1 } };
+    }
+
+    if (/^DELETE FROM settings/i.test(sql)) {
+      const [orgId, key] = this.bindings as [string, string];
+      const k = `${orgId}:${key}`;
+      const had = this.db.settings.delete(k);
+      return { success: true, meta: { changes: had ? 1 : 0 } };
+    }
+
     throw new Error(`FakeD1.run: unsupported SQL: ${sql}`);
   }
 
@@ -548,6 +588,12 @@ class FakeStatement {
     if (/FROM agent_sessions WHERE id/i.test(sql)) {
       const [id] = this.bindings as [string];
       return (this.db.agentSessions.get(id) as unknown as T) ?? null;
+    }
+
+    if (/^SELECT value FROM settings/i.test(sql)) {
+      const [orgId, key] = this.bindings as [string, string];
+      const row = this.db.settings.get(`${orgId}:${key}`);
+      return (row ? ({ value: row.value } as unknown as T) : null);
     }
 
     throw new Error(`FakeD1.first: unsupported SQL: ${sql}`);
@@ -622,6 +668,15 @@ class FakeStatement {
       }
       rows = rows.sort((a, b) => b.started_at - a.started_at);
       if (limit !== null) rows = rows.slice(offset, offset + limit);
+      return { success: true, results: rows as unknown as T[] };
+    }
+
+    if (/^SELECT key, value FROM settings WHERE organization_id = \?/i.test(sql)) {
+      const [orgId] = this.bindings as [string];
+      const rows = [...this.db.settings.values()]
+        .filter((r) => r.organization_id === orgId)
+        .sort((a, b) => a.key.localeCompare(b.key))
+        .map((r) => ({ key: r.key, value: r.value }));
       return { success: true, results: rows as unknown as T[] };
     }
 

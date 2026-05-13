@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link, useParams } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Trash2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -30,6 +31,7 @@ import {
   useWorkflow,
 } from '@/lib/api/workflows'
 import { newTriggerDraft } from '@/lib/api/workflow-types'
+import { getSettings } from '../../lib/api'
 import type {
   McpServer,
   Trigger,
@@ -135,6 +137,20 @@ export function WorkflowEditorView() {
   const createTrigger = useCreateTrigger(id)
   const updateTrigger = useUpdateTrigger(id)
   const deleteTrigger = useDeleteTrigger(id)
+
+  // Org defaults so the Model input's placeholder can show what the
+  // workflow would inherit if left blank. A failure here just falls
+  // back to a static placeholder — never block the editor.
+  const settingsQuery = useQuery({
+    queryKey: ['settings'],
+    queryFn: getSettings,
+  })
+  const orgDefaultModel = useMemo(() => {
+    const data = settingsQuery.data
+    if (!data) return null
+    const override = data.settings.find((s) => s.key === 'agent.default_model')
+    return override?.value ?? data.agent_defaults.default_model ?? null
+  }, [settingsQuery.data])
 
   const [draft, setDraft] = useState<Draft | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
@@ -336,7 +352,11 @@ export function WorkflowEditorView() {
         </TabsList>
 
         <TabsContent value="basics">
-          <BasicsTab draft={draft} patchDraft={patchDraft} />
+          <BasicsTab
+            draft={draft}
+            patchDraft={patchDraft}
+            orgDefaultModel={orgDefaultModel}
+          />
         </TabsContent>
 
         <TabsContent value="triggers">
@@ -369,10 +389,15 @@ export function WorkflowEditorView() {
 function BasicsTab({
   draft,
   patchDraft,
+  orgDefaultModel,
 }: {
   draft: Draft
   patchDraft: (patch: Partial<Draft>) => void
+  orgDefaultModel: string | null
 }) {
+  const modelPlaceholder = orgDefaultModel
+    ? `inherits ${orgDefaultModel} from org default`
+    : 'provider/model-id (e.g. claude-sonnet-4-6)'
   return (
     <div className="grid max-w-3xl gap-5">
       <Field label="Name">
@@ -424,10 +449,13 @@ function BasicsTab({
             </SelectContent>
           </Select>
         </Field>
-        <Field label="Model">
+        <Field
+          label="Model"
+          hint="Leave blank to inherit the org default. Type a value to override."
+        >
           <Input
             onChange={(event) => patchDraft({ model: event.target.value })}
-            placeholder="claude-sonnet-4-6"
+            placeholder={modelPlaceholder}
             value={draft.model}
           />
         </Field>

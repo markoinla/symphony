@@ -800,6 +800,63 @@ export class WebhookEventStore {
   }
 }
 
+// ── settings ────────────────────────────────────────────────────────
+
+export interface SettingRecord {
+  key: string;
+  value: string;
+}
+
+export class SettingStore {
+  constructor(private readonly db: D1Database) {}
+
+  async list(orgId: string): Promise<SettingRecord[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT key, value FROM settings
+         WHERE organization_id = ? ORDER BY key ASC`,
+      )
+      .bind(orgId)
+      .all<SettingRecord>();
+    return result.results;
+  }
+
+  async get(orgId: string, key: string): Promise<string | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT value FROM settings
+         WHERE organization_id = ? AND key = ?`,
+      )
+      .bind(orgId, key)
+      .first<{ value: string }>();
+    return row?.value ?? null;
+  }
+
+  async upsert(orgId: string, key: string, value: string): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+    await this.db
+      .prepare(
+        `INSERT INTO settings (id, organization_id, key, value, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(organization_id, key) DO UPDATE SET
+           value      = excluded.value,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(crypto.randomUUID(), orgId, key, value, now, now)
+      .run();
+  }
+
+  async delete(orgId: string, key: string): Promise<boolean> {
+    const result = await this.db
+      .prepare(
+        `DELETE FROM settings WHERE organization_id = ? AND key = ?`,
+      )
+      .bind(orgId, key)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+}
+
 // ── Compatibility aliases ───────────────────────────────────────────
 // Old names from the v1 schema. Existing callers can keep importing
 // `InstallationStore` and get the new linear_agent_installs-backed

@@ -238,6 +238,28 @@ export const workflowTriggers = sqliteTable(
   }),
 );
 
+// Org-scoped key/value settings. Backs the Agent settings page.
+// See migrations/0004_settings.sql.
+export const settings = sqliteTable(
+  "settings",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    key: text("key").notNull(),
+    value: text("value").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => ({
+    orgKeyUnique: uniqueIndex("idx_settings_org_key").on(
+      table.organizationId,
+      table.key,
+    ),
+  }),
+);
+
 // Stub — issued + consumed in SYM-296. No Worker code reads from this
 // table yet; the Track 2 bearer middleware will return 401 for any
 // presented token until issuance ships.

@@ -161,10 +161,33 @@ export async function dispatchTrigger(
     promptContext: prompt,
   };
 
+  // Snapshot the resolved workflow's engine/model/max_turns onto the
+  // params so the runner uses them instead of the org-level setting
+  // fallback. workflows.engine and .max_turns are NOT NULL in the
+  // schema (always have a value). workflows.model is nullable, and
+  // NULL means "inherit from org default" — in that case we omit
+  // the field so the runner falls through to settings/env. Only
+  // string values are real overrides.
+  const workflowOverrides: {
+    engine: string;
+    model?: string;
+    max_turns: number;
+  } = {
+    engine: workflow.engine,
+    max_turns: workflow.max_turns,
+  };
+  if (workflow.model !== null && workflow.model !== "") {
+    workflowOverrides.model = workflow.model;
+  }
+
   try {
     await env.SESSION_RUNNER.create({
       id: linearSessionId,
-      params: { mode: "agent_session", event: syntheticEvent },
+      params: {
+        mode: "agent_session",
+        event: syntheticEvent,
+        workflow_overrides: workflowOverrides,
+      },
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
