@@ -227,6 +227,115 @@ describe("POST /run (engine: pi)", () => {
     expect(Object.keys(sandboxHandles)).toEqual([]);
   });
 
+  it("embeds the request github_token in the clone URL for private repos", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-700"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      { exitCode: 0, stdout: '{"type":"response"}', stderr: "" },
+    ];
+    sandboxHandles[runSandboxId("SYM-700")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-700",
+      repo_url: "https://github.com/markoinla/private.git",
+      prompt: "hi",
+      engine: "pi",
+      github_token: "ghs_tokenfromrequest",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const cloneCall = sandbox.execCalls[2]?.cmd ?? "";
+    expect(cloneCall).toContain("git clone");
+    expect(cloneCall).toContain(
+      "https://x-access-token:ghs_tokenfromrequest@github.com/markoinla/private.git",
+    );
+    expect(cloneCall).not.toContain("'https://github.com/markoinla/private.git'");
+  });
+
+  it("falls back to DISPATCH_GITHUB_TOKEN when the request omits a token", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-701"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: '{"type":"response"}', stderr: "" },
+    ];
+    sandboxHandles[runSandboxId("SYM-701")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-701",
+      repo_url: "https://github.com/markoinla/private.git",
+      prompt: "hi",
+      engine: "pi",
+    });
+
+    const env = makeEnv(db);
+    env.DISPATCH_GITHUB_TOKEN = "ghs_envtoken";
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    expect(sandbox.execCalls[2]?.cmd).toContain(
+      "https://x-access-token:ghs_envtoken@github.com/markoinla/private.git",
+    );
+  });
+
+  it("redacts the github_token from clone_failed stderr", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-702"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      {
+        exitCode: 128,
+        stdout: "",
+        stderr:
+          "fatal: unable to access 'https://x-access-token:ghs_leak@github.com/x/y.git/': boom",
+      },
+    ];
+    sandboxHandles[runSandboxId("SYM-702")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-702",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+      github_token: "ghs_leak",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(502);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.error).toBe("clone_failed");
+    expect(json.stderr).not.toContain("ghs_leak");
+    expect(json.stderr).toContain("***");
+  });
+
   it("returns 502 when git clone fails and still destroys the sandbox", async () => {
     const app = buildApp();
     const db = new FakeD1();

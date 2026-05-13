@@ -123,15 +123,17 @@ export function buildRunRouter() {
         `rm -rf ${shellQuote(workspaceDir)} && mkdir -p ${shellQuote(workspaceDir)}`,
       );
 
+      const cloneToken = parsed.githubToken ?? c.env.DISPATCH_GITHUB_TOKEN;
+      const cloneUrl = buildAuthenticatedCloneUrl(parsed.repoUrl, cloneToken);
       const cloneResult = await sandbox.exec(
-        `cd ${shellQuote(workspaceDir)} && git clone ${shellQuote(parsed.repoUrl)} .`,
+        `cd ${shellQuote(workspaceDir)} && git clone ${shellQuote(cloneUrl)} .`,
       );
       if (cloneResult.exitCode !== 0) {
         return c.json(
           {
             error: "clone_failed",
             exit_code: cloneResult.exitCode,
-            stderr: cloneResult.stderr,
+            stderr: redactToken(cloneResult.stderr, cloneToken),
           },
           502,
         );
@@ -297,12 +299,17 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
         type: "thought",
         text: `Cloning ${redactRepoUrl(parsed.repoUrl)}…`,
       });
+      const streamCloneToken = parsed.githubToken ?? env.DISPATCH_GITHUB_TOKEN;
+      const streamCloneUrl = buildAuthenticatedCloneUrl(
+        parsed.repoUrl,
+        streamCloneToken,
+      );
       const cloneResult = await sandbox.exec(
-        `cd ${shellQuote(workspaceDir)} && git clone ${shellQuote(parsed.repoUrl)} .`,
+        `cd ${shellQuote(workspaceDir)} && git clone ${shellQuote(streamCloneUrl)} .`,
       );
       if (cloneResult.exitCode !== 0) {
         await emitTerminal(cloneResult.exitCode, {
-          message: `clone_failed: ${cloneResult.stderr.slice(0, 500)}`,
+          message: `clone_failed: ${redactToken(cloneResult.stderr, streamCloneToken).slice(0, 500)}`,
         });
         return;
       }
@@ -649,6 +656,40 @@ async function writeMcpConfig(
 
 function redactRepoUrl(url: string): string {
   return url.replace(/(https?:\/\/)[^@]+@/, "$1***@");
+}
+
+/**
+ * Rewrite an `https://github.com/...` URL to embed an `x-access-token:<TOKEN>@`
+ * credential so `git clone` can fetch private repos non-interactively.
+ * Returns the URL unchanged for ssh-style URLs (`git@github.com:...`),
+ * non-https schemes, URLs that already carry credentials, or when no token
+ * is available.
+ *
+ * Stderr from the resulting clone command can echo the URL on failure
+ * (e.g. "Cloning into '.'..." followed by a fatal error), so callers
+ * MUST run `redactToken` over the stderr before surfacing it.
+ */
+export function buildAuthenticatedCloneUrl(
+  repoUrl: string,
+  token: string | null | undefined,
+): string {
+  if (!token) return repoUrl;
+  if (!repoUrl.startsWith("https://")) return repoUrl;
+  if (/^https:\/\/[^/@]+@/.test(repoUrl)) return repoUrl;
+  return `https://x-access-token:${token}@${repoUrl.slice("https://".length)}`;
+}
+
+/**
+ * Replace every occurrence of `token` in `text` with `***`. Used to scrub
+ * any leakage of the GitHub PAT from git stderr before we put it on the
+ * wire (buffered JSON response or SSE error frame).
+ */
+export function redactToken(
+  text: string,
+  token: string | null | undefined,
+): string {
+  if (!token) return text;
+  return text.split(token).join("***");
 }
 
 async function readJsonBody<T>(req: Request): Promise<T> {

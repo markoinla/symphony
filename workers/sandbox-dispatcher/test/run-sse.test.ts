@@ -371,6 +371,55 @@ describe("POST /run (Accept: text/event-stream)", () => {
     expect((events[1] as { exit_code: number }).exit_code).not.toBe(0);
   });
 
+  it("embeds the github_token in the clone URL and redacts it from clone_failed", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-703"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      {
+        exitCode: 128,
+        stdout: "",
+        stderr:
+          "fatal: unable to access 'https://x-access-token:ghs_secret@github.com/x/y.git/': nope",
+      },
+    ];
+    sandboxHandles[runSandboxId("SYM-703")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-703",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+      github_token: "ghs_secret",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+
+    const cloneCmd = sandbox.execCalls.find((c) => c.includes("git clone"));
+    expect(cloneCmd).toBeDefined();
+    expect(cloneCmd).toContain(
+      "https://x-access-token:ghs_secret@github.com/x/y.git",
+    );
+
+    const errorEvent = events.find((e) => e.type === "error") as
+      | { message: string }
+      | undefined;
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent!.message).toContain("clone_failed");
+    expect(errorEvent!.message).not.toContain("ghs_secret");
+    expect(errorEvent!.message).toContain("***");
+  });
+
   it("emits an error event then result when git clone fails", async () => {
     const app = buildApp();
     const db = new FakeD1();
