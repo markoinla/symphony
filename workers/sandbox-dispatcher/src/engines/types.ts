@@ -56,9 +56,15 @@ export type NormalizedEvent =
 export interface EngineAdapter {
   /**
    * Parse a single newline-terminated stdout chunk from the engine
-   * subprocess into zero or more normalized events. Adapters are
-   * stateless: a partial line on the wire must be buffered by the
-   * caller before being handed in.
+   * subprocess into zero or more normalized events. A partial line on
+   * the wire must be buffered by the caller before being handed in.
+   *
+   * Some engines (Claude) emit turn-completion records in-band and may
+   * keep per-stream counters. Create those adapters per run rather than
+   * sharing one singleton across concurrent streams.
    */
   parseEvents(line: string): NormalizedEvent[];
+
+  /** True when the adapter emits turn_end events itself. */
+  emitsTurnEnd?: boolean;
 }

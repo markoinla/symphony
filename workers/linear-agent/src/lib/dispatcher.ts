@@ -51,8 +51,12 @@ export interface RunArgs {
   issueId: string;
   repoUrl: string;
   prompt: string;
-  engine: "pi";
+  engine: string;
   model?: string | null;
+  permissionMode?: string | null;
+  appendSystemPrompt?: string | null;
+  allowedTools?: string[] | null;
+  disallowedTools?: string[] | null;
   timeoutMs?: number;
   githubToken?: string | null;
   credentials?: RunCredentials | null;
@@ -368,6 +372,12 @@ function serializeRunArgs(
     prompt: args.prompt,
     engine: args.engine,
     ...(args.model ? { model: args.model } : {}),
+    ...(args.permissionMode ? { permission_mode: args.permissionMode } : {}),
+    ...(args.appendSystemPrompt
+      ? { append_system_prompt: args.appendSystemPrompt }
+      : {}),
+    ...(args.allowedTools ? { allowed_tools: args.allowedTools } : {}),
+    ...(args.disallowedTools ? { disallowed_tools: args.disallowedTools } : {}),
     ...(args.timeoutMs ? { timeout_ms: args.timeoutMs } : {}),
     ...(args.githubToken ? { github_token: args.githubToken } : {}),
     ...(args.credentials ? { credentials: args.credentials } : {}),

@@ -420,7 +420,7 @@ describe("POST /run (engine: pi)", () => {
     ["bad repo_url scheme", { issue_id: "i", repo_url: "file:///etc/passwd", prompt: "p", engine: "pi" }, "invalid_repo_url"],
     ["repo_url with shell metachar", { issue_id: "i", repo_url: "https://x.y/z;rm -rf /.git", prompt: "p", engine: "pi" }, "invalid_repo_url"],
     ["empty prompt", { issue_id: "i", repo_url: "https://x.y/z.git", prompt: "", engine: "pi" }, "invalid_prompt"],
-    ["unsupported engine", { issue_id: "i", repo_url: "https://x.y/z.git", prompt: "p", engine: "claude" }, "unsupported_engine"],
+    ["unsupported engine", { issue_id: "i", repo_url: "https://x.y/z.git", prompt: "p", engine: "codex" }, "unsupported_engine"],
   ])("rejects %s with 400", async (_label, payload, expected) => {
     const app = buildApp();
     const db = new FakeD1();
@@ -463,6 +463,78 @@ describe("POST /run (engine: pi)", () => {
     expect(res.status).toBe(200);
     const piCall = sandbox.execCalls.find((c) => c.cmd.includes("pi --print"));
     expect(piCall?.opts?.timeout).toBe(30 * 60 * 1000);
+  });
+});
+
+describe("POST /run (engine: claude)", () => {
+  it("restores the claude baseline, writes Claude MCP config, and runs claude", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "claude");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-338"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" },
+      { exitCode: 0, stdout: '{"type":"result","subtype":"success"}', stderr: "" },
+    ];
+    sandboxHandles[runSandboxId("SYM-338")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-338",
+      repo_url: "https://github.com/markoinla/symphony.git",
+      prompt: "Implement Claude support.",
+      engine: "claude",
+      model: "claude-sonnet-4-5",
+      append_system_prompt: "Be concise.",
+      allowed_tools: ["Bash", "Read"],
+      disallowed_tools: ["WebFetch"],
+      credentials: {
+        anthropic_api_key: "sk-ant-test",
+        mcp_servers: [
+          { name: "linear", url: "https://mcp.linear.app/mcp", token: "lin_tok" },
+        ],
+      },
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.engine).toBe("claude");
+
+    const mcpWrite = sandbox.writeFileCalls.find(
+      (c) => c.path === "/workspace/SYM-338/.symphony-mcp-config.json",
+    );
+    expect(mcpWrite).toBeDefined();
+    expect(JSON.parse(mcpWrite!.content)).toEqual({
+      mcpServers: {
+        linear: {
+          type: "http",
+          url: "https://mcp.linear.app/mcp",
+          headers: { Authorization: "Bearer lin_tok" },
+        },
+      },
+    });
+
+    const claudeCall = sandbox.execCalls[3];
+    expect(claudeCall?.cmd).toContain("export ANTHROPIC_API_KEY='sk-ant-test'");
+    expect(claudeCall?.cmd).toContain("cat <<'SYMPHONY_PROMPT_EOF' | claude -p");
+    expect(claudeCall?.cmd).toContain("--output-format stream-json --verbose");
+    expect(claudeCall?.cmd).toContain("--permission-mode 'bypassPermissions'");
+    expect(claudeCall?.cmd).toContain("--dangerously-skip-permissions");
+    expect(claudeCall?.cmd).toContain(
+      "--mcp-config '/workspace/SYM-338/.symphony-mcp-config.json'",
+    );
+    expect(claudeCall?.cmd).toContain("--model 'claude-sonnet-4-5'");
+    expect(claudeCall?.cmd).toContain("--append-system-prompt 'Be concise.'");
+    expect(claudeCall?.cmd).toContain("--allowed-tools 'Bash' 'Read'");
+    expect(claudeCall?.cmd).toContain("--disallowed-tools 'WebFetch'");
+    expect(claudeCall?.cmd).toContain("Implement Claude support.\nSYMPHONY_PROMPT_EOF");
   });
 });
 

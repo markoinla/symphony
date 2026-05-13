@@ -158,6 +158,8 @@ export function buildAdminRouter() {
    */
   app.get("/admin/smoke", async (c) => {
     const startedAt = Date.now();
+    const engineParam = c.req.query("engine");
+    const engine = engineParam === "claude-code" ? "claude" : engineParam || "pi";
     const events: NormalizedEvent[] = [];
     let connectError: string | null = null;
 
@@ -176,7 +178,7 @@ export function buildAdminRouter() {
         issueId: "smoke-test",
         repoUrl: "https://github.com/symphony-smoke/does-not-exist.git",
         prompt: "smoke",
-        engine: "pi",
+        engine,
         model: null,
       })) {
         events.push(ev);
@@ -204,6 +206,7 @@ export function buildAdminRouter() {
 
     return c.json({
       sse_wire_ok: sseWireOk,
+      engine,
       duration_ms: Date.now() - startedAt,
       events_received: events.length,
       event_types: events.map((e) => e.type),

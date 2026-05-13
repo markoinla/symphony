@@ -4,6 +4,7 @@ import { getSandbox, parseSSEStream } from "@cloudflare/sandbox";
 import type { Env } from "./index";
 import { BaselineStore } from "./storage";
 import { SANDBOX_HOME, safeDestroy, sanitizeScopeForId } from "./sandbox-helpers";
+import { createClaudeEngineAdapter } from "./engines/claude";
 import { piEngineAdapter } from "./engines/pi";
 import type { EngineAdapter, NormalizedEvent } from "./engines/types";
 
@@ -29,8 +30,8 @@ import type { EngineAdapter, NormalizedEvent } from "./engines/types";
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_TIMEOUT_MS = 30 * 60 * 1000;
 
-const SUPPORTED_ENGINES = new Set(["pi"] as const);
-type Engine = "pi";
+const SUPPORTED_ENGINES = new Set(["pi", "claude"] as const);
+type Engine = "pi" | "claude";
 
 interface RunBody {
   issue_id?: unknown;
@@ -40,6 +41,10 @@ interface RunBody {
   model?: unknown;
   timeout_ms?: unknown;
   max_turns?: unknown;
+  permission_mode?: unknown;
+  append_system_prompt?: unknown;
+  allowed_tools?: unknown;
+  disallowed_tools?: unknown;
   github_token?: unknown;
   credentials?: unknown;
   // Optional branch name. When set, after clone the dispatcher fetches
@@ -76,6 +81,10 @@ interface ParsedRun {
   prompt: string;
   engine: Engine;
   model: string | null;
+  permissionMode: string | null;
+  appendSystemPrompt: string | null;
+  allowedTools: string[] | null;
+  disallowedTools: string[] | null;
   timeoutMs: number;
   githubToken: string | null;
   credentials: ParsedCredentials | null;
@@ -407,9 +416,11 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
 
       // Single-turn engines (pi today) get a synthetic `turn_end` so
       // the client can attribute the prior activities to a turn.
-      // Multi-turn engines (future codex/claude) will emit this
-      // themselves and we'll skip this block.
-      await emit({ type: "turn_end", turn: 1, reason: "completed" });
+      // Multi-turn engines (Claude) emit this themselves from in-band
+      // result chunks.
+      if (!adapter.emitsTurnEnd) {
+        await emit({ type: "turn_end", turn: 1, reason: "completed" });
+      }
 
       await emitTerminal(exitCode, { branch: streamResolvedBranch });
     } catch (e) {
@@ -451,6 +462,8 @@ function adapterFor(engine: Engine): EngineAdapter {
   switch (engine) {
     case "pi":
       return piEngineAdapter;
+    case "claude":
+      return createClaudeEngineAdapter();
   }
 }
 
@@ -471,6 +484,19 @@ function parseRun(body: RunBody): ParsedRun | string {
 
   const model = typeof body.model === "string" && body.model.length > 0 ? body.model : null;
 
+  const permissionMode =
+    typeof body.permission_mode === "string" && body.permission_mode.length > 0
+      ? body.permission_mode
+      : null;
+  const appendSystemPrompt =
+    typeof body.append_system_prompt === "string" && body.append_system_prompt.length > 0
+      ? body.append_system_prompt
+      : null;
+  const allowedTools = parseStringList(body.allowed_tools);
+  if (allowedTools === false) return "invalid_allowed_tools";
+  const disallowedTools = parseStringList(body.disallowed_tools);
+  if (disallowedTools === false) return "invalid_disallowed_tools";
+
   const timeoutMs = parseTimeout(body.timeout_ms);
 
   const githubToken =
@@ -490,6 +516,10 @@ function parseRun(body: RunBody): ParsedRun | string {
     prompt: body.prompt,
     engine: body.engine as Engine,
     model,
+    permissionMode,
+    appendSystemPrompt,
+    allowedTools,
+    disallowedTools,
     timeoutMs,
     githubToken,
     credentials,
@@ -548,6 +578,17 @@ function parseRepoUrl(value: unknown): string | null {
   // misused later.
   if (/[\s'"`$();&|<>\\]/.test(trimmed)) return null;
   return trimmed;
+}
+
+function parseStringList(value: unknown): string[] | null | false {
+  if (value === undefined || value === null) return null;
+  if (!Array.isArray(value)) return false;
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || item.length === 0) return false;
+    out.push(item);
+  }
+  return out;
 }
 
 function parseTimeout(value: unknown): number {
@@ -649,22 +690,62 @@ function buildEngineCommand(parsed: ParsedRun, workspaceDir: string): string {
       if (parsed.model) {
         flags.push("--model", shellQuote(parsed.model));
       }
-      const parts = [
-        `export HOME=${SANDBOX_HOME}`,
-        `export PATH=${SANDBOX_HOME}/.npm-global/bin:${SANDBOX_HOME}/.local/bin:$PATH`,
-      ];
-      if (parsed.credentials) {
-        for (const { name, value } of parsed.credentials.envVars) {
-          parts.push(`export ${name}=${shellQuote(value)}`);
-        }
-      }
+      const parts = buildEngineEnvironment(parsed);
       parts.push(
         `cd ${shellQuote(workspaceDir)}`,
         `pi ${flags.join(" ")} ${shellQuote(parsed.prompt)}`,
       );
       return parts.join(" && ");
     }
+    case "claude": {
+      const flags = [
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--permission-mode",
+        shellQuote(parsed.permissionMode ?? "bypassPermissions"),
+        "--dangerously-skip-permissions",
+      ];
+      if (parsed.credentials && parsed.credentials.mcpServers.length > 0) {
+        flags.push(
+          "--mcp-config",
+          shellQuote(serializeMcpConfig(workspaceDir, "claude", parsed.credentials).configPath),
+        );
+      }
+      if (parsed.model) {
+        flags.push("--model", shellQuote(parsed.model));
+      }
+      if (parsed.appendSystemPrompt) {
+        flags.push("--append-system-prompt", shellQuote(parsed.appendSystemPrompt));
+      }
+      if (parsed.allowedTools) {
+        flags.push("--allowed-tools", ...parsed.allowedTools.map(shellQuote));
+      }
+      if (parsed.disallowedTools) {
+        flags.push("--disallowed-tools", ...parsed.disallowedTools.map(shellQuote));
+      }
+      const parts = buildEngineEnvironment(parsed);
+      parts.push(
+        `cd ${shellQuote(workspaceDir)}`,
+        `cat <<'SYMPHONY_PROMPT_EOF' | claude ${flags.join(" ")}\n${parsed.prompt}\nSYMPHONY_PROMPT_EOF`,
+      );
+      return parts.join(" && ");
+    }
   }
+}
+
+function buildEngineEnvironment(parsed: ParsedRun): string[] {
+  const parts = [
+    `export HOME=${SANDBOX_HOME}`,
+    `export PATH=${SANDBOX_HOME}/.npm-global/bin:${SANDBOX_HOME}/.local/bin:$PATH`,
+  ];
+  if (parsed.credentials) {
+    for (const { name, value } of parsed.credentials.envVars) {
+      parts.push(`export ${name}=${shellQuote(value)}`);
+    }
+  }
+  return parts;
 }
 
 /**
@@ -815,6 +896,28 @@ function serializeMcpConfig(
       return {
         configDir,
         configPath: `${configDir}/mcp.json`,
+        content: JSON.stringify(config, null, 2),
+      };
+    }
+    case "claude": {
+      const config = {
+        mcpServers: Object.fromEntries(
+          credentials.mcpServers.map((srv) => [
+            srv.name,
+            {
+              type: "http" as const,
+              url: srv.url,
+              headers: {
+                Authorization: `Bearer ${srv.token}`,
+              },
+            },
+          ]),
+        ),
+      };
+      const configDir = workspaceDir;
+      return {
+        configDir,
+        configPath: `${configDir}/.symphony-mcp-config.json`,
         content: JSON.stringify(config, null, 2),
       };
     }

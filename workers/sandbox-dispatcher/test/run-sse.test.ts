@@ -271,6 +271,47 @@ describe("POST /run (Accept: text/event-stream)", () => {
     expect(sandbox.destroyed).toBe(true);
   });
 
+  it("lets the claude adapter emit turn_end without adding a synthetic one", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "claude");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-338"));
+    sandbox.streamScript = [
+      { type: "stdout", data: '{"type":"assistant","message":{"content":[{"type":"text","text":"Done"}]}}\n' },
+      { type: "stdout", data: '{"type":"result","subtype":"success"}\n' },
+      { type: "complete", exitCode: 0 },
+    ];
+    sandboxHandles[runSandboxId("SYM-338")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-338",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "claude",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+    expect(events.map((e) => e.type)).toEqual([
+      "thought",
+      "thought",
+      "thought",
+      "thought",
+      "assistant_msg",
+      "turn_end",
+      "result",
+    ]);
+    expect(events.filter((e) => e.type === "turn_end")).toEqual([
+      { type: "turn_end", turn: 1, reason: "completed" },
+    ]);
+  });
+
   it("writes MCP config and injects env vars in streaming mode", async () => {
     const app = buildApp();
     const db = new FakeD1();

@@ -33,11 +33,11 @@ export function buildAgentDefaults(env: Env): AgentDefaults {
 export function validateSettingValue(key: string, value: string): string | null {
   switch (key) {
     case "agent.default_engine":
-      // sandbox-dispatcher only supports `pi` today. Reject other
-      // engines outright rather than letting them silently fail at
-      // dispatch.
-      if (value !== "pi") {
-        return "Only `pi` is supported as the default engine today.";
+      // Keep this in sync with sandbox-dispatcher's supported engines.
+      // `claude-code` is accepted by older editor surfaces but
+      // normalized to `claude` by the session runner before dispatch.
+      if (!["pi", "claude", "claude-code"].includes(value)) {
+        return "Default engine must be `pi` or `claude`.";
       }
       return null;
     case "agent.default_model":

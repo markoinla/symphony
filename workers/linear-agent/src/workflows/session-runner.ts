@@ -128,7 +128,7 @@ type ResolvedInputs =
       kind: "ok";
       repoUrl: string;
       prompt: string;
-      engine: "pi";
+      engine: string;
       model: string | null;
       maxTurns: number;
       scope: string;
@@ -463,11 +463,12 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         const settingByKey = new Map(orgSettings.map((s) => [s.key, s.value]));
 
         const engineFromSettings = settingByKey.get("agent.default_engine");
-        const engine =
+        const engine = normalizeEngineName(
           workflowOverrides?.engine ??
-          engineFromSettings ??
-          this.env.DEFAULT_ENGINE ??
-          "pi";
+            engineFromSettings ??
+            this.env.DEFAULT_ENGINE ??
+            "pi",
+        );
 
         // Model is the only field with NULL-means-inherit semantics
         // at the workflow level. dispatch-trigger omits `model` from
@@ -492,23 +493,11 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         const scope =
           projectRow?.scope ?? this.env.DEFAULT_SCOPE ?? "default";
 
-        // sandbox-dispatcher only supports `pi` end-to-end today.
-        // The settings API validator enforces this for org-level
-        // defaults; non-pi values can still arrive via
-        // `workflow_overrides` (workflow editor accepts codex /
-        // claude-code) so we coerce here. When the dispatcher gains
-        // additional adapters, broaden the ResolvedInputs union.
-        if (engine !== "pi") {
-          console.warn(
-            "engine_coerced_to_pi",
-            JSON.stringify({ requested: engine, session_id: sessionId }),
-          );
-        }
         return {
           kind: "ok",
           repoUrl,
           prompt,
-          engine: "pi",
+          engine,
           model,
           maxTurns,
           scope,
@@ -956,6 +945,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       scope,
       issueIdentifier,
     } = params;
+    const engine = normalizeEngineName(params.engine);
     // Point the engine at the `linear` skill on every prompt so
     // headless runs (no synthesized webhook with promptContext) still
     // pick it up. Idempotent — withLinearGraphqlReference is a no-op
@@ -1037,7 +1027,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
               issueId: issueIdentifier,
               repoUrl,
               prompt: captured,
-              engine: "pi",
+              engine,
               model,
               githubToken,
               credentials: null,
@@ -1124,6 +1114,10 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
   }
 }
 
+function normalizeEngineName(engine: string): string {
+  return engine === "claude-code" ? "claude" : engine;
+}
+
 /**
  * Run one turn: open the dispatcher SSE stream, map each normalized
  * event to a Linear activity, post live, capture the turn outcome.
@@ -1141,7 +1135,7 @@ async function runTurn(
     issueId: string;
     repoUrl: string;
     prompt: string;
-    engine: "pi";
+    engine: string;
     model: string | null;
     githubToken: string | null;
     credentials: RunCredentials | null;
@@ -1249,7 +1243,7 @@ async function runTurnHeadless(
     issueId: string;
     repoUrl: string;
     prompt: string;
-    engine: "pi";
+    engine: string;
     model: string | null;
     githubToken: string | null;
     credentials: RunCredentials | null;
