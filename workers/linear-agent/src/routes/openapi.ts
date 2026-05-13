@@ -211,11 +211,12 @@ export function buildOpenApiDocument(env: Env): Record<string, unknown> {
         parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
         get: { summary: "Get workflow", responses: { "200": { description: "OK", ...jsonBody("Workflow") }, ...commonErrors } },
         put: {
-          summary: "Update workflow (draft only)",
+          summary: "Update workflow in place",
+          description:
+            "PUT edits the live row regardless of status. Use POST /publish to snapshot a versioned checkpoint into workflow_versions.",
           requestBody: jsonBody("WorkflowUpdateInput"),
           responses: {
             "200": { description: "OK", ...jsonBody("Workflow") },
-            "409": errorResponse("Workflow is not in `draft` status."),
             ...commonErrors,
           },
         },

@@ -989,7 +989,7 @@ describe("/api/v1/workflows", () => {
     expect(db.versions[0]?.workflow_id).toBe(workflow.id);
   });
 
-  it("PUT on a published workflow returns 409 invalid_state", async () => {
+  it("PUT updates a published workflow in place (no status gate)", async () => {
     asUser("org-1");
     const db = new ApiD1();
     db.workflows.set(
@@ -1006,9 +1006,14 @@ describe("/api/v1/workflows", () => {
       makeEnv(db),
       makeExecCtx(),
     );
-    expect(res.status).toBe(409);
-    const body = (await res.json()) as { error: string };
-    expect(body.error).toBe("invalid_state");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      workflow: { max_turns: number; status: string };
+    };
+    expect(body.workflow.max_turns).toBe(99);
+    // Status is unchanged — PUT is content-only; explicit POST /publish
+    // still controls versioned snapshots.
+    expect(body.workflow.status).toBe("published");
   });
 
   it("test-run route is gone (404)", async () => {

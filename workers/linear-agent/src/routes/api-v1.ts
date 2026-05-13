@@ -421,13 +421,11 @@ export function buildApiV1Router() {
     const existing = await getWorkflow(c.env.DB, id, auth.orgId);
     if (!existing) return respondError(c, "not_found");
 
-    if (existing.status !== "draft") {
-      return respondError(
-        c,
-        "invalid_state",
-        "Workflow is not in `draft` status. Duplicate it, edit the copy, then publish.",
-      );
-    }
+    // Published workflows are editable in place — matches dashboard UX
+    // where users expect Save to just work. Explicit POST /publish
+    // still snapshots into `workflow_versions` when you want a versioned
+    // checkpoint; ad-hoc PUTs overwrite the live content without
+    // bumping `version`.
 
     const sets: string[] = [];
     const values: unknown[] = [];

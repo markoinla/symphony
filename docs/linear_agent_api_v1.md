@@ -85,7 +85,7 @@ The `code` taxonomy:
 | `forbidden`         | 403  | Authed but missing scope or wrong org                       |
 | `not_found`         | 404  | Resource doesn't exist or doesn't belong to actor's org     |
 | `validation_failed` | 400  | Zod parse failed; `issues` populated                        |
-| `invalid_state`     | 409  | E.g. `PUT` on a published workflow                          |
+| `invalid_state`     | 409  | Reserved for future state-machine constraints               |
 | `conflict`          | 409  | Idempotency key reused with different body; unique violation|
 | `rate_limited`      | 429  | Reserved; not enforced today                                |
 | `dispatcher_error`  | 502  | Downstream dispatcher 4xx/5xx surfaced upstream             |
@@ -150,7 +150,7 @@ target shape with deltas called out.
 GET    /api/v1/workflows                 (read)
 POST   /api/v1/workflows                 (write) Idempotency-Key
 GET    /api/v1/workflows/:id             (read)
-PUT    /api/v1/workflows/:id             (write) draft-only [new]
+PUT    /api/v1/workflows/:id             (write)
 DELETE /api/v1/workflows/:id             (write)
 POST   /api/v1/workflows/:id/publish     (write)
 POST   /api/v1/workflows/:id/duplicate   (write) Idempotency-Key
@@ -160,8 +160,10 @@ GET    /api/v1/workflows/resolve         (read)  debug helper
 
 **Deltas from today:**
 
-- `PUT` returns `409 invalid_state` when `status='published'`. Edits to
-  a published workflow must go through "duplicate → edit → publish."
+- `PUT` edits the live row regardless of status. The dashboard's Save
+  button expects this. Use `POST /publish` to write a versioned snapshot
+  into `workflow_versions` when you want a checkpoint; bare `PUT`s
+  overwrite content without bumping `version`.
 - `POST /workflows/:id/test-run` (currently 501) is **removed** from
   the surface. Re-add when implementation exists.
 - `POST` and `POST /duplicate` accept `Idempotency-Key`.
