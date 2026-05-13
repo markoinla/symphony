@@ -5,6 +5,10 @@
   "compatibility_date": "2025-03-24",
   "compatibility_flags": ["nodejs_compat"],
 
+  "observability": {
+    "enabled": true
+  },
+
   // Custom domain + wildcard subdomain are required for Cloudflare Sandbox
   // preview URLs (sandbox.exposePort returns https://<port>-<id>.sandbox.marko.la).
   // .workers.dev does NOT support wildcard subdomains, so the bootstrap PTY
@@ -38,7 +42,7 @@
     {
       "class_name": "Sandbox",
       "image": "docker.io/cloudflare/sandbox:0.10.0",
-      "instance_type": "standard-2",
+      "instance_type": "standard-4",
       "max_instances": 100,
       // SSH access via `wrangler containers ssh <instance_id>`. Only
       // ssh-ed25519 keys are supported. Authorizes every sandbox spun up
@@ -108,7 +112,7 @@
         {
           "class_name": "Sandbox",
           "image": "docker.io/cloudflare/sandbox:0.10.0",
-          "instance_type": "standard-2",
+          "instance_type": "standard-4",
           "max_instances": 10,
           "authorized_keys": [
             {
