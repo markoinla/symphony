@@ -165,6 +165,7 @@ export function buildRunRouter() {
         try {
           const pushed = await commitAndPush(sandbox, workspaceDir, {
             issueIdentifier: parsed.issueId,
+            repoUrl: parsed.repoUrl,
             githubToken: pushToken,
           });
           branch = pushed?.branch ?? null;
@@ -388,6 +389,7 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
         try {
           const pushed = await commitAndPush(sandbox, workspaceDir, {
             issueIdentifier: parsed.issueId,
+            repoUrl: parsed.repoUrl,
             githubToken: streamPushToken,
           });
           branch = pushed?.branch ?? null;

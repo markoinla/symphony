@@ -44,6 +44,7 @@ class FakeSandbox {
 
 const baseArgs = {
   issueIdentifier: "SYM-271",
+  repoUrl: "https://github.com/org/repo",
   githubToken: "ghp_test",
   defaultBranch: "main",
 };
@@ -206,16 +207,23 @@ describe("commitAndPush — push security", () => {
     });
 
     const pushCmd = sandbox.execCalls[5]!;
-    // The PAT must appear inside a sed replacement, and stdout must be
-    // dropped so a git success line can't echo the URL onto the SSE wire.
-    // Stderr is intentionally NOT redirected — we capture it and run it
-    // through `redactToken` before surfacing (see the redaction test below).
+    // The PAT must appear in the inline auth URL passed to git push,
+    // and stdout must be dropped so a git success line can't echo the
+    // URL onto the SSE wire. Stderr is intentionally NOT redirected —
+    // we capture it and run it through `redactToken` before surfacing
+    // (see the redaction test below).
     expect(pushCmd).toContain("ghp_super_secret_pat");
+    expect(pushCmd).toContain("x-access-token:ghp_super_secret_pat@github.com");
     expect(pushCmd).toContain(">/dev/null");
     expect(pushCmd).not.toContain("2>&1");
     // It should NOT use `git remote set-url` (would persist the PAT to
-    // .git/config on disk).
+    // .git/config on disk), and it must NOT read the URL from origin —
+    // origin still carries the clone-time credentials, and stacking
+    // another `x-access-token:` userinfo on top breaks curl with
+    // CURLE_URL_MALFORMAT.
     expect(pushCmd).not.toContain("remote set-url");
+    expect(pushCmd).not.toContain("remote get-url");
+    expect(pushCmd).not.toContain("sed ");
   });
 
   it("redacts the PAT from push stderr surfaced in the error message", async () => {

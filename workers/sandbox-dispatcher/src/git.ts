@@ -37,7 +37,7 @@
 
 import type { Sandbox as SandboxType } from "@cloudflare/sandbox";
 
-import { redactToken, shellQuote } from "./run";
+import { buildAuthenticatedCloneUrl, redactToken, shellQuote } from "./run";
 
 export interface PushResult {
   branch: string;
@@ -46,6 +46,12 @@ export interface PushResult {
 
 export interface PushArgs {
   issueIdentifier: string;
+  /** Canonical `https://github.com/owner/repo[.git]` URL — the same URL
+   * the workspace was cloned from. We do NOT read this back from
+   * `git remote get-url origin` because clone stored an authenticated
+   * URL there, and prepending another `x-access-token:` userinfo on
+   * top of it produces a malformed URL that curl rejects. */
+  repoUrl: string;
   /** GitHub PAT with `repo` scope. */
   githubToken: string;
   /** Default branch on origin; used as the upstream base. */
@@ -161,21 +167,28 @@ export async function commitAndPush(
   }
   const commit_sha = shaResult.stdout.trim();
 
-  // 8. Push with embedded PAT auth. We DO NOT echo the URL anywhere —
-  // the sandbox exec output is captured by the streaming branch as
-  // stdout chunks the linear-agent might surface in the timeline, so
-  // keeping the token off stdout is mandatory. Stdout is dropped, and
-  // stderr is captured and scrubbed via `redactToken` before surfacing
-  // so the PAT can't leak even if git echoes the URL on failure.
+  // 8. Push with embedded PAT auth. The auth URL is built from
+  // `args.repoUrl` (the canonical URL the workspace was cloned from),
+  // NOT from `git remote get-url origin` — the remote already contains
+  // a `x-access-token:<TOKEN>@` userinfo from clone, and stacking
+  // another set of credentials on top yields a malformed URL that curl
+  // rejects (CURLE_URL_MALFORMAT). Building from the canonical URL
+  // produces exactly one userinfo block.
   //
-  // `git remote set-url` would mutate `.git/config`; we avoid that and
-  // build the auth URL inline instead, so the credential never lands
-  // on disk (the container is ephemeral but defense-in-depth).
+  // We pass the URL as an argv argument (not a `$(…)` expansion in the
+  // shell) so the token never touches stdout via command substitution.
+  // Stdout is dropped because git can echo the URL on success ("To
+  // https://x-access-token:…@github.com/…"). Stderr is captured and
+  // run through `redactToken` so failure diagnostics surface without
+  // the PAT.
+  //
+  // `git remote set-url` would persist the PAT in `.git/config`; we
+  // avoid that by passing the URL inline (the container is ephemeral
+  // but defense-in-depth).
+  const authUrl = buildAuthenticatedCloneUrl(args.repoUrl, args.githubToken);
   const remoteResult = await sandbox.exec(
     `cd ${shellQuote(workspaceDir)} && ` +
-      `origin_url=$(git remote get-url origin) && ` +
-      `auth_url=$(echo "$origin_url" | sed "s|https://|https://x-access-token:${shellEscapeForDoubleQuotes(args.githubToken)}@|") && ` +
-      `git push "$auth_url" HEAD:refs/heads/${shellQuote(branchName)} >/dev/null`,
+      `git push ${shellQuote(authUrl)} HEAD:refs/heads/${shellQuote(branchName)} >/dev/null`,
   );
   if (remoteResult.exitCode !== 0) {
     const stderr = redactToken(remoteResult.stderr ?? "", args.githubToken)
@@ -187,14 +200,4 @@ export async function commitAndPush(
   }
 
   return { branch: branchName, commit_sha };
-}
-
-/**
- * Escape a string for safe embedding inside `"..."` shell quotes. We
- * only need to handle `"`, `$`, `\``, and `\\` — the value we pass
- * here (a GitHub PAT) is alphanumeric plus a few safe punctuation
- * chars per GitHub's own spec, so this is belt-and-suspenders.
- */
-function shellEscapeForDoubleQuotes(s: string): string {
-  return s.replace(/[\\"`$]/g, "\\$&");
 }
