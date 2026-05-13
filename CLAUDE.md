@@ -159,7 +159,7 @@ Full failure-mode postmortem: `docs/cloudflare_sandbox_integration.md:486-501`.
 
 ### Editing an engine baseline snapshot
 
-Each engine (`pi`, `codex`, `claude`) has one baseline snapshot in D1 `engine_baselines` holding CLI logins + tools under `/home/symphony`. To edit interactively and resnapshot:
+All engines (`pi`, `claude`, `codex`) currently share one baseline snapshot — the `pi` row in D1 `engine_baselines`, which ships every CLI + login under `/home/symphony`. At dispatch time `workers/sandbox-dispatcher/src/baseline-alias.ts` aliases the requested engine to its baseline row; the engine adapter then picks which CLI to invoke. Edit that file to split engines onto their own snapshots. To edit interactively and resnapshot:
 
 ```bash
 export SYMPHONY_DISPATCHER_URL=https://sandbox.marko.la

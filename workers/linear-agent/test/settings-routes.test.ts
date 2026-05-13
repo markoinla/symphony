@@ -321,7 +321,7 @@ describe("PUT /dashboard/api/settings/:key", () => {
     expect(body.message).toMatch(/non-empty/i);
   });
 
-  it("rejects non-pi engine with 400", async () => {
+  it("rejects unsupported engine with 400", async () => {
     asUser();
     const res = await buildApp().fetch(
       new Request(
@@ -337,10 +337,10 @@ describe("PUT /dashboard/api/settings/:key", () => {
     );
     expect(res.status).toBe(400);
     const body = (await res.json()) as { message: string };
-    expect(body.message).toMatch(/only `pi`/i);
+    expect(body.message).toMatch(/`pi` or `claude`/i);
   });
 
-  it("accepts pi engine", async () => {
+  it("accepts pi and claude engines", async () => {
     asUser();
     const db = new SettingsD1();
     const res = await buildApp().fetch(
@@ -357,6 +357,21 @@ describe("PUT /dashboard/api/settings/:key", () => {
     );
     expect(res.status).toBe(200);
     expect(db.rows.get("org-1:agent.default_engine")?.value).toBe("pi");
+
+    const claudeRes = await buildApp().fetch(
+      new Request(
+        "https://agent.example/dashboard/api/settings/agent.default_engine",
+        {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ value: "claude" }),
+        },
+      ),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    expect(claudeRes.status).toBe(200);
+    expect(db.rows.get("org-1:agent.default_engine")?.value).toBe("claude");
   });
 
   it("rejects non-integer max_turns with 400", async () => {

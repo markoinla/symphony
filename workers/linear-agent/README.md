@@ -131,8 +131,8 @@ so the dashboard can render "Default: X" when the org has no override.
 
 Curated key validation (server-side):
 
-- `agent.default_engine` — must equal `pi` (sandbox-dispatcher only
-  supports `pi` end-to-end today)
+- `agent.default_engine` — must equal `pi` or `claude` (`claude-code`
+  is accepted for compatibility and normalized to `claude` at dispatch)
 - `agent.default_model` — non-empty trimmed string
 - `agent.max_turns` — positive integer in `[1, 100]`
 
