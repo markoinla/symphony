@@ -7,7 +7,9 @@ import { buildApiV1Router } from "./routes/api-v1";
 import { buildDashboardApiRouter } from "./routes/dashboard-api";
 import { buildDashboardRouter } from "./routes/dashboard";
 import { buildGitHubRouter } from "./routes/github";
+import { buildMcpRouter } from "./routes/mcp";
 import { buildOAuthRouter } from "./routes/oauth";
+import { buildOpenApiRouter } from "./routes/openapi";
 import { buildWebhookRouter } from "./routes/webhook";
 
 export interface Env {
@@ -133,6 +135,8 @@ export function buildApp() {
   });
 
   app.route("/", buildApiV1Router());
+  app.route("/", buildOpenApiRouter());
+  app.route("/", buildMcpRouter());
   app.route("/", buildDashboardApiRouter());
   app.route("/", buildDashboardRouter());
   app.route("/", buildOAuthRouter());

@@ -31,6 +31,13 @@ import { LinearAgentInstallStore, ProjectStore } from "../lib/store";
 
 const AUTH_HEADER = "authorization";
 
+// Sunset for project write paths under /admin/* and /dashboard/api/*.
+// Callers should migrate to /api/v1/projects. RFC 8594 / RFC 7231 date.
+// Bumped here in one place rather than per-handler.
+const PROJECT_SUNSET = "Mon, 10 Aug 2026 00:00:00 GMT";
+const PROJECT_DEPRECATION_LINK =
+  '</api/v1/projects>; rel="successor-version"';
+
 export function buildAdminRouter() {
   const app = new Hono<{ Bindings: Env }>();
 
@@ -63,6 +70,9 @@ export function buildAdminRouter() {
   });
 
   app.post("/admin/projects", async (c) => {
+    c.header("Sunset", PROJECT_SUNSET);
+    c.header("Link", PROJECT_DEPRECATION_LINK);
+    c.header("Deprecation", "true");
     const body = (await c.req.json().catch(() => null)) as
       | {
           organization_id?: string;
@@ -102,6 +112,9 @@ export function buildAdminRouter() {
   });
 
   app.delete("/admin/projects/:orgId/:linearTeamId", async (c) => {
+    c.header("Sunset", PROJECT_SUNSET);
+    c.header("Link", PROJECT_DEPRECATION_LINK);
+    c.header("Deprecation", "true");
     const removed = await new ProjectStore(c.env.DB).delete(
       c.req.param("orgId"),
       c.req.param("linearTeamId"),

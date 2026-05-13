@@ -12,17 +12,33 @@
 //   { error: string, issues?: ... } on failures (Zod errors include `issues`)
 
 import { z } from "zod";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 
 import type { Env } from "../index";
 import type { AuthVariables } from "../lib/auth/context";
 import { requireAuth } from "../lib/auth/context";
+import { hashToken } from "../lib/auth/bearer";
+import { requireScope, requireScopeForMethod } from "../lib/auth/scope";
+import { respondError } from "../lib/responses";
 import { resolveWorkflow } from "../lib/workflows/resolver";
 import { renderPrompt } from "../lib/workflows/render";
+import { CredentialStore } from "../lib/credentials";
+import { withIdempotency } from "../lib/idempotency";
+import { nextCursorFrom, parsePagination } from "../lib/pagination";
+import { buildAgentDefaults, validateSettingValue } from "../lib/settings";
 import {
+  GitHubInstallStore,
+  LinearAgentInstallStore,
+  ProjectStore,
+  SettingStore,
   WebhookEventStore,
   type WebhookEventRecord,
 } from "../lib/store";
+import { ApiTokenCreateSchema } from "../schemas/api-token";
+import {
+  ProjectCreateSchema,
+  ProjectUpdateSchema,
+} from "../schemas/project";
 import {
   TriggerCreateSchema,
   TriggerUpdateSchema,
@@ -236,30 +252,96 @@ export function buildApiV1Router() {
   // All /api/v1/* routes require a valid AuthContext.
   app.use("/api/v1/*", requireAuth());
 
+  // Per-resource scope enforcement. GET → read, mutations → write,
+  // except api-tokens (admin on POST/DELETE — checked inline).
+  const rwScopes = requireScopeForMethod({
+    GET: "read",
+    POST: "write",
+    PUT: "write",
+    DELETE: "write",
+  });
+  app.use("/api/v1/workflows", rwScopes);
+  app.use("/api/v1/workflows/*", rwScopes);
+  app.use("/api/v1/triggers/*", rwScopes);
+  app.use("/api/v1/webhooks", rwScopes);
+  app.use("/api/v1/webhooks/*", rwScopes);
+  app.use("/api/v1/webhook-events", rwScopes);
+  app.use("/api/v1/webhook-events/*", rwScopes);
+  app.use("/api/v1/projects", rwScopes);
+  app.use("/api/v1/projects/*", rwScopes);
+  app.use("/api/v1/settings", rwScopes);
+  app.use("/api/v1/settings/*", rwScopes);
+  app.use("/api/v1/integrations", rwScopes);
+
   // ── Workflows ────────────────────────────────────────────────────
 
   app.get("/api/v1/workflows", async (c) => {
     const auth = c.get("auth");
+    const { limit, beforeId } = parsePagination(c);
+    const status = c.req.query("status") || undefined;
+    const teamId = c.req.query("team_id") || undefined;
+    const userId = c.req.query("user_id") || undefined;
+
+    // Cursor row — fetch the (created_at, id) of the before_id anchor so
+    // the WHERE clause can use SQLite tuple comparison. Anchor outside
+    // the org is treated as "no cursor" (defensive, mirrors not_found).
+    let cursorTs: number | null = null;
+    if (beforeId) {
+      const anchor = await c.env.DB.prepare(
+        "SELECT created_at FROM workflows WHERE id = ? AND organization_id = ?",
+      )
+        .bind(beforeId, auth.orgId)
+        .first<{ created_at: number }>();
+      if (anchor) cursorTs = anchor.created_at;
+    }
+
+    const filters: string[] = ["organization_id = ?"];
+    const bindings: unknown[] = [auth.orgId];
+    if (status) {
+      filters.push("status = ?");
+      bindings.push(status);
+    }
+    if (teamId) {
+      filters.push("team_id = ?");
+      bindings.push(teamId);
+    }
+    if (userId) {
+      filters.push("user_id = ?");
+      bindings.push(userId);
+    }
+    if (cursorTs !== null && beforeId) {
+      filters.push("(created_at, id) < (?, ?)");
+      bindings.push(cursorTs, beforeId);
+    }
+    bindings.push(limit);
+
     const result = await c.env.DB.prepare(
       `SELECT ${WORKFLOW_COLS} FROM workflows
-       WHERE organization_id = ?
-       ORDER BY created_at DESC`,
+       WHERE ${filters.join(" AND ")}
+       ORDER BY created_at DESC, id DESC
+       LIMIT ?`,
     )
-      .bind(auth.orgId)
+      .bind(...bindings)
       .all<WorkflowRow>();
+
+    const rows = result.results ?? [];
     return c.json({
-      workflows: (result.results ?? []).map(serializeWorkflow),
+      workflows: rows.map(serializeWorkflow),
+      next_cursor: nextCursorFrom(rows, limit),
     });
   });
 
-  app.post("/api/v1/workflows", async (c) => {
+  app.post("/api/v1/workflows", async (c) =>
+    withIdempotency(c, "POST /api/v1/workflows", async () => {
     const auth = c.get("auth");
     const raw = await c.req.json().catch(() => null);
     const parsed = WorkflowCreateSchema.safeParse(raw);
     if (!parsed.success) {
-      return c.json(
-        { error: "invalid_body", issues: parsed.error.issues },
-        400,
+      return respondError(
+        c,
+        "validation_failed",
+        undefined,
+        parsed.error.issues,
       );
     }
     const input = parsed.data;
@@ -309,14 +391,15 @@ export function buildApiV1Router() {
       .run();
 
     const row = await getWorkflow(c.env.DB, id, auth.orgId);
-    if (!row) return c.json({ error: "insert_failed" }, 500);
+    if (!row) return respondError(c, "internal_error", "Insert failed.");
     return c.json({ workflow: serializeWorkflow(row) }, 201);
-  });
+    }),
+  );
 
   app.get("/api/v1/workflows/:id", async (c) => {
     const auth = c.get("auth");
     const row = await getWorkflow(c.env.DB, c.req.param("id"), auth.orgId);
-    if (!row) return c.json({ error: "not_found" }, 404);
+    if (!row) return respondError(c, "not_found");
     return c.json({ workflow: serializeWorkflow(row) });
   });
 
@@ -326,15 +409,25 @@ export function buildApiV1Router() {
     const raw = await c.req.json().catch(() => null);
     const parsed = WorkflowUpdateSchema.safeParse(raw);
     if (!parsed.success) {
-      return c.json(
-        { error: "invalid_body", issues: parsed.error.issues },
-        400,
+      return respondError(
+        c,
+        "validation_failed",
+        undefined,
+        parsed.error.issues,
       );
     }
     const input = parsed.data;
 
     const existing = await getWorkflow(c.env.DB, id, auth.orgId);
-    if (!existing) return c.json({ error: "not_found" }, 404);
+    if (!existing) return respondError(c, "not_found");
+
+    if (existing.status !== "draft") {
+      return respondError(
+        c,
+        "invalid_state",
+        "Workflow is not in `draft` status. Duplicate it, edit the copy, then publish.",
+      );
+    }
 
     const sets: string[] = [];
     const values: unknown[] = [];
@@ -389,7 +482,7 @@ export function buildApiV1Router() {
       .run();
 
     const updated = await getWorkflow(c.env.DB, id, auth.orgId);
-    if (!updated) return c.json({ error: "not_found" }, 404);
+    if (!updated) return respondError(c, "not_found");
     return c.json({ workflow: serializeWorkflow(updated) });
   });
 
@@ -402,7 +495,7 @@ export function buildApiV1Router() {
       .bind(id, auth.orgId)
       .run();
     if ((res.meta?.changes ?? 0) === 0)
-      return c.json({ error: "not_found" }, 404);
+      return respondError(c, "not_found");
     return c.json({ ok: true });
   });
 
@@ -412,7 +505,7 @@ export function buildApiV1Router() {
     const auth = c.get("auth");
     const id = c.req.param("id");
     const existing = await getWorkflow(c.env.DB, id, auth.orgId);
-    if (!existing) return c.json({ error: "not_found" }, 404);
+    if (!existing) return respondError(c, "not_found");
 
     const ts = nowSec();
     const version = existing.version;
@@ -435,7 +528,7 @@ export function buildApiV1Router() {
       .run();
 
     const updated = await getWorkflow(c.env.DB, id, auth.orgId);
-    if (!updated) return c.json({ error: "not_found" }, 404);
+    if (!updated) return respondError(c, "not_found");
     return c.json({
       workflow: serializeWorkflow(updated),
       version: { id: versionId, version, created_at: ts },
@@ -444,11 +537,12 @@ export function buildApiV1Router() {
 
   // ── Duplicate ────────────────────────────────────────────────────
 
-  app.post("/api/v1/workflows/:id/duplicate", async (c) => {
+  app.post("/api/v1/workflows/:id/duplicate", async (c) =>
+    withIdempotency(c, "POST /api/v1/workflows/:id/duplicate", async () => {
     const auth = c.get("auth");
     const id = c.req.param("id");
     const src = await getWorkflow(c.env.DB, id, auth.orgId);
-    if (!src) return c.json({ error: "not_found" }, 404);
+    if (!src) return respondError(c, "not_found");
 
     const newId = crypto.randomUUID();
     const ts = nowSec();
@@ -497,9 +591,10 @@ export function buildApiV1Router() {
       .run();
 
     const row = await getWorkflow(c.env.DB, newId, auth.orgId);
-    if (!row) return c.json({ error: "duplicate_failed" }, 500);
+    if (!row) return respondError(c, "internal_error", "Duplicate failed.");
     return c.json({ workflow: serializeWorkflow(row) }, 201);
-  });
+    }),
+  );
 
   // ── Preview — render the prompt template against an issue ───────
 
@@ -509,14 +604,16 @@ export function buildApiV1Router() {
     const raw = await c.req.json().catch(() => null);
     const parsed = PreviewRequestSchema.safeParse(raw);
     if (!parsed.success) {
-      return c.json(
-        { error: "invalid_body", issues: parsed.error.issues },
-        400,
+      return respondError(
+        c,
+        "validation_failed",
+        undefined,
+        parsed.error.issues,
       );
     }
 
     const row = await getWorkflow(c.env.DB, id, auth.orgId);
-    if (!row) return c.json({ error: "not_found" }, 404);
+    if (!row) return respondError(c, "not_found");
 
     // Track 1's renderPrompt takes a typed PromptContext; the issue
     // payload here is a placeholder until /preview gets enriched with
@@ -534,30 +631,28 @@ export function buildApiV1Router() {
     return c.json({ rendered });
   });
 
-  // ── Test-run — stubbed until Track 3's runner accepts overrides ─
-
-  app.post("/api/v1/workflows/:id/test-run", async (c) => {
-    return c.json({ error: "not yet implemented" }, 501);
-  });
-
   // ── Resolve — debug helper ──────────────────────────────────────
 
   app.get("/api/v1/workflows/resolve", async (c) => {
     const auth = c.get("auth");
     const eventType = c.req.query("event_type");
     const issueId = c.req.query("issue_id");
-    if (!eventType) return c.json({ error: "missing_event_type" }, 400);
+    if (!eventType)
+      return respondError(c, "validation_failed", "Missing `event_type` query parameter.");
 
     // The shared eventTupleSchema is a discriminated union; build the
     // shape variant-by-variant. The debug helper supports the simple
     // forms — state_entered, comment_added, etc.
     const candidate = buildResolveEvent(eventType, auth.orgId, issueId, c);
-    if (!candidate) return c.json({ error: "unsupported_event_type" }, 400);
+    if (!candidate)
+      return respondError(c, "validation_failed", `Unsupported event_type: ${eventType}`);
     const parsed = eventTupleSchema.safeParse(candidate);
     if (!parsed.success) {
-      return c.json(
-        { error: "invalid_event", issues: parsed.error.issues },
-        400,
+      return respondError(
+        c,
+        "validation_failed",
+        undefined,
+        parsed.error.issues,
       );
     }
     const result = await resolveWorkflow(c.env, parsed.data);
@@ -570,7 +665,7 @@ export function buildApiV1Router() {
     const auth = c.get("auth");
     const id = c.req.param("id");
     const workflow = await getWorkflow(c.env.DB, id, auth.orgId);
-    if (!workflow) return c.json({ error: "not_found" }, 404);
+    if (!workflow) return respondError(c, "not_found");
 
     const result = await c.env.DB.prepare(
       `SELECT ${TRIGGER_COLS} FROM workflow_triggers
@@ -586,14 +681,16 @@ export function buildApiV1Router() {
     const auth = c.get("auth");
     const id = c.req.param("id");
     const workflow = await getWorkflow(c.env.DB, id, auth.orgId);
-    if (!workflow) return c.json({ error: "not_found" }, 404);
+    if (!workflow) return respondError(c, "not_found");
 
     const raw = await c.req.json().catch(() => null);
     const parsed = TriggerCreateSchema.safeParse(raw);
     if (!parsed.success) {
-      return c.json(
-        { error: "invalid_body", issues: parsed.error.issues },
-        400,
+      return respondError(
+        c,
+        "validation_failed",
+        undefined,
+        parsed.error.issues,
       );
     }
     const t = parsed.data;
@@ -633,14 +730,14 @@ export function buildApiV1Router() {
       .run();
 
     const row = await getTrigger(c.env.DB, triggerId);
-    if (!row) return c.json({ error: "insert_failed" }, 500);
+    if (!row) return respondError(c, "internal_error", "Insert failed.");
     return c.json({ trigger: serializeTrigger(row) }, 201);
   });
 
   app.get("/api/v1/triggers/:id", async (c) => {
     const auth = c.get("auth");
     const row = await getTriggerWithOrg(c.env.DB, c.req.param("id"), auth.orgId);
-    if (!row) return c.json({ error: "not_found" }, 404);
+    if (!row) return respondError(c, "not_found");
     return c.json({ trigger: serializeTrigger(row) });
   });
 
@@ -648,14 +745,16 @@ export function buildApiV1Router() {
     const auth = c.get("auth");
     const id = c.req.param("id");
     const existing = await getTriggerWithOrg(c.env.DB, id, auth.orgId);
-    if (!existing) return c.json({ error: "not_found" }, 404);
+    if (!existing) return respondError(c, "not_found");
 
     const raw = await c.req.json().catch(() => null);
     const parsed = TriggerUpdateSchema.safeParse(raw);
     if (!parsed.success) {
-      return c.json(
-        { error: "invalid_body", issues: parsed.error.issues },
-        400,
+      return respondError(
+        c,
+        "validation_failed",
+        undefined,
+        parsed.error.issues,
       );
     }
     const t = parsed.data;
@@ -702,14 +801,14 @@ export function buildApiV1Router() {
       .run();
 
     const updated = await getTrigger(c.env.DB, id);
-    if (!updated) return c.json({ error: "not_found" }, 404);
+    if (!updated) return respondError(c, "not_found");
     return c.json({ trigger: serializeTrigger(updated) });
   });
 
   app.delete("/api/v1/triggers/:id", async (c) => {
     const auth = c.get("auth");
     const existing = await getTriggerWithOrg(c.env.DB, c.req.param("id"), auth.orgId);
-    if (!existing) return c.json({ error: "not_found" }, 404);
+    if (!existing) return respondError(c, "not_found");
     await c.env.DB.prepare("DELETE FROM workflow_triggers WHERE id = ?")
       .bind(existing.id)
       .run();
@@ -717,13 +816,69 @@ export function buildApiV1Router() {
   });
 
   // ── Webhook events — read-only tail for the dashboard ───────────
+  //
+  // Canonical path is /api/v1/webhook-events. /api/v1/webhooks is kept
+  // for one release with a Sunset header (the path was renamed because
+  // the resource is *events*, not webhook configurations).
 
+  const WEBHOOK_SUNSET = "Mon, 10 Aug 2026 00:00:00 GMT";
+  const WEBHOOK_LINK = '</api/v1/webhook-events>; rel="successor-version"';
+
+  type V1Context = Context<{ Bindings: Env; Variables: AuthVariables }>;
+  async function listWebhookEvents(c: V1Context) {
+    const auth = c.get("auth");
+    const { limit, beforeId } = parsePagination(c);
+    const envelope = c.req.query("envelope") || undefined;
+    const dispatchedAction = c.req.query("dispatched_action") || undefined;
+    const signatureOkRaw = c.req.query("signature_ok");
+    const dedupedRaw = c.req.query("deduped");
+    const sinceTsRaw = c.req.query("since_ts");
+
+    const events = await new WebhookEventStore(c.env.DB).list({
+      organizationId: auth.orgId,
+      limit,
+      envelope,
+      dispatched_action: dispatchedAction,
+      signatureOk:
+        signatureOkRaw === undefined ? undefined : signatureOkRaw === "true",
+      deduped:
+        dedupedRaw === undefined ? undefined : dedupedRaw === "true",
+      sinceTs:
+        sinceTsRaw === undefined ? undefined : parseInt(sinceTsRaw, 10),
+      beforeId: beforeId ?? undefined,
+    });
+    const rows = events.map((e) => serializeWebhookEvent(e, /* truncate */ true));
+    return c.json({
+      webhook_events: rows,
+      next_cursor:
+        rows.length < limit
+          ? null
+          : (rows[rows.length - 1]?.id as string) ?? null,
+    });
+  }
+
+  async function getWebhookEvent(c: V1Context) {
+    const auth = c.get("auth");
+    const id = c.req.param("id") ?? "";
+    const row = await new WebhookEventStore(c.env.DB).get(id, auth.orgId);
+    if (!row) return respondError(c, "not_found");
+    return c.json({ webhook_event: serializeWebhookEvent(row, /* truncate */ false) });
+  }
+
+  app.get("/api/v1/webhook-events", listWebhookEvents);
+  app.get("/api/v1/webhook-events/:id", getWebhookEvent);
+
+  // Deprecated alias — same handlers, plus Sunset + Deprecation headers.
+  // Response shape preserves the legacy `webhooks` / `webhook` keys so
+  // existing dashboard code keeps working.
   app.get("/api/v1/webhooks", async (c) => {
+    c.header("Sunset", WEBHOOK_SUNSET);
+    c.header("Link", WEBHOOK_LINK);
+    c.header("Deprecation", "true");
     const auth = c.get("auth");
     const limit = Math.min(parseIntOr(c.req.query("limit"), 50), 200);
     const envelope = c.req.query("envelope") || undefined;
     const dispatchedAction = c.req.query("dispatched_action") || undefined;
-
     const events = await new WebhookEventStore(c.env.DB).list({
       organizationId: auth.orgId,
       limit,
@@ -736,16 +891,329 @@ export function buildApiV1Router() {
   });
 
   app.get("/api/v1/webhooks/:id", async (c) => {
+    c.header("Sunset", WEBHOOK_SUNSET);
+    c.header("Link", WEBHOOK_LINK);
+    c.header("Deprecation", "true");
     const auth = c.get("auth");
     const row = await new WebhookEventStore(c.env.DB).get(
       c.req.param("id"),
       auth.orgId,
     );
-    if (!row) return c.json({ error: "not_found" }, 404);
+    if (!row) return respondError(c, "not_found");
     return c.json({ webhook: serializeWebhookEvent(row, /* truncate */ false) });
   });
 
+  // ── Projects ────────────────────────────────────────────────────
+  //
+  // Strict create — no upsert. The dashboard handler keeps upsert
+  // semantics for its UX flow. v1 returns 409 conflict when a project
+  // already exists for the (org, linear_team_id) tuple.
+
+  app.get("/api/v1/projects", async (c) => {
+    const auth = c.get("auth");
+    const projects = await new ProjectStore(c.env.DB).listByOrg(auth.orgId);
+    return c.json({ projects });
+  });
+
+  app.post("/api/v1/projects", async (c) => {
+    const auth = c.get("auth");
+    const raw = await c.req.json().catch(() => null);
+    const parsed = ProjectCreateSchema.safeParse(raw);
+    if (!parsed.success) {
+      return respondError(
+        c,
+        "validation_failed",
+        undefined,
+        parsed.error.issues,
+      );
+    }
+    const input = parsed.data;
+    const store = new ProjectStore(c.env.DB);
+    const existing = await store.getByTeamId(auth.orgId, input.linear_team_id);
+    if (existing) {
+      return respondError(
+        c,
+        "conflict",
+        `A project for linear_team_id=${input.linear_team_id} already exists.`,
+      );
+    }
+    const created = await store.create({
+      organizationId: auth.orgId,
+      linearTeamId: input.linear_team_id,
+      linearTeamName: input.linear_team_name,
+      repoUrl: input.repo_url,
+      defaultBranch: input.default_branch,
+      engine: input.engine,
+      model: input.model ?? null,
+      maxTurns: input.max_turns,
+      scope: input.scope ?? null,
+      systemPromptOverride: input.system_prompt_override ?? null,
+    });
+    if (!created) return respondError(c, "internal_error", "Insert failed.");
+    return c.json({ project: created }, 201);
+  });
+
+  app.get("/api/v1/projects/:id", async (c) => {
+    const auth = c.get("auth");
+    const row = await new ProjectStore(c.env.DB).getById(
+      c.req.param("id"),
+      auth.orgId,
+    );
+    if (!row) return respondError(c, "not_found");
+    return c.json({ project: row });
+  });
+
+  app.put("/api/v1/projects/:id", async (c) => {
+    const auth = c.get("auth");
+    const id = c.req.param("id");
+    const raw = await c.req.json().catch(() => null);
+    const parsed = ProjectUpdateSchema.safeParse(raw);
+    if (!parsed.success) {
+      return respondError(
+        c,
+        "validation_failed",
+        undefined,
+        parsed.error.issues,
+      );
+    }
+    const store = new ProjectStore(c.env.DB);
+    const input = parsed.data;
+
+    // Uniqueness re-check when linear_team_id is changing.
+    if (input.linear_team_id !== undefined) {
+      const conflict = await store.getByTeamId(auth.orgId, input.linear_team_id);
+      if (conflict && conflict.id !== id) {
+        return respondError(
+          c,
+          "conflict",
+          `A project for linear_team_id=${input.linear_team_id} already exists.`,
+        );
+      }
+    }
+
+    const updated = await store.update(id, auth.orgId, {
+      linearTeamId: input.linear_team_id,
+      linearTeamName: input.linear_team_name,
+      repoUrl: input.repo_url,
+      defaultBranch: input.default_branch,
+      engine: input.engine,
+      model: input.model,
+      maxTurns: input.max_turns,
+      scope: input.scope,
+      systemPromptOverride: input.system_prompt_override,
+    });
+    if (!updated) return respondError(c, "not_found");
+    return c.json({ project: updated });
+  });
+
+  app.delete("/api/v1/projects/:id", async (c) => {
+    const auth = c.get("auth");
+    const removed = await new ProjectStore(c.env.DB).deleteById(
+      c.req.param("id"),
+      auth.orgId,
+    );
+    if (!removed) return respondError(c, "not_found");
+    return c.json({ ok: true });
+  });
+
+  // ── Settings ────────────────────────────────────────────────────
+  //
+  // Free-form k/v: arbitrary keys are accepted (the Advanced UI uses
+  // this). Curated runtime keys (agent.default_engine / .default_model
+  // / .max_turns) get per-key validation via `validateSettingValue`.
+
+  app.get("/api/v1/settings", async (c) => {
+    const auth = c.get("auth");
+    const settings = await new SettingStore(c.env.DB).list(auth.orgId);
+    return c.json({
+      settings,
+      agent_defaults: buildAgentDefaults(c.env),
+    });
+  });
+
+  app.get("/api/v1/settings/:key", async (c) => {
+    const auth = c.get("auth");
+    const key = c.req.param("key");
+    const value = await new SettingStore(c.env.DB).get(auth.orgId, key);
+    if (value === null) return respondError(c, "not_found");
+    return c.json({ setting: { key, value } });
+  });
+
+  app.put("/api/v1/settings/:key", async (c) => {
+    const auth = c.get("auth");
+    const key = c.req.param("key");
+    if (!key || key.length > 200) {
+      return respondError(c, "validation_failed", "`key` must be 1-200 chars.");
+    }
+    const body = await c.req.json<{ value?: unknown }>().catch(() => null);
+    if (!body || typeof body.value !== "string") {
+      return respondError(c, "validation_failed", "Body must be `{ value: <string> }`.");
+    }
+    const violation = validateSettingValue(key, body.value);
+    if (violation) return respondError(c, "validation_failed", violation);
+    await new SettingStore(c.env.DB).upsert(auth.orgId, key, body.value);
+    return c.json({ setting: { key, value: body.value } });
+  });
+
+  app.delete("/api/v1/settings/:key", async (c) => {
+    const auth = c.get("auth");
+    const removed = await new SettingStore(c.env.DB).delete(
+      auth.orgId,
+      c.req.param("key"),
+    );
+    if (!removed) return respondError(c, "not_found");
+    return c.json({ ok: true });
+  });
+
+  // ── Integrations (read-only) ────────────────────────────────────
+  //
+  // Connect / disconnect flows stay on /oauth/* and /dashboard/api/*
+  // because OAuth callbacks need a session cookie. MCP and CI clients
+  // can still inspect what's connected.
+
+  app.get("/api/v1/integrations", async (c) => {
+    const auth = c.get("auth");
+    const orgId = auth.orgId;
+    const install = await new LinearAgentInstallStore(c.env.DB).getByOrgId(orgId);
+    const github = await new GitHubInstallStore(c.env.DB).getByOrgId(orgId);
+    const configuredKinds = await new CredentialStore(c.env.DB).listKinds(orgId);
+    const configuredSet = new Set(configuredKinds);
+    return c.json({
+      linear: { connected: !!install },
+      github: {
+        connected: !!github,
+        repo_selection: github?.repo_selection ?? null,
+        repo_count: github
+          ? github.repo_selection === "all"
+            ? null
+            : github.selected_repos
+              ? (JSON.parse(github.selected_repos) as unknown[]).length
+              : 0
+          : 0,
+      },
+      anthropic: { configured: configuredSet.has("anthropic") },
+      openai: { configured: configuredSet.has("openai") },
+      cf_workers_ai: { configured: configuredSet.has("cf_workers_ai") },
+      github_app_settings_url: c.env.GITHUB_APP_SETTINGS_URL ?? null,
+    });
+  });
+
+  // ── API tokens ──────────────────────────────────────────────────
+  //
+  // Plaintext format: `tok_<43 char base64url>` (32 random bytes).
+  // Plaintext is only returned on the create response — only the
+  // SHA-256 hash is persisted, so a lost token cannot be recovered;
+  // revoke + reissue is the recovery path.
+
+  app.get("/api/v1/api-tokens", async (c) => {
+    const denied = requireScope(c, "read");
+    if (denied) return denied;
+    const auth = c.get("auth");
+    const result = await c.env.DB.prepare(
+      `SELECT id, name, scopes, created_at, last_used_at
+       FROM api_tokens
+       WHERE organization_id = ?
+       ORDER BY created_at DESC`,
+    )
+      .bind(auth.orgId)
+      .all<{
+        id: string;
+        name: string;
+        scopes: string | null;
+        created_at: number;
+        last_used_at: number | null;
+      }>();
+    const tokens = (result.results ?? []).map((row) => ({
+      id: row.id,
+      name: row.name,
+      scopes: parseScopes(row.scopes),
+      created_at: row.created_at,
+      last_used_at: row.last_used_at,
+    }));
+    return c.json({ tokens });
+  });
+
+  app.post("/api/v1/api-tokens", async (c) => {
+    const denied = requireScope(c, "admin");
+    if (denied) return denied;
+    const auth = c.get("auth");
+    const raw = await c.req.json().catch(() => null);
+    const parsed = ApiTokenCreateSchema.safeParse(raw);
+    if (!parsed.success) {
+      return respondError(
+        c,
+        "validation_failed",
+        undefined,
+        parsed.error.issues,
+      );
+    }
+    const { name, scopes } = parsed.data;
+    const plaintext = generateTokenPlaintext();
+    const hash = await hashToken(plaintext);
+    const id = crypto.randomUUID();
+    const ts = nowSec();
+
+    await c.env.DB.prepare(
+      `INSERT INTO api_tokens (id, organization_id, name, token_hash, scopes, created_at, last_used_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+    )
+      .bind(id, auth.orgId, name, hash, JSON.stringify(scopes), ts)
+      .run();
+
+    return c.json(
+      {
+        token: {
+          id,
+          name,
+          scopes,
+          created_at: ts,
+          last_used_at: null,
+          plaintext,
+        },
+      },
+      201,
+    );
+  });
+
+  app.delete("/api/v1/api-tokens/:id", async (c) => {
+    const denied = requireScope(c, "admin");
+    if (denied) return denied;
+    const auth = c.get("auth");
+    const res = await c.env.DB.prepare(
+      "DELETE FROM api_tokens WHERE id = ? AND organization_id = ?",
+    )
+      .bind(c.req.param("id"), auth.orgId)
+      .run();
+    if ((res.meta?.changes ?? 0) === 0) return respondError(c, "not_found");
+    return c.json({ ok: true });
+  });
+
   return app;
+}
+
+function parseScopes(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((s): s is string => typeof s === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+// 32 random bytes → 43-char base64url (no padding), prefixed with
+// `tok_` so leaked tokens are easy to grep for in logs and source.
+function generateTokenPlaintext(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return (
+    "tok_" +
+    btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
+  );
 }
 
 // ────────────────────────────────────────────────────────────────────

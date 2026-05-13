@@ -3,6 +3,7 @@ import type { Env } from "../index";
 import { CredentialStore } from "../lib/credentials";
 import { requireOrg } from "../lib/dashboard-auth";
 import { mintInstallationToken } from "../lib/github-app";
+import { buildAgentDefaults, validateSettingValue } from "../lib/settings";
 import {
   LinearAgentInstallStore,
   GitHubInstallStore,
@@ -10,6 +11,19 @@ import {
   SettingStore,
 } from "../lib/store";
 
+
+// Project write paths on /dashboard/api/* are kept for the existing
+// SPA but advertise a Sunset window — new clients should call
+// /api/v1/projects. RFC 8594 / RFC 7231 date format.
+const PROJECT_SUNSET = "Mon, 10 Aug 2026 00:00:00 GMT";
+const PROJECT_DEPRECATION_LINK =
+  '</api/v1/projects>; rel="successor-version"';
+
+function attachDeprecation(c: { header: (n: string, v: string) => void }) {
+  c.header("Sunset", PROJECT_SUNSET);
+  c.header("Link", PROJECT_DEPRECATION_LINK);
+  c.header("Deprecation", "true");
+}
 
 function buildLinearProjectSlug(name: string, slugId: string): string {
   if (!name) return slugId;
@@ -36,6 +50,7 @@ export function buildDashboardApiRouter() {
   app.post("/dashboard/api/projects", async (c) => {
     const user = await requireOrg(c);
     if (!user) return c.json({ error: "unauthorized" }, 401);
+    attachDeprecation(c);
 
     const body = await c.req.json<Record<string, unknown>>().catch(() => null);
     const errors = validateProject(body);
@@ -63,6 +78,7 @@ export function buildDashboardApiRouter() {
   app.put("/dashboard/api/projects/:id", async (c) => {
     const user = await requireOrg(c);
     if (!user) return c.json({ error: "unauthorized" }, 401);
+    attachDeprecation(c);
 
     const id = c.req.param("id");
     if (!id) return c.json({ error: "invalid_id" }, 400);
@@ -110,6 +126,7 @@ export function buildDashboardApiRouter() {
   app.delete("/dashboard/api/projects/:id", async (c) => {
     const user = await requireOrg(c);
     if (!user) return c.json({ error: "unauthorized" }, 401);
+    attachDeprecation(c);
 
     const id = c.req.param("id");
     if (!id) return c.json({ error: "invalid_id" }, 400);
@@ -471,62 +488,6 @@ export function buildDashboardApiRouter() {
   });
 
   return app;
-}
-
-// Compute the env-derived floor surfaced to the dashboard as
-// `agent_defaults`. Each setting row in the UI shows "Default: X"
-// when no org-level override exists; the runner uses these same
-// values as the final fallback after `workflow_overrides` and
-// `settings('agent.*')`.
-function buildAgentDefaults(env: Env): {
-  default_engine: string;
-  default_model: string | null;
-  max_turns: number;
-} {
-  const rawMaxTurns = env.DEFAULT_MAX_TURNS;
-  let maxTurns = 10;
-  if (rawMaxTurns) {
-    const n = parseInt(rawMaxTurns, 10);
-    if (Number.isFinite(n) && n >= 1) maxTurns = Math.min(n, 100);
-  }
-  return {
-    default_engine: env.DEFAULT_ENGINE || "pi",
-    default_model: env.DEFAULT_MODEL || null,
-    max_turns: maxTurns,
-  };
-}
-
-// Per-key value validation for curated runtime settings. Returns
-// null when the value is acceptable, or a human-readable error
-// string otherwise. Non-curated keys are stored as-is.
-function validateSettingValue(key: string, value: string): string | null {
-  switch (key) {
-    case "agent.default_engine":
-      // sandbox-dispatcher only supports `pi` today. Reject other
-      // engines outright rather than letting them silently fail at
-      // dispatch.
-      if (value !== "pi") {
-        return "Only `pi` is supported as the default engine today.";
-      }
-      return null;
-    case "agent.default_model":
-      if (value.trim().length === 0) {
-        return "Model must be a non-empty string.";
-      }
-      return null;
-    case "agent.max_turns": {
-      const n = parseInt(value, 10);
-      if (!Number.isFinite(n) || n < 1 || String(n) !== value.trim()) {
-        return "Max turns must be a positive integer.";
-      }
-      if (n > 100) {
-        return "Max turns is capped at 100.";
-      }
-      return null;
-    }
-    default:
-      return null;
-  }
 }
 
 function validateProject(

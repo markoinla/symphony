@@ -282,6 +282,50 @@ export class ProjectStore {
     return this.getByTeamId(input.organizationId, input.linearTeamId);
   }
 
+  // Strict create — INSERT only, never upsert. Caller is responsible
+  // for handling the unique-constraint violation (the v1 routes pre-check
+  // via getByTeamId and return `conflict`). Used by `/api/v1/projects`;
+  // the dashboard handler keeps `upsert()` for its existing UX flow.
+  async create(input: {
+    organizationId: string;
+    linearTeamId: string;
+    linearTeamName?: string;
+    repoUrl: string;
+    defaultBranch?: string;
+    engine?: string;
+    model?: string | null;
+    maxTurns?: number;
+    scope?: string | null;
+    systemPromptOverride?: string | null;
+  }): Promise<ProjectRecord | null> {
+    const now = Math.floor(Date.now() / 1000);
+    const id = crypto.randomUUID();
+    await this.db
+      .prepare(
+        `INSERT INTO projects
+           (id, organization_id, linear_team_id, linear_team_name, repo_url, default_branch,
+            engine, model, max_turns, scope, system_prompt_override, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        id,
+        input.organizationId,
+        input.linearTeamId,
+        input.linearTeamName ?? "",
+        input.repoUrl,
+        input.defaultBranch ?? "main",
+        input.engine ?? "pi",
+        input.model ?? null,
+        input.maxTurns ?? 10,
+        input.scope ?? null,
+        input.systemPromptOverride ?? null,
+        now,
+        now,
+      )
+      .run();
+    return this.getById(id, input.organizationId);
+  }
+
   async getByTeamId(
     orgId: string,
     linearTeamId: string,
@@ -642,6 +686,14 @@ export interface WebhookEventListFilter {
   dispatched_action?: string;
   limit?: number;
   offset?: number;
+  // v1-only cursor pagination + extra filters. When `beforeId` is set,
+  // the resolver fetches that row's received_at and uses tuple
+  // comparison `(received_at, id) < (?, ?)` to paginate. Mutually
+  // exclusive with `offset` — callers should pick one mode.
+  beforeId?: string;
+  signatureOk?: boolean;
+  deduped?: boolean;
+  sinceTs?: number;
 }
 
 const WEBHOOK_EVENT_COLS =
@@ -781,12 +833,59 @@ export class WebhookEventStore {
       conditions.push("dispatched_action = ?");
       values.push(filter.dispatched_action);
     }
+    if (filter.signatureOk !== undefined) {
+      conditions.push("signature_ok = ?");
+      values.push(filter.signatureOk ? 1 : 0);
+    }
+    if (filter.deduped !== undefined) {
+      conditions.push("deduped = ?");
+      values.push(filter.deduped ? 1 : 0);
+    }
+    if (filter.sinceTs !== undefined) {
+      conditions.push("received_at >= ?");
+      values.push(filter.sinceTs);
+    }
+
+    // Cursor pagination: pre-fetch the anchor's received_at to drive the
+    // tuple comparison. Anchor missing from this org → treat as no cursor.
+    if (filter.beforeId) {
+      const anchor = await this.db
+        .prepare(
+          filter.organizationId
+            ? "SELECT received_at FROM webhook_events WHERE id = ? AND organization_id = ?"
+            : "SELECT received_at FROM webhook_events WHERE id = ?",
+        )
+        .bind(
+          ...(filter.organizationId
+            ? [filter.beforeId, filter.organizationId]
+            : [filter.beforeId]),
+        )
+        .first<{ received_at: number }>();
+      if (anchor) {
+        conditions.push("(received_at, id) < (?, ?)");
+        values.push(anchor.received_at, filter.beforeId);
+      }
+    }
 
     const where =
       conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
     const limit = Math.min(filter.limit ?? 50, 200);
-    const offset = filter.offset ?? 0;
 
+    // Cursor mode skips OFFSET — it's pure tuple-comparison ordering.
+    if (filter.beforeId !== undefined) {
+      const result = await this.db
+        .prepare(
+          `SELECT ${WEBHOOK_EVENT_COLS}
+           FROM webhook_events ${where}
+           ORDER BY received_at DESC, id DESC
+           LIMIT ?`,
+        )
+        .bind(...values, limit)
+        .all<WebhookEventRecord>();
+      return result.results;
+    }
+
+    const offset = filter.offset ?? 0;
     const result = await this.db
       .prepare(
         `SELECT ${WEBHOOK_EVENT_COLS}

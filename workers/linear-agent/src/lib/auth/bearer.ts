@@ -1,8 +1,8 @@
 // Bearer token auth for /api/v1/* — parses `Authorization: Bearer <tok>`,
-// hashes via SHA-256, and looks up the result in `api_tokens`. Issuance
-// (POST /api/v1/tokens, scope grant, dashboard UI) ships in SYM-296.
-// Until then the table is empty, so every presented token resolves to
-// null — exactly the behavior the Track 2 plan calls for.
+// hashes via SHA-256, and looks up the result in `api_tokens`. Tokens
+// are issued via `POST /api/v1/api-tokens` (admin scope) and revoked
+// via `DELETE /api/v1/api-tokens/:id`. The plaintext is only ever
+// returned on the create response — only the hash lives in D1.
 
 import type { Context } from "hono";
 
@@ -43,9 +43,6 @@ export async function tryBearerAuth(
 
   const hash = await hashToken(token);
 
-  // Table exists (migration 0002_workflows.sql), but no rows are
-  // written until SYM-296 lands the issuance flow. Until then this
-  // lookup always misses and we return null → 401 at the caller.
   const row = await c.env.DB.prepare(
     "SELECT id, organization_id, name, token_hash, scopes, created_at, last_used_at FROM api_tokens WHERE token_hash = ?",
   )
@@ -54,6 +51,18 @@ export async function tryBearerAuth(
     .catch(() => null);
 
   if (!row) return null;
+
+  // Best-effort last_used_at update. Wrapped in executionCtx.waitUntil
+  // when available so the response doesn't wait on it; falls back to
+  // fire-and-forget in environments (tests) without an ExecutionContext.
+  const touch = c.env.DB.prepare(
+    "UPDATE api_tokens SET last_used_at = ? WHERE id = ?",
+  )
+    .bind(Math.floor(Date.now() / 1000), row.id)
+    .run()
+    .catch(() => {});
+  const ctx = (c as unknown as { executionCtx?: { waitUntil?: (p: Promise<unknown>) => void } }).executionCtx;
+  if (ctx?.waitUntil) ctx.waitUntil(touch);
 
   let scopes: string[] = [];
   if (row.scopes) {

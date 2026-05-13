@@ -14,6 +14,7 @@ import type { Context, MiddlewareHandler } from "hono";
 
 import type { Env } from "../../index";
 import { requireDashboardAuth } from "../dashboard-auth";
+import { respondError } from "../responses";
 import { tryBearerAuth } from "./bearer";
 
 export interface AuthContext {
@@ -42,9 +43,11 @@ export async function resolveAuth(
   if (user && user.organizationId) {
     return {
       actor: { kind: "user", id: user.userId },
-      // Dashboard users get the full surface; downstream handlers may
-      // narrow on resource ownership.
-      scopes: ["*"],
+      // Dashboard users get every coarse scope. The wildcard '*' is
+      // still honored by hasScope() for backward compatibility with
+      // any internal caller that still emits it, but new code uses
+      // the explicit set.
+      scopes: ["read", "write", "admin"],
       orgId: user.organizationId,
     };
   }
@@ -63,7 +66,7 @@ export function requireAuth(): MiddlewareHandler<{
 }> {
   return async (c, next) => {
     const auth = await resolveAuth(c as unknown as Context<{ Bindings: Env }>);
-    if (!auth) return c.json({ error: "unauthorized" }, 401);
+    if (!auth) return respondError(c, "unauthorized");
     c.set("auth", auth);
     await next();
   };
