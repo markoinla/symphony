@@ -140,13 +140,14 @@ export function buildRunRouter() {
       }
 
       if (parsed.credentials) {
-        const mcpResult = await writeMcpConfig(sandbox, parsed.credentials);
-        if (mcpResult && mcpResult.exitCode !== 0) {
+        try {
+          await writeMcpConfig(sandbox, workspaceDir, parsed.engine, parsed.credentials);
+        } catch (e) {
           return c.json(
             {
               error: "mcp_config_write_failed",
-              exit_code: mcpResult.exitCode,
-              stderr: mcpResult.stderr,
+              exit_code: 1,
+              stderr: e instanceof Error ? e.message : String(e),
             },
             502,
           );
@@ -315,10 +316,12 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
       }
 
       if (parsed.credentials) {
-        const mcpResult = await writeMcpConfig(sandbox, parsed.credentials);
-        if (mcpResult && mcpResult.exitCode !== 0) {
-          await emitTerminal(mcpResult.exitCode, {
-            message: `mcp_config_write_failed: ${mcpResult.stderr.slice(0, 500)}`,
+        try {
+          await writeMcpConfig(sandbox, workspaceDir, parsed.engine, parsed.credentials);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          await emitTerminal(1, {
+            message: `mcp_config_write_failed: ${msg.slice(0, 500)}`,
           });
           return;
         }
@@ -626,32 +629,73 @@ export function shellQuote(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
 }
 
+/**
+ * Serialize MCP servers and write the config inside the cloned workspace
+ * at the engine-specific location.
+ *
+ * Pi: writes `<workspaceDir>/.pi/mcp.json` — one of the four locations the
+ * `pi-mcp-adapter` discovers (project-local override). The adapter must
+ * already be installed in the baseline (`pi install npm:pi-mcp-adapter`);
+ * without it the file is ignored. Schema follows the adapter's HTTP-server
+ * shape: `{ url, auth: "bearer", bearerToken }`, no `type` field.
+ *
+ * Throws on filesystem failure — callers translate to a 502 / SSE error
+ * frame. We deliberately use `sandbox.writeFile` / `sandbox.mkdir` (typed
+ * SDK methods) instead of `printf '%s' > file` via `sandbox.exec` so we
+ * don't have to round-trip a JSON blob through bash single-quote escaping.
+ */
 async function writeMcpConfig(
-  sandbox: { exec(cmd: string): Promise<{ exitCode: number; stdout: string; stderr: string }> },
+  sandbox: {
+    mkdir(path: string, options?: { recursive?: boolean }): Promise<unknown>;
+    writeFile(
+      path: string,
+      content: string,
+      options?: { encoding?: string },
+    ): Promise<unknown>;
+  },
+  workspaceDir: string,
+  engine: Engine,
   credentials: ParsedCredentials,
-): Promise<{ exitCode: number; stdout: string; stderr: string } | null> {
-  if (credentials.mcpServers.length === 0) return null;
+): Promise<void> {
+  if (credentials.mcpServers.length === 0) return;
 
-  const mcpConfig = {
-    mcpServers: Object.fromEntries(
-      credentials.mcpServers.map((srv) => [
-        srv.name,
-        {
-          type: "sse" as const,
-          url: srv.url,
-          headers: { Authorization: `Bearer ${srv.token}` },
-        },
-      ]),
-    ),
-  };
-
-  const configDir = `${SANDBOX_HOME}/.config/pi`;
-  const configPath = `${configDir}/mcp.json`;
-  const configJson = JSON.stringify(mcpConfig);
-
-  return sandbox.exec(
-    `mkdir -p ${shellQuote(configDir)} && printf '%s' ${shellQuote(configJson)} > ${shellQuote(configPath)}`,
+  const { configDir, configPath, content } = serializeMcpConfig(
+    workspaceDir,
+    engine,
+    credentials,
   );
+
+  await sandbox.mkdir(configDir, { recursive: true });
+  await sandbox.writeFile(configPath, content);
+}
+
+function serializeMcpConfig(
+  workspaceDir: string,
+  engine: Engine,
+  credentials: ParsedCredentials,
+): { configDir: string; configPath: string; content: string } {
+  switch (engine) {
+    case "pi": {
+      const config = {
+        mcpServers: Object.fromEntries(
+          credentials.mcpServers.map((srv) => [
+            srv.name,
+            {
+              url: srv.url,
+              auth: "bearer" as const,
+              bearerToken: srv.token,
+            },
+          ]),
+        ),
+      };
+      const configDir = `${workspaceDir}/.pi`;
+      return {
+        configDir,
+        configPath: `${configDir}/mcp.json`,
+        content: JSON.stringify(config, null, 2),
+      };
+    }
+  }
 }
 
 function redactRepoUrl(url: string): string {

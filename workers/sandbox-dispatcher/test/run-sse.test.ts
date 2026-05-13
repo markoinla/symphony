@@ -36,6 +36,9 @@ class FakeSandbox {
   execCalls: string[] = [];
   execQueue: Array<{ exitCode: number; stdout: string; stderr: string }> = [];
   streamScript: FakeExecEvent[] = [];
+  mkdirCalls: Array<{ path: string; recursive?: boolean }> = [];
+  writeFileCalls: Array<{ path: string; content: string }> = [];
+  writeFileError: Error | null = null;
 
   async restoreBackup(handle: { id: string; dir: string }) {
     this.restoredBackups.push({ id: handle.id, dir: handle.dir });
@@ -47,6 +50,15 @@ class FakeSandbox {
     const next = this.execQueue.shift();
     if (next) return next;
     return { exitCode: 0, stdout: "", stderr: "" };
+  }
+
+  async mkdir(path: string, options?: { recursive?: boolean }) {
+    this.mkdirCalls.push({ path, recursive: options?.recursive });
+  }
+
+  async writeFile(path: string, content: string) {
+    if (this.writeFileError) throw this.writeFileError;
+    this.writeFileCalls.push({ path, content });
   }
 
   async execStream(
@@ -301,9 +313,18 @@ describe("POST /run (Accept: text/event-stream)", () => {
       "result",
     ]);
 
-    const mcpCall = sandbox.execCalls.find((c) => c.includes("mcp.json"));
-    expect(mcpCall).toBeDefined();
-    expect(mcpCall).toContain("test-mcp");
+    const mcpWrite = sandbox.writeFileCalls.find(
+      (c) => c.path === "/workspace/SYM-310/.pi/mcp.json",
+    );
+    expect(mcpWrite).toBeDefined();
+    const parsed = JSON.parse(mcpWrite!.content) as {
+      mcpServers: Record<string, { url: string; auth: string; bearerToken: string }>;
+    };
+    expect(parsed.mcpServers["test-mcp"]).toEqual({
+      url: "https://mcp.example.com",
+      auth: "bearer",
+      bearerToken: "tok_abc",
+    });
 
     expect(sandbox.destroyed).toBe(true);
   });
@@ -468,8 +489,8 @@ describe("POST /run (Accept: text/event-stream)", () => {
       { exitCode: 0, stdout: "", stderr: "" },
       { exitCode: 0, stdout: "", stderr: "" },
       { exitCode: 0, stdout: "", stderr: "" },
-      { exitCode: 1, stdout: "", stderr: "Permission denied" },
     ];
+    sandbox.writeFileError = new Error("Permission denied");
     sandbox.streamScript = [];
     sandboxHandles[runSandboxId("SYM-312")] = sandbox;
 

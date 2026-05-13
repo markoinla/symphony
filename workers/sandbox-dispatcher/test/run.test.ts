@@ -33,6 +33,9 @@ class FakeSandbox {
   restoredBackups: Array<{ id: string; dir: string }> = [];
   execCalls: ExecCall[] = [];
   execQueue: Array<{ exitCode: number; stdout: string; stderr: string }> = [];
+  mkdirCalls: Array<{ path: string; recursive?: boolean }> = [];
+  writeFileCalls: Array<{ path: string; content: string }> = [];
+  writeFileError: Error | null = null;
 
   async restoreBackup(handle: { id: string; dir: string }) {
     this.restoredBackups.push({ id: handle.id, dir: handle.dir });
@@ -44,6 +47,15 @@ class FakeSandbox {
     const next = this.execQueue.shift();
     if (next) return next;
     return { exitCode: 0, stdout: "", stderr: "" };
+  }
+
+  async mkdir(path: string, options?: { recursive?: boolean }) {
+    this.mkdirCalls.push({ path, recursive: options?.recursive });
+  }
+
+  async writeFile(path: string, content: string) {
+    if (this.writeFileError) throw this.writeFileError;
+    this.writeFileCalls.push({ path, content });
   }
 
   async destroy() {
@@ -566,11 +578,10 @@ describe("POST /run with credentials", () => {
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-302"));
     sandbox.execQueue = [
-      { exitCode: 0, stdout: "", stderr: "" },
-      { exitCode: 0, stdout: "", stderr: "" },
-      { exitCode: 0, stdout: "", stderr: "" },
-      { exitCode: 0, stdout: "", stderr: "" },
-      { exitCode: 0, stdout: '{"type":"response","body":"ok"}', stderr: "" },
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir workspaceDir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir workspaceDir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      { exitCode: 0, stdout: '{"type":"response","body":"ok"}', stderr: "" }, // pi
     ];
     sandboxHandles[runSandboxId("SYM-302")] = sandbox;
 
@@ -592,12 +603,26 @@ describe("POST /run with credentials", () => {
     );
 
     expect(res.status).toBe(200);
-    const mcpCall = sandbox.execCalls.find((c) => c.cmd.includes("mcp.json"));
-    expect(mcpCall).toBeDefined();
-    expect(mcpCall?.cmd).toContain("mkdir -p '/home/symphony/.config/pi'");
-    expect(mcpCall?.cmd).toContain("mcp.json");
-    expect(mcpCall?.cmd).toContain("linear");
-    expect(mcpCall?.cmd).toContain("Bearer lin_tok_123");
+
+    // pi-mcp-adapter reads `.pi/mcp.json` from the project root (the
+    // cloned workspace). Verify we mkdir + writeFile there, not to
+    // `~/.config/pi` which the adapter does NOT discover.
+    expect(sandbox.mkdirCalls).toContainEqual({
+      path: "/workspace/SYM-302/.pi",
+      recursive: true,
+    });
+    const mcpWrite = sandbox.writeFileCalls.find(
+      (c) => c.path === "/workspace/SYM-302/.pi/mcp.json",
+    );
+    expect(mcpWrite).toBeDefined();
+    const parsed = JSON.parse(mcpWrite!.content) as {
+      mcpServers: Record<string, { url: string; auth: string; bearerToken: string }>;
+    };
+    expect(parsed.mcpServers.linear).toEqual({
+      url: "https://mcp.linear.app",
+      auth: "bearer",
+      bearerToken: "lin_tok_123",
+    });
   });
 
   it("rejects invalid credential fields with 400", async () => {
@@ -681,6 +706,7 @@ describe("POST /run with credentials", () => {
     const piCall = sandbox.execCalls[3];
     expect(piCall?.cmd).not.toContain("ANTHROPIC_API_KEY");
     expect(piCall?.cmd).not.toContain("mcp.json");
+    expect(sandbox.writeFileCalls).toHaveLength(0);
   });
 
   it("returns 502 when MCP config write fails", async () => {
@@ -693,8 +719,8 @@ describe("POST /run with credentials", () => {
       { exitCode: 0, stdout: "", stderr: "" },
       { exitCode: 0, stdout: "", stderr: "" },
       { exitCode: 0, stdout: "", stderr: "" },
-      { exitCode: 1, stdout: "", stderr: "Permission denied" },
     ];
+    sandbox.writeFileError = new Error("Permission denied");
     sandboxHandles[runSandboxId("SYM-307")] = sandbox;
 
     const body = JSON.stringify({
