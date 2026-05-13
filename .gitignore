@@ -75,3 +75,6 @@ node_modules/.mf/
 
 # Reference files (schemas, specs, etc.)
 /references/
+
+# Claude Code worktrees.
+.claude/worktrees/
