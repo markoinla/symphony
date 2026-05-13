@@ -989,6 +989,42 @@ describe("/api/v1/workflows", () => {
     expect(db.versions[0]?.workflow_id).toBe(workflow.id);
   });
 
+  it("PUT does not overwrite unset fields with schema defaults", async () => {
+    // Regression test: WorkflowUpdateSchema must not apply `.default(...)`
+    // values from WorkflowCreateSchema. A bare {description: "x"} PUT
+    // should leave engine / max_turns / hook_timeout_ms untouched.
+    asUser("org-1");
+    const db = new ApiD1();
+    db.workflows.set(
+      "w1",
+      baseWorkflow({
+        id: "w1",
+        organization_id: "org-1",
+        engine: "claude",
+        max_turns: 5,
+        hook_timeout_ms: 600000,
+      }),
+    );
+
+    const res = await buildApp().fetch(
+      new Request("https://agent.example/api/v1/workflows/w1", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ description: "new" }),
+      }),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      workflow: { engine: string; max_turns: number; hook_timeout_ms: number; description: string };
+    };
+    expect(body.workflow.engine).toBe("claude");
+    expect(body.workflow.max_turns).toBe(5);
+    expect(body.workflow.hook_timeout_ms).toBe(600000);
+    expect(body.workflow.description).toBe("new");
+  });
+
   it("PUT updates a published workflow in place (no status gate)", async () => {
     asUser("org-1");
     const db = new ApiD1();

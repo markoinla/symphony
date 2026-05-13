@@ -9,22 +9,33 @@
 
 import { z } from "zod";
 
-export const ProjectCreateSchema = z.object({
+// Shared field shapes — no `.default(...)` calls. Defaults are added
+// only on the Create schema below, so PUT bodies that omit a field
+// don't accidentally overwrite the live row with a default value.
+const projectFieldShapes = {
   linear_team_id:         z.string().min(1),
   linear_team_name:       z.string().optional(),
   repo_url:               z.string().regex(/^https?:\/\/.+/),
-  default_branch:         z.string().min(1).default("main"),
-  engine:                 z.string().min(1).default("pi"),
+  default_branch:         z.string().min(1),
+  engine:                 z.string().min(1),
   model:                  z.string().nullable().optional(),
   max_turns:              z.number().int().positive().max(100).optional(),
   scope:                  z.string().nullable().optional(),
   system_prompt_override: z.string().nullable().optional(),
+};
+
+export const ProjectCreateSchema = z.object({
+  ...projectFieldShapes,
+  default_branch: projectFieldShapes.default_branch.default("main"),
+  engine: projectFieldShapes.engine.default("pi"),
 });
 export type ProjectCreateInput = z.infer<typeof ProjectCreateSchema>;
 
-// Update — everything optional. Linear team id is editable but the
-// (org, linear_team_id) uniqueness invariant still applies.
-export const ProjectUpdateSchema = ProjectCreateSchema.partial();
+// Update — everything optional, NO defaults. Linear team id is
+// editable but the (org, linear_team_id) uniqueness invariant still
+// applies. See note on WorkflowUpdateSchema for why we don't just
+// `.partial()` the Create schema.
+export const ProjectUpdateSchema = z.object(projectFieldShapes).partial();
 export type ProjectUpdateInput = z.infer<typeof ProjectUpdateSchema>;
 
 export const ProjectSchema = ProjectCreateSchema.extend({

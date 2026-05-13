@@ -93,19 +93,17 @@ export const WorkflowSchema = z
   });
 export type Workflow = z.infer<typeof WorkflowSchema>;
 
-// Body schema for `POST /api/v1/workflows`. The server applies scope
-// (org/team/user id, version=1, status=draft, timestamps) from the
-// auth context so we don't accept those columns in the body.
-//
-// `prompt_template` is required at the DB level (NOT NULL), and the
-// API layer matches that — a workflow without a template can't run.
-export const WorkflowCreateSchema = z.object({
+// Shared field shapes — no defaults, no required wrappers. The Create
+// schema layers defaults + required-ness on top; the Update schema
+// uses these as-is so an absent field stays absent (instead of being
+// resolved to a default and overwriting the live row's value).
+const workflowFieldShapes = {
   name: z.string().min(1),
   description: z.string().nullable().optional(),
 
-  engine: engineSchema.default("pi"),
+  engine: engineSchema,
   model: z.string().nullable().optional(),
-  max_turns: z.number().int().positive().default(10),
+  max_turns: z.number().int().positive(),
   max_continuations: z.number().int().nonnegative().nullable().optional(),
 
   allowed_tools: z.array(z.string()).nullable().optional(),
@@ -118,13 +116,29 @@ export const WorkflowCreateSchema = z.object({
 
   hook_after_create: z.string().nullable().optional(),
   hook_before_remove: z.string().nullable().optional(),
-  hook_timeout_ms: z.number().int().nonnegative().default(300000),
+  hook_timeout_ms: z.number().int().nonnegative(),
 
   prompt_template: z.string().min(1),
+};
+
+// Body schema for `POST /api/v1/workflows`. The server applies scope
+// (org/team/user id, version=1, status=draft, timestamps) from the
+// auth context so we don't accept those columns in the body.
+//
+// `prompt_template` is required at the DB level (NOT NULL), and the
+// API layer matches that — a workflow without a template can't run.
+export const WorkflowCreateSchema = z.object({
+  ...workflowFieldShapes,
+  engine: workflowFieldShapes.engine.default("pi"),
+  max_turns: workflowFieldShapes.max_turns.default(10),
+  hook_timeout_ms: workflowFieldShapes.hook_timeout_ms.default(300000),
 });
 export type WorkflowCreateInput = z.infer<typeof WorkflowCreateSchema>;
 
-// Update — all fields optional. Bumping `version` / flipping `status`
-// goes through dedicated routes (`publish`, `duplicate`), not PUT.
-export const WorkflowUpdateSchema = WorkflowCreateSchema.partial();
+// Update — all fields optional, NO defaults. Bare `.partial()` on the
+// Create schema would keep the `.default(...)` annotations, so an
+// absent `engine` would still resolve to "pi" and the route would
+// overwrite the live row's engine. We build Update from the raw shapes
+// instead.
+export const WorkflowUpdateSchema = z.object(workflowFieldShapes).partial();
 export type WorkflowUpdateInput = z.infer<typeof WorkflowUpdateSchema>;

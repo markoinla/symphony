@@ -54,9 +54,11 @@ export const TriggerSchema = z.object({
 });
 export type Trigger = z.infer<typeof TriggerSchema>;
 
-// Body for `POST /api/v1/workflows/:id/triggers`. The workflow_id and
-// timestamps are server-applied.
-export const TriggerCreateSchema = z.object({
+// Shared field shapes — no `.default(...)` calls. Defaults are added
+// only on the Create schema, so Update bodies that omit `priority` /
+// `enabled` don't reset the live row to 0 / true. See note on
+// WorkflowUpdateSchema for the full reasoning.
+const triggerFieldShapes = {
   event_type: eventTypeSchema,
 
   to_state: z.string().nullable().optional(),
@@ -73,10 +75,18 @@ export const TriggerCreateSchema = z.object({
   action: triggerActionSchema,
   action_params: z.record(z.string(), z.unknown()).nullable().optional(),
 
-  priority: z.number().int().default(0),
-  enabled: z.boolean().default(true),
+  priority: z.number().int(),
+  enabled: z.boolean(),
+};
+
+// Body for `POST /api/v1/workflows/:id/triggers`. The workflow_id and
+// timestamps are server-applied.
+export const TriggerCreateSchema = z.object({
+  ...triggerFieldShapes,
+  priority: triggerFieldShapes.priority.default(0),
+  enabled: triggerFieldShapes.enabled.default(true),
 });
 export type TriggerCreateInput = z.infer<typeof TriggerCreateSchema>;
 
-export const TriggerUpdateSchema = TriggerCreateSchema.partial();
+export const TriggerUpdateSchema = z.object(triggerFieldShapes).partial();
 export type TriggerUpdateInput = z.infer<typeof TriggerUpdateSchema>;
