@@ -56,6 +56,13 @@ export interface RunArgs {
   timeoutMs?: number;
   githubToken?: string | null;
   credentials?: RunCredentials | null;
+  /**
+   * Optional branch to check out before the engine runs. The dispatcher
+   * fetches the branch from origin if it exists, otherwise creates it
+   * from the repo's default branch HEAD. When omitted, the engine runs
+   * on the default branch (current behavior).
+   */
+  branch?: string | null;
 }
 
 export interface RunResult {
@@ -326,6 +333,31 @@ export async function computeSignature(
   return out;
 }
 
+/**
+ * Map a Linear issue identifier (or session-id fallback) to the
+ * dispatcher branch name we use for continuity across multiple runs on
+ * the same issue. Format: `symphony/<lowercased-sanitized-identifier>`.
+ *
+ * - `SYM-123` → `symphony/sym-123`
+ * - UUIDs → `symphony/<uuid>` (still groups runs that share that uuid)
+ *
+ * Sanitization: lowercase, replace anything outside `[a-z0-9._-]` with
+ * `-`, strip non-alphanumeric edges so the result satisfies the
+ * dispatcher's `parseBranch` regex. Returns null if nothing usable
+ * remains (caller should then omit the branch field).
+ */
+export function deriveBranchFromIssueIdentifier(
+  identifier: string,
+): string | null {
+  const sanitized = identifier
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[^a-z0-9]+/, "")
+    .replace(/[^a-z0-9]+$/, "");
+  if (sanitized.length === 0) return null;
+  return `symphony/${sanitized}`;
+}
+
 function serializeRunArgs(
   args: RunArgs,
 ): Record<string, unknown> {
@@ -339,6 +371,7 @@ function serializeRunArgs(
     ...(args.timeoutMs ? { timeout_ms: args.timeoutMs } : {}),
     ...(args.githubToken ? { github_token: args.githubToken } : {}),
     ...(args.credentials ? { credentials: args.credentials } : {}),
+    ...(args.branch ? { branch: args.branch } : {}),
   };
 }
 

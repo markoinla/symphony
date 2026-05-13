@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import type { IncomingRequestCfProperties } from "@cloudflare/workers-types";
 
 import { createAuth } from "./lib/auth";
+import { reconcileZombieSessions } from "./lib/reconciler";
 import { buildAdminRouter } from "./routes/admin";
 import { buildApiV1Router } from "./routes/api-v1";
 import { buildDashboardApiRouter } from "./routes/dashboard-api";
@@ -167,5 +168,31 @@ export default {
         { status: 500, headers: { "Content-Type": "application/json" } },
       );
     }
+  },
+
+  // Cron-driven zombie session reconciliation. Configured in
+  // wrangler.jsonc under `triggers.crons`. Runs `*/5 * * * *` —
+  // catches sessions that SessionRunner's in-band cleanup couldn't
+  // close out (D1 outage during the catch block, force-terminated
+  // instances, etc.). See src/lib/reconciler.ts for the heuristic.
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil(
+      (async () => {
+        try {
+          const result = await reconcileZombieSessions(env);
+          if (result.scanned > 0) {
+            console.log(
+              "reconciler_tick",
+              JSON.stringify(result),
+            );
+          }
+        } catch (e) {
+          console.error(
+            "reconciler_failed",
+            e instanceof Error ? e.message : String(e),
+          );
+        }
+      })(),
+    );
   },
 } satisfies ExportedHandler<Env>;

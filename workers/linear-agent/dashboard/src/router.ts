@@ -20,6 +20,16 @@ export const sessionRoute = createRoute({
   path: '/session/$issueIdentifier',
 })
 
+// Session detail keyed by session UUID. This is the URL we post into
+// Linear's AgentSession `externalUrls` ("Open in Symphony") — Linear
+// only knows the session id, not the per-issue identifier, so we
+// route off it directly. See `workers/linear-agent/src/workflows/
+// session-runner.ts` where the URL is generated.
+export const sessionByIdRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/sessions/$sessionId',
+})
+
 export const historyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/history',
@@ -68,6 +78,7 @@ export const createOrganizationRoute = createRoute({
 export const routeTree = rootRoute.addChildren([
   dashboardRoute,
   sessionRoute,
+  sessionByIdRoute,
   historyRoute,
   webhooksRoute,
   projectsRoute,

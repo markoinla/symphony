@@ -47,6 +47,7 @@ import {
   rootRoute,
   dashboardRoute,
   sessionRoute,
+  sessionByIdRoute,
   historyRoute,
   webhooksRoute,
   projectsRoute,
@@ -60,6 +61,7 @@ import {
 
 import { DashboardView } from './pages/dashboard'
 import { SessionView } from './pages/session'
+import { SessionByIdView } from './pages/session-by-id'
 import { HistoryView } from './pages/history'
 import { WebhooksView } from './pages/webhooks'
 import { ProjectsView } from './pages/projects'
@@ -105,6 +107,7 @@ queryClient.getQueryCache().subscribe((event) => {
 rootRoute.update({ component: RootLayout, notFoundComponent: NotFoundView })
 dashboardRoute.update({ component: DashboardView })
 sessionRoute.update({ component: SessionView })
+sessionByIdRoute.update({ component: SessionByIdView })
 historyRoute.update({ component: HistoryView })
 webhooksRoute.update({ component: WebhooksView })
 projectsRoute.update({ component: ProjectsView })

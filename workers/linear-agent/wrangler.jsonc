@@ -43,6 +43,15 @@
     }
   ],
 
+  // Cron-driven zombie session reconciliation. Belt-and-suspenders for
+  // SessionRunner's in-band terminal cleanup — see
+  // src/lib/reconciler.ts. 5-minute cadence is a tradeoff between
+  // dashboard staleness window and cron cost; the reconciler caps work
+  // per tick so this stays cheap.
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
+
   // D1 holds multi-tenant config: organizations, installations, users,
   // projects, org_credentials, sessions, and usage. See migrations/ for
   // the full schema. Create the DB once with:

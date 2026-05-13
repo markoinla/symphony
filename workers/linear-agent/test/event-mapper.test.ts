@@ -31,7 +31,7 @@ describe("mapToActivity", () => {
     });
   });
 
-  it("maps successful tool_result to an ephemeral action activity", () => {
+  it("drops successful tool_result events (the matching tool_call covers it)", () => {
     expect(
       mapToActivity({
         type: "tool_result",
@@ -39,13 +39,7 @@ describe("mapToActivity", () => {
         ok: true,
         result: "file contents",
       }),
-    ).toEqual({
-      type: "action",
-      action: "tool_result",
-      parameter: "call_1",
-      result: "file contents",
-      ephemeral: true,
-    });
+    ).toBeNull();
   });
 
   it("maps failed tool_result to a non-ephemeral error activity", () => {

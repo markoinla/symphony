@@ -4,6 +4,7 @@ import {
   DispatcherClient,
   DispatcherError,
   computeSignature,
+  deriveBranchFromIssueIdentifier,
 } from "../src/lib/dispatcher";
 
 /**
@@ -21,6 +22,29 @@ import {
 const PINNED_SECRET = "test-secret-do-not-use-in-prod";
 const PINNED_BODY = '{"scope":"alice"}';
 const PINNED_SIG = "1628b1de2425d3d72af853cd72a18a7cdadda178157642d42411d70760b15b46";
+
+describe("deriveBranchFromIssueIdentifier", () => {
+  it("lowercases Linear identifiers and prefixes with symphony/", () => {
+    expect(deriveBranchFromIssueIdentifier("SYM-123")).toBe("symphony/sym-123");
+    expect(deriveBranchFromIssueIdentifier("BACH-7")).toBe("symphony/bach-7");
+  });
+
+  it("accepts UUID-style session-id fallbacks", () => {
+    expect(
+      deriveBranchFromIssueIdentifier("e6ff2862-1971-4b10-88a8-4aa16137fff0"),
+    ).toBe("symphony/e6ff2862-1971-4b10-88a8-4aa16137fff0");
+  });
+
+  it("sanitizes unsafe characters and trims edges", () => {
+    expect(deriveBranchFromIssueIdentifier("SYM 162")).toBe("symphony/sym-162");
+    expect(deriveBranchFromIssueIdentifier("--SYM-1--")).toBe("symphony/sym-1");
+  });
+
+  it("returns null when identifier produces nothing usable", () => {
+    expect(deriveBranchFromIssueIdentifier("")).toBeNull();
+    expect(deriveBranchFromIssueIdentifier("---")).toBeNull();
+  });
+});
 
 describe("computeSignature", () => {
   it("matches the cross-language pinned vector", async () => {
@@ -177,5 +201,51 @@ describe("DispatcherClient.run", () => {
       engine: "pi",
     });
     expect(JSON.parse(capturedBody)).not.toHaveProperty("model");
+  });
+
+  it("includes branch in the body when provided", async () => {
+    let capturedBody = "";
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return new Response("{}", { status: 200 });
+    });
+    const client = new DispatcherClient(
+      "https://dispatcher.example",
+      "k",
+      fetchImpl as unknown as typeof fetch,
+    );
+    await client.run({
+      scope: "a",
+      issueId: "SYM-1",
+      repoUrl: "https://x.y/z.git",
+      prompt: "p",
+      engine: "pi",
+      branch: "symphony/sym-1",
+    });
+    expect(JSON.parse(capturedBody)).toMatchObject({
+      branch: "symphony/sym-1",
+    });
+  });
+
+  it("omits branch from the body when null/undefined", async () => {
+    let capturedBody = "";
+    const fetchImpl = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      capturedBody = init?.body as string;
+      return new Response("{}", { status: 200 });
+    });
+    const client = new DispatcherClient(
+      "https://dispatcher.example",
+      "k",
+      fetchImpl as unknown as typeof fetch,
+    );
+    await client.run({
+      scope: "a",
+      issueId: "i",
+      repoUrl: "https://x.y/z.git",
+      prompt: "p",
+      engine: "pi",
+      branch: null,
+    });
+    expect(JSON.parse(capturedBody)).not.toHaveProperty("branch");
   });
 });

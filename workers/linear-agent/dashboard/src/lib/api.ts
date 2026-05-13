@@ -436,13 +436,25 @@ export async function getSessions(params?: {
   }
 }
 
-type WorkerSessionDebug = {
+export type SessionDebugMessage =
+  | string
+  // Modern shape produced from `agent_session_events` rows by the
+  // Worker: see workers/linear-agent/src/routes/dashboard.ts.
+  | { type?: string; timestamp?: string; body?: string | null }
+  // Legacy shape, still produced for older sessions where the events
+  // table is empty and we fall back to the `messages` JSON blob.
+  | { role?: string; content?: string; timestamp?: string }
+
+export type WorkerSessionDebug = {
   id: string
   linear_issue_id: string | null
   linear_issue_title: string | null
   status: string
-  started_at: string | null
-  completed_at: string | null
+  // Worker stores these as epoch seconds (see AgentSessionRecord.
+  // started_at: number in workers/linear-agent/src/lib/store.ts) and
+  // returns the raw number over JSON.
+  started_at: number | null
+  completed_at: number | null
   triggered_by: string | null
   team: string | null
   repo: string | null
@@ -450,8 +462,14 @@ type WorkerSessionDebug = {
   config_snapshot: Record<string, unknown> | null
   stderr: string | null
   dispatcher_logs: unknown[]
-  messages: Array<{ role?: string; content?: string; timestamp?: string } | string>
+  messages: SessionDebugMessage[]
   error: string | null
+}
+
+export function getSessionDebug(sessionId: string): Promise<WorkerSessionDebug> {
+  return requestJson<WorkerSessionDebug>(
+    `/dashboard/api/sessions/${encodeURIComponent(sessionId)}/debug`,
+  )
 }
 
 export async function getSessionTimeline(issueIdentifier: string): Promise<MessagesPayload> {
@@ -502,11 +520,13 @@ function toTimelineSession(
     if (typeof m === 'string') {
       return { id: i, timestamp: null, type: 'message', content: m, metadata: {} }
     }
+    const modern = m as { type?: string; body?: string | null; timestamp?: string }
+    const legacy = m as { role?: string; content?: string; timestamp?: string }
     return {
       id: i,
-      timestamp: m.timestamp ?? null,
-      type: m.role ?? 'message',
-      content: m.content ?? '',
+      timestamp: modern.timestamp ?? legacy.timestamp ?? null,
+      type: modern.type ?? legacy.role ?? 'message',
+      content: modern.body ?? legacy.content ?? '',
       metadata: {},
     }
   })

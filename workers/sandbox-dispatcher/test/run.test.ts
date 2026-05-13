@@ -17,7 +17,7 @@ vi.mock("@cloudflare/sandbox", () => {
 
 import { buildApp, type Env } from "../src/index";
 import { computeSignature } from "../src/hmac";
-import { runSandboxId, shellQuote } from "../src/run";
+import { parseBranch, runSandboxId, shellQuote } from "../src/run";
 
 const SECRET = "run-test-secret";
 
@@ -796,5 +796,224 @@ describe("runSandboxId", () => {
   it("sanitizes Linear-style identifiers and lowercases", () => {
     expect(runSandboxId("SYM-162")).toBe("run-sym-162");
     expect(runSandboxId("alice:proj")).toBe("run-alice-proj");
+  });
+});
+
+describe("parseBranch", () => {
+  it("accepts valid branch names", () => {
+    expect(parseBranch("symphony/sym-123")).toBe("symphony/sym-123");
+    expect(parseBranch("main")).toBe("main");
+    expect(parseBranch("feature/new.thing-2")).toBe("feature/new.thing-2");
+    expect(parseBranch("a")).toBe("a");
+  });
+
+  it("treats undefined/null as opt-out (returns null)", () => {
+    expect(parseBranch(undefined)).toBeNull();
+    expect(parseBranch(null)).toBeNull();
+  });
+
+  it("rejects non-string types", () => {
+    expect(parseBranch(123)).toBe(false);
+    expect(parseBranch({})).toBe(false);
+    expect(parseBranch([])).toBe(false);
+  });
+
+  it("rejects shell-injectable or git-invalid names", () => {
+    expect(parseBranch("")).toBe(false);
+    expect(parseBranch("--rm")).toBe(false);
+    expect(parseBranch("/leading-slash")).toBe(false);
+    expect(parseBranch("trailing-slash/")).toBe(false);
+    expect(parseBranch(".hidden")).toBe(false);
+    expect(parseBranch("branch with space")).toBe(false);
+    expect(parseBranch("foo..bar")).toBe(false);
+    expect(parseBranch("foo;rm -rf /")).toBe(false);
+    expect(parseBranch("branch.lock")).toBe(false);
+    expect(parseBranch("a".repeat(201))).toBe(false);
+  });
+});
+
+describe("POST /run with branch", () => {
+  it("fetches the branch when it exists on origin", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-500"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      // ls-remote returns a ref → branch exists remotely
+      {
+        exitCode: 0,
+        stdout: "abc123\trefs/heads/symphony/sym-500\n",
+        stderr: "",
+      },
+      { exitCode: 0, stdout: "", stderr: "" }, // git fetch + checkout
+      { exitCode: 0, stdout: '{"type":"response"}', stderr: "" }, // engine
+    ];
+    sandboxHandles[runSandboxId("SYM-500")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-500",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+      branch: "symphony/sym-500",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.branch).toBe("symphony/sym-500");
+
+    const lsRemote = sandbox.execCalls[3]?.cmd ?? "";
+    expect(lsRemote).toContain("git ls-remote --heads origin");
+    expect(lsRemote).toContain("'symphony/sym-500'");
+
+    const fetchCheckout = sandbox.execCalls[4]?.cmd ?? "";
+    expect(fetchCheckout).toContain("git fetch origin 'symphony/sym-500'");
+    expect(fetchCheckout).toContain("git checkout 'symphony/sym-500'");
+  });
+
+  it("creates the branch when it doesn't exist on origin", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-501"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      { exitCode: 0, stdout: "", stderr: "" }, // ls-remote (empty)
+      { exitCode: 0, stdout: "", stderr: "" }, // git checkout -b
+      { exitCode: 0, stdout: '{"type":"response"}', stderr: "" }, // engine
+    ];
+    sandboxHandles[runSandboxId("SYM-501")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-501",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+      branch: "symphony/sym-501",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.branch).toBe("symphony/sym-501");
+
+    const checkout = sandbox.execCalls[4]?.cmd ?? "";
+    expect(checkout).toContain("git checkout -b 'symphony/sym-501'");
+    expect(checkout).not.toContain("git fetch");
+  });
+
+  it("returns 502 branch_setup_failed when the checkout fails", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-502"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      { exitCode: 0, stdout: "", stderr: "" }, // ls-remote (empty)
+      { exitCode: 128, stdout: "", stderr: "checkout boom" }, // checkout fails
+    ];
+    sandboxHandles[runSandboxId("SYM-502")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-502",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+      branch: "symphony/sym-502",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(502);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.error).toBe("branch_setup_failed");
+    expect(json.exit_code).toBe(128);
+    expect(json.stderr).toContain("checkout boom");
+    expect(sandbox.destroyed).toBe(true);
+    expect(
+      sandbox.execCalls.find((c) => c.cmd.includes("pi --print")),
+    ).toBeUndefined();
+  });
+
+  it("rejects invalid branch names with 400", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+
+    const body = JSON.stringify({
+      issue_id: "SYM-503",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+      branch: "--rm",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.error).toBe("invalid_branch");
+  });
+
+  it("falls back to current behavior when branch is omitted", async () => {
+    // Same shape as the original happy-path test — verifies that adding
+    // the `branch` field is non-breaking for callers that don't pass it.
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-504"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      { exitCode: 0, stdout: '{"type":"response"}', stderr: "" }, // engine
+    ];
+    sandboxHandles[runSandboxId("SYM-504")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-504",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as Record<string, unknown>;
+    expect(json.branch).toBeNull();
+    expect(sandbox.execCalls).toHaveLength(4);
+    expect(
+      sandbox.execCalls.find((c) => c.cmd.includes("git ls-remote")),
+    ).toBeUndefined();
   });
 });

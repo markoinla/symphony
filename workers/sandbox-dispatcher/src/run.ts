@@ -42,6 +42,11 @@ interface RunBody {
   max_turns?: unknown;
   github_token?: unknown;
   credentials?: unknown;
+  // Optional branch name. When set, after clone the dispatcher fetches
+  // the branch from origin if it exists, otherwise creates it locally
+  // from the default branch HEAD. Unset = current behavior (work on
+  // the default branch). See `resolveBranch` for the logic.
+  branch?: unknown;
 }
 
 interface CredentialsBody {
@@ -74,6 +79,7 @@ interface ParsedRun {
   timeoutMs: number;
   githubToken: string | null;
   credentials: ParsedCredentials | null;
+  branch: string | null;
 }
 
 export function buildRunRouter() {
@@ -138,6 +144,22 @@ export function buildRunRouter() {
         );
       }
 
+      let resolvedBranch: string | null = null;
+      if (parsed.branch) {
+        const branchResult = await resolveBranch(sandbox, workspaceDir, parsed.branch);
+        if (!branchResult.ok) {
+          return c.json(
+            {
+              error: "branch_setup_failed",
+              exit_code: branchResult.exitCode,
+              stderr: branchResult.stderr,
+            },
+            502,
+          );
+        }
+        resolvedBranch = parsed.branch;
+      }
+
       if (parsed.credentials) {
         try {
           await writeMcpConfig(sandbox, workspaceDir, parsed.engine, parsed.credentials);
@@ -162,7 +184,7 @@ export function buildRunRouter() {
         stdout: result.stdout,
         stderr: result.stderr,
         duration_ms: Date.now() - startedAt,
-        branch: null,
+        branch: resolvedBranch,
         commit_sha: null,
         push_error: null,
       });
@@ -259,6 +281,10 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
   // surfacing on the caller as `stream_closed_without_result_frame`.
   void (async () => {
     try {
+      await emit({
+        type: "thought",
+        text: "Spinning up a sandbox…",
+      });
       const record = await new BaselineStore(env.DB).get(parsed.engine);
       if (!record) {
         await emitTerminal(75 /* EX_TEMPFAIL */, {
@@ -269,7 +295,7 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
 
       await emit({
         type: "thought",
-        text: `Restoring ${parsed.engine} baseline snapshot…`,
+        text: "Configuring environment…",
       });
       await sandbox.restoreBackup(record.handle);
 
@@ -295,6 +321,32 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
           message: `clone_failed: ${redactToken(cloneResult.stderr, streamCloneToken).slice(0, 500)}`,
         });
         return;
+      }
+
+      let streamResolvedBranch: string | null = null;
+      if (parsed.branch) {
+        const branchName = parsed.branch;
+        const branchResult = await resolveBranch(
+          sandbox,
+          workspaceDir,
+          branchName,
+          {
+            onAction: async (action) => {
+              const text =
+                action === "create"
+                  ? `Creating new branch ${branchName}…`
+                  : `Checking out existing branch ${branchName}…`;
+              await emit({ type: "thought", text });
+            },
+          },
+        );
+        if (!branchResult.ok) {
+          await emitTerminal(branchResult.exitCode || 1, {
+            message: `branch_setup_failed: ${branchResult.stderr.slice(0, 500)}`,
+          });
+          return;
+        }
+        streamResolvedBranch = branchName;
       }
 
       if (parsed.credentials) {
@@ -359,7 +411,7 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
       // themselves and we'll skip this block.
       await emit({ type: "turn_end", turn: 1, reason: "completed" });
 
-      await emitTerminal(exitCode, { branch: null });
+      await emitTerminal(exitCode, { branch: streamResolvedBranch });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       await emitTerminal(1, { message });
@@ -429,6 +481,9 @@ function parseRun(body: RunBody): ParsedRun | string {
   const credentials = parseCredentials(body.credentials);
   if (typeof credentials === "string") return credentials;
 
+  const branch = parseBranch(body.branch);
+  if (branch === false) return "invalid_branch";
+
   return {
     issueId,
     repoUrl,
@@ -438,7 +493,37 @@ function parseRun(body: RunBody): ParsedRun | string {
     timeoutMs,
     githubToken,
     credentials,
+    branch,
   };
+}
+
+/**
+ * Validate an optional git branch name from the request body. We're
+ * strict because the value flows into `git fetch` / `git checkout`
+ * commands; even with shell-quoting, `--`-leading values would be
+ * interpreted as flags. Rules:
+ *
+ *   - undefined / null → null (caller didn't ask for branch handling)
+ *   - must be a non-empty string under 200 chars
+ *   - must match `[a-zA-Z0-9][a-zA-Z0-9/_.-]*[a-zA-Z0-9]` (single
+ *     alphanumeric is also fine)
+ *   - cannot contain `..` (escapes ref namespace)
+ *   - cannot end in `.lock` (git reserves these)
+ *
+ * Returns the trimmed value, `null` for absent, or `false` for invalid.
+ */
+export function parseBranch(value: unknown): string | null | false {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 200) return false;
+  if (trimmed.length === 1) {
+    return /^[a-zA-Z0-9]$/.test(trimmed) ? trimmed : false;
+  }
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9/_.-]*[a-zA-Z0-9]$/.test(trimmed)) return false;
+  if (trimmed.includes("..")) return false;
+  if (trimmed.endsWith(".lock")) return false;
+  return trimmed;
 }
 
 function parseIssueId(value: unknown): string | null {
@@ -629,6 +714,82 @@ async function writeMcpConfig(
 
   await sandbox.mkdir(configDir, { recursive: true });
   await sandbox.writeFile(configPath, content);
+}
+
+/**
+ * Fetch the requested branch from origin if it exists, otherwise create
+ * it locally from the current HEAD (which is the repo's default branch
+ * after a fresh clone). Idempotent — calling it twice with the same
+ * branch from a fresh clone yields the same state.
+ *
+ * Caller invariant: workspaceDir contains a clean clone of the repo on
+ * its default branch. After this returns ok, HEAD is on `branch` and
+ * the working tree is clean.
+ *
+ * Branch name has already passed `parseBranch` so it's safe to embed in
+ * a shell command after `shellQuote`. We still quote defensively.
+ */
+async function resolveBranch(
+  sandbox: {
+    exec(
+      cmd: string,
+      opts?: { timeout?: number },
+    ): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  },
+  workspaceDir: string,
+  branch: string,
+  options?: {
+    // Fires once the create-vs-checkout decision is made but BEFORE
+    // the corresponding git command runs. Callers wire this into their
+    // SSE stream so the UI sees "Creating new branch X" or "Checking
+    // out existing branch X" in real time. Awaited so callers can
+    // backpressure their writer.
+    onAction?: (action: "create" | "checkout") => Promise<void> | void;
+  },
+): Promise<
+  | { ok: true; created: boolean }
+  | { ok: false; exitCode: number; stderr: string }
+> {
+  const wd = shellQuote(workspaceDir);
+  const br = shellQuote(branch);
+
+  // `git ls-remote --heads origin <branch>` exits 0 whether the ref is
+  // found or not; the discriminator is whether stdout has any rows.
+  const lsRemote = await sandbox.exec(
+    `cd ${wd} && git ls-remote --heads origin ${br}`,
+  );
+  if (lsRemote.exitCode !== 0) {
+    return { ok: false, exitCode: lsRemote.exitCode, stderr: lsRemote.stderr };
+  }
+  const remoteHasBranch = lsRemote.stdout.trim().length > 0;
+
+  if (remoteHasBranch) {
+    if (options?.onAction) await options.onAction("checkout");
+    const fetchCheckout = await sandbox.exec(
+      `cd ${wd} && git fetch origin ${br}:${br} && git checkout ${br}`,
+    );
+    if (fetchCheckout.exitCode !== 0) {
+      return {
+        ok: false,
+        exitCode: fetchCheckout.exitCode,
+        stderr: fetchCheckout.stderr,
+      };
+    }
+    return { ok: true, created: false };
+  }
+
+  // Branch doesn't exist on origin — create it from the default branch
+  // we just cloned onto.
+  if (options?.onAction) await options.onAction("create");
+  const checkout = await sandbox.exec(`cd ${wd} && git checkout -b ${br}`);
+  if (checkout.exitCode !== 0) {
+    return {
+      ok: false,
+      exitCode: checkout.exitCode,
+      stderr: checkout.stderr,
+    };
+  }
+  return { ok: true, created: true };
 }
 
 function serializeMcpConfig(

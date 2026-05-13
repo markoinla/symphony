@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 
 import type { Env } from "../index";
-import { AgentSessionStore } from "../lib/store";
+import { AgentSessionEventStore, AgentSessionStore } from "../lib/store";
 import { requireDashboardAuth, requireOrg } from "../lib/dashboard-auth";
 
 export function buildDashboardRouter() {
@@ -144,7 +144,26 @@ export function buildDashboardRouter() {
     const configSnapshot = session.config_snapshot
       ? JSON.parse(session.config_snapshot)
       : null;
-    const messages = session.messages ? JSON.parse(session.messages) : [];
+    // Prefer the live timeline rows in `agent_session_events` — those
+    // are written incrementally by the turn step so a running session
+    // shows progress and a crashed run still has whatever streamed
+    // before the failure. Fall back to the legacy `messages` JSON blob
+    // on `agent_sessions` so historical sessions from before the
+    // 0005 migration still render. Shape: `{ type, timestamp, body }`
+    // matches the dashboard's existing translator in
+    // dashboard/src/lib/api.ts:toTimelineSession.
+    const eventStore = new AgentSessionEventStore(c.env.DB);
+    const eventRows = await eventStore.listBySessionId(session.id);
+    const messages =
+      eventRows.length > 0
+        ? eventRows.map((row) => ({
+            type: row.type,
+            timestamp: new Date(row.ts).toISOString(),
+            body: row.body ?? undefined,
+          }))
+        : session.messages
+          ? JSON.parse(session.messages)
+          : [];
     const dispatcherLogs = session.dispatcher_logs
       ? JSON.parse(session.dispatcher_logs)
       : [];
@@ -289,14 +308,7 @@ async function serveAsset(c: {
   req: { raw: Request; url: string };
   env: { ASSETS: Fetcher };
 }) {
-  const response = await c.env.ASSETS.fetch(c.req.raw);
-  if (
-    response.status === 404 ||
-    (response.status >= 300 && response.status < 400)
-  ) {
-    return serveIndex(c);
-  }
-  return response;
+  return c.env.ASSETS.fetch(c.req.raw);
 }
 
 async function serveIndex(c: {

@@ -659,6 +659,89 @@ export class AgentSessionStore {
   }
 }
 
+// ── agent_session_events ────────────────────────────────────────────
+
+export interface AgentSessionEventRecord {
+  id: number;
+  session_id: string;
+  turn: number;
+  ts: number;
+  type: string;
+  body: string | null;
+}
+
+export interface AgentSessionEventInput {
+  turn: number;
+  ts: number;
+  type: string;
+  body: string | null;
+}
+
+export class AgentSessionEventStore {
+  constructor(private readonly db: D1Database) {}
+
+  // Single-row append. Kept narrow to a single ? marker template — the
+  // streaming turn loop calls this on every event so a stable prepared
+  // statement is friendlier to D1's planner than building a fresh
+  // multi-row INSERT each time.
+  async append(
+    sessionId: string,
+    input: AgentSessionEventInput,
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO agent_session_events (session_id, turn, ts, type, body)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .bind(sessionId, input.turn, input.ts, input.type, input.body)
+      .run();
+  }
+
+  // Batched flush. Callers that buffer events between Linear posts
+  // should prefer this — it's a single round-trip per buffer instead
+  // of one per event.
+  async appendBatch(
+    sessionId: string,
+    inputs: AgentSessionEventInput[],
+  ): Promise<void> {
+    if (inputs.length === 0) return;
+    const stmt = this.db.prepare(
+      `INSERT INTO agent_session_events (session_id, turn, ts, type, body)
+       VALUES (?, ?, ?, ?, ?)`,
+    );
+    await this.db.batch(
+      inputs.map((e) =>
+        stmt.bind(sessionId, e.turn, e.ts, e.type, e.body),
+      ),
+    );
+  }
+
+  async listBySessionId(
+    sessionId: string,
+  ): Promise<AgentSessionEventRecord[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT id, session_id, turn, ts, type, body
+         FROM agent_session_events
+         WHERE session_id = ?
+         ORDER BY id ASC`,
+      )
+      .bind(sessionId)
+      .all<AgentSessionEventRecord>();
+    return result.results;
+  }
+
+  async countBySessionId(sessionId: string): Promise<number> {
+    const row = await this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM agent_session_events WHERE session_id = ?`,
+      )
+      .bind(sessionId)
+      .first<{ n: number }>();
+    return row?.n ?? 0;
+  }
+}
+
 // ── webhook_events ──────────────────────────────────────────────────
 
 export interface WebhookEventRecord {

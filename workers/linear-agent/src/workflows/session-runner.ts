@@ -39,10 +39,11 @@ import { refreshInstallToken } from "../lib/install-token";
 import {
   DispatcherClient,
   DispatcherError,
+  deriveBranchFromIssueIdentifier,
   type NormalizedEvent,
   type RunCredentials,
 } from "../lib/dispatcher";
-import { lastAssistantText, mapToActivity } from "../lib/event-mapper";
+import { mapToActivity } from "../lib/event-mapper";
 import {
   updateAgentSession,
   updateIssue,
@@ -51,6 +52,7 @@ import { resolveLinearMcpToken } from "../lib/linear-token";
 import { withLinearGraphqlReference } from "../lib/prompts/linear-graphql";
 import { resolvePrompt, truncate } from "../lib/session-helpers";
 import {
+  AgentSessionEventStore,
   AgentSessionStore,
   GitHubInstallStore,
   LinearAgentInstallStore,
@@ -141,27 +143,24 @@ interface TurnResult {
   pr_url: string | null;
 }
 
+// TurnOutcome no longer carries a per-event summary array — the
+// streaming turn writes each event into `agent_session_events` as it
+// arrives. Keeping the step output small (just the result frame +
+// lastAssistant) is what prevents Workflows' ~1 MiB step-output ceiling
+// from killing a chatty turn.
 type TurnOutcome =
   | {
       kind: "done";
       result: TurnResult;
       lastAssistant: string | null;
       inbandError: string | null;
-      eventSummary: EventSummaryItem[];
     }
   | {
       kind: "needs_continuation";
       result: TurnResult;
       lastAssistant: string | null;
-      eventSummary: EventSummaryItem[];
     }
   | { kind: "dispatch_error"; message: string };
-
-interface EventSummaryItem {
-  type: string;
-  timestamp: string;
-  body?: string;
-}
 
 const DEFAULT_MAX_TURNS = 10;
 const STDERR_TRUNCATE = 2000;
@@ -608,9 +607,19 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
 
     let prompt = resolved.prompt;
     let lastAssistant: string | null = null;
-    let terminal: TurnOutcome | null = null;
+    // Initialize `terminal` to a sentinel error so that even if the
+    // turn loop throws before the first runTurnBatch assignment (e.g.
+    // step.do internal failure on `resolve-linear-mcp-token-*`), the
+    // downstream try/catch sees a well-formed value and the
+    // post-terminal-activity / record-session-end steps below have
+    // something to serialize. This is the safety net that turns
+    // WorkflowInternalError on any inner step into a clean error
+    // terminal instead of a zombie session row.
+    let terminal: TurnOutcome = {
+      kind: "dispatch_error",
+      message: "workflow_aborted_before_terminal_state",
+    };
     let turnsRun = 0;
-    const allEventSummaries: EventSummaryItem[] = [];
 
     /**
      * Run a batch of turns starting at `startTurn` until either the
@@ -662,7 +671,18 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
 
         const outcome: TurnOutcome = await step.do(
           turnLabel,
-          { retries: { limit: 0, delay: "1 second", backoff: "constant" } },
+          {
+            retries: { limit: 0, delay: "1 second", backoff: "constant" },
+            // Cloudflare Workflows' default step.do timeout is 10 min,
+            // which exactly matches the dispatcher's DEFAULT_TIMEOUT_MS
+            // — long-running engine streams hit the workflow timeout
+            // before the dispatcher's own timeout fires, surfacing as
+            // `workflow_internal_error: WorkflowTimeoutError`. The
+            // dispatcher caps runs at MAX_TIMEOUT_MS = 30 min, so the
+            // step needs comfortable headroom above that for SSE close
+            // and `post-terminal-activity`.
+            timeout: "35 minutes",
+          },
           async () =>
             runTurn(this.env, sessionId, token, {
               scope: resolved.scope,
@@ -673,6 +693,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
               model: resolved.model,
               githubToken,
               credentials: linearMcpCredentials,
+              branch: deriveBranchFromIssueIdentifier(issueIdentifier),
               turn,
             }),
         );
@@ -681,7 +702,6 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           batchTerminal = outcome;
           break;
         }
-        allEventSummaries.push(...outcome.eventSummary);
         if (outcome.lastAssistant) lastAssistant = outcome.lastAssistant;
 
         if (outcome.kind === "done") {
@@ -698,7 +718,6 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
             result: outcome.result,
             lastAssistant: outcome.lastAssistant,
             inbandError: "max_turns_reached",
-            eventSummary: [],
           };
           break;
         }
@@ -721,65 +740,81 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       return batchTerminal;
     };
 
-    terminal = await runTurnBatch(1);
+    // Everything from the first turn dispatch through the follow-up
+    // wait loop is wrapped so that any Workflows-internal failure
+    // (most commonly `WorkflowInternalError` from a long-running turn
+    // step) still leaves us with a well-formed `terminal` and lets
+    // the post-terminal-activity / record-session-end steps below run.
+    // Without this, a thrown step would propagate up past the cleanup
+    // and leave the agent_sessions row stuck in `running` and the
+    // Linear session timeline with no terminal activity.
+    try {
+      terminal = await runTurnBatch(1);
 
-    // Bounded wait for a follow-up `prompted` webhook between turn
-    // batches. Linear marks sessions stale after ~30 minutes so we
-    // wait just under that. If the user sends a new message in this
-    // window we re-run the turn loop with the new prompt; otherwise
-    // the wait rejects and we fall through to post-terminal-activity
-    // exactly as before. We only re-enter while:
-    //   - the previous batch ended cleanly (`done`, not dispatch_error)
-    //   - we still have budget on the global `maxTurns` cap
-    //
-    // `turnsRun` is NOT reset across the wait — total turns include
-    // follow-ups so a runaway conversation can't bypass the cap.
-    while (
-      terminal.kind === "done" &&
-      !terminal.inbandError &&
-      turnsRun < maxTurns
-    ) {
-      let followup: AgentSessionEventWebhook | null = null;
-      try {
-        const event = await step.waitForEvent<AgentSessionEventWebhook>(
-          `wait-for-prompted-${turnsRun}`,
-          { type: "linear.prompted", timeout: "25 minutes" },
-        );
-        followup = event.payload as AgentSessionEventWebhook;
-      } catch {
-        // Timeout (or any other step.waitForEvent rejection) → fall
-        // through to post-terminal-activity. We deliberately do NOT
-        // log here at error level; a 25-minute idle is the common
-        // case for a one-shot session.
-        break;
+      // Bounded wait for a follow-up `prompted` webhook between turn
+      // batches. Linear marks sessions stale after ~30 minutes so we
+      // wait just under that. If the user sends a new message in this
+      // window we re-run the turn loop with the new prompt; otherwise
+      // the wait rejects and we fall through to post-terminal-activity
+      // exactly as before. We only re-enter while:
+      //   - the previous batch ended cleanly (`done`, not dispatch_error)
+      //   - we still have budget on the global `maxTurns` cap
+      //
+      // `turnsRun` is NOT reset across the wait — total turns include
+      // follow-ups so a runaway conversation can't bypass the cap.
+      while (
+        terminal.kind === "done" &&
+        !terminal.inbandError &&
+        turnsRun < maxTurns
+      ) {
+        let followup: AgentSessionEventWebhook | null = null;
+        try {
+          const event = await step.waitForEvent<AgentSessionEventWebhook>(
+            `wait-for-prompted-${turnsRun}`,
+            { type: "linear.prompted", timeout: "25 minutes" },
+          );
+          followup = event.payload as AgentSessionEventWebhook;
+        } catch {
+          // Timeout (or any other step.waitForEvent rejection) → fall
+          // through to post-terminal-activity. We deliberately do NOT
+          // log here at error level; a 25-minute idle is the common
+          // case for a one-shot session.
+          break;
+        }
+
+        // Re-derive the prompt from the follow-up payload. If the
+        // follow-up carries no prompt (rare — Linear should always
+        // include one) we fall back to the previous prompt so the
+        // engine at least has something to work with.
+        const followupPrompt = resolvePrompt(followup) ?? resolved.prompt;
+        // Re-apply the Linear GraphQL skill marker on the new prompt
+        // so follow-ups stay wired to the Linear skill. Idempotent.
+        prompt = withLinearGraphqlReference(followupPrompt, {
+          issueId: webhookEvent.agentSession.issue?.id ?? null,
+          issueIdentifier:
+            webhookEvent.agentSession.issue?.identifier ?? null,
+          teamId:
+            webhookEvent.agentSession.issue?.teamId ??
+            webhookEvent.agentSession.issue?.team?.id ??
+            null,
+        });
+
+        terminal = await runTurnBatch(turnsRun + 1);
       }
-
-      // Re-derive the prompt from the follow-up payload. If the
-      // follow-up carries no prompt (rare — Linear should always
-      // include one) we fall back to the previous prompt so the
-      // engine at least has something to work with.
-      const followupPrompt = resolvePrompt(followup) ?? resolved.prompt;
-      // Re-apply the Linear GraphQL skill marker on the new prompt
-      // so follow-ups stay wired to the Linear skill. Idempotent.
-      prompt = withLinearGraphqlReference(followupPrompt, {
-        issueId: webhookEvent.agentSession.issue?.id ?? null,
-        issueIdentifier: webhookEvent.agentSession.issue?.identifier ?? null,
-        teamId:
-          webhookEvent.agentSession.issue?.teamId ??
-          webhookEvent.agentSession.issue?.team?.id ??
-          null,
-      });
-
-      terminal = await runTurnBatch(turnsRun + 1);
-    }
-
-    if (!terminal) {
-      // Should be unreachable — runTurnBatch always returns a terminal.
-      // Defensive default for the type checker.
-      terminal = {
-        kind: "dispatch_error",
-        message: "unreachable_no_terminal_outcome",
-      };
+    } catch (e) {
+      const message =
+        e instanceof Error
+          ? `workflow_internal_error: ${e.message}`
+          : "workflow_internal_error: unknown";
+      terminal = { kind: "dispatch_error", message };
+      console.error(
+        "agent_session_aborted",
+        JSON.stringify({
+          session_id: sessionId,
+          turns_run: turnsRun,
+          error: e instanceof Error ? e.message : String(e),
+        }),
+      );
     }
 
     await step.do("post-terminal-activity", async () => {
@@ -818,9 +853,9 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       await step.do("update-final-plan", async () => {
         try {
           const succeeded =
-            terminal!.kind === "done" &&
-            terminal!.result.exit_code === 0 &&
-            !terminal!.inbandError;
+            terminal.kind === "done" &&
+            terminal.result.exit_code === 0 &&
+            !terminal.inbandError;
           await updateAgentSession(token, {
             agentSessionId: sessionId,
             plan: [
@@ -843,26 +878,26 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     await step.do("record-session-end", async () => {
       try {
         const finalStatus =
-          terminal!.kind === "dispatch_error"
+          terminal.kind === "dispatch_error"
             ? "error"
-            : terminal!.kind === "done" &&
-                terminal!.result.exit_code === 0
+            : terminal.kind === "done" && terminal.result.exit_code === 0
               ? "completed"
               : "error";
         const errorMsg =
-          terminal!.kind === "dispatch_error"
-            ? terminal!.message
-            : terminal!.kind === "done" && terminal!.inbandError
-              ? terminal!.inbandError
+          terminal.kind === "dispatch_error"
+            ? terminal.message
+            : terminal.kind === "done" && terminal.inbandError
+              ? terminal.inbandError
               : null;
+        // `messages` is no longer written here — the streaming turn
+        // persists each event to `agent_session_events` as it arrives,
+        // so the dashboard reads from there now. Leaving the column
+        // untouched preserves any historical JSON for sessions that
+        // pre-date the table.
         await new AgentSessionStore(this.env.DB).update(sessionId, {
           status: finalStatus,
           completedAt: Math.floor(Date.now() / 1000),
           error: errorMsg,
-          messages:
-            allEventSummaries.length > 0
-              ? JSON.stringify(allEventSummaries)
-              : null,
         });
       } catch (e) {
         console.error(
@@ -971,87 +1006,105 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
 
     let currentPrompt = prompt;
     let lastAssistant: string | null = null;
-    let terminal: TurnOutcome | null = null;
+    let terminal: TurnOutcome = {
+      kind: "dispatch_error",
+      message: "workflow_aborted_before_terminal_state",
+    };
     let turnsRun = 0;
-    const allEventSummaries: EventSummaryItem[] = [];
 
-    for (let turn = 1; turn <= maxTurns; turn++) {
-      turnsRun = turn;
-      const captured = currentPrompt;
+    // Same wrap as runAgentSessionMode: any throw from a turn step
+    // (most commonly WorkflowInternalError after ~5 min of SSE
+    // streaming) is converted into a clean error terminal so
+    // trigger-record-session-end below still runs.
+    try {
+      for (let turn = 1; turn <= maxTurns; turn++) {
+        turnsRun = turn;
+        const captured = currentPrompt;
 
-      const outcome: TurnOutcome = await step.do(
-        `trigger-turn-${turn}`,
-        { retries: { limit: 0, delay: "1 second", backoff: "constant" } },
-        async () =>
-          runTurnHeadless(this.env, {
-            scope,
-            issueId: issueIdentifier,
-            repoUrl,
-            prompt: captured,
-            engine: "pi",
-            model,
-            githubToken,
-            credentials: null,
-            turn,
-          }),
+        const outcome: TurnOutcome = await step.do(
+          `trigger-turn-${turn}`,
+          {
+            retries: { limit: 0, delay: "1 second", backoff: "constant" },
+            // See note on the agent-session turn step above — default
+            // 10-min Workflows step timeout races the dispatcher's
+            // own 10-min default and loses. Cap matches the dispatcher's
+            // MAX_TIMEOUT_MS (30 min) plus headroom.
+            timeout: "35 minutes",
+          },
+          async () =>
+            runTurnHeadless(this.env, sessionId, {
+              scope,
+              issueId: issueIdentifier,
+              repoUrl,
+              prompt: captured,
+              engine: "pi",
+              model,
+              githubToken,
+              credentials: null,
+              branch: deriveBranchFromIssueIdentifier(issueIdentifier),
+              turn,
+            }),
+        );
+
+        if (outcome.kind === "dispatch_error") {
+          terminal = outcome;
+          break;
+        }
+        if (outcome.lastAssistant) lastAssistant = outcome.lastAssistant;
+
+        if (outcome.kind === "done") {
+          terminal = outcome;
+          break;
+        }
+
+        if (turn >= maxTurns) {
+          terminal = {
+            kind: "done",
+            result: outcome.result,
+            lastAssistant: outcome.lastAssistant,
+            inbandError: "max_turns_reached",
+          };
+          break;
+        }
+
+        currentPrompt = buildContinuationPrompt(prompt, outcome.lastAssistant);
+      }
+    } catch (e) {
+      const message =
+        e instanceof Error
+          ? `workflow_internal_error: ${e.message}`
+          : "workflow_internal_error: unknown";
+      terminal = { kind: "dispatch_error", message };
+      console.error(
+        "trigger_session_aborted",
+        JSON.stringify({
+          session_id: sessionId,
+          turns_run: turnsRun,
+          error: e instanceof Error ? e.message : String(e),
+        }),
       );
-
-      if (outcome.kind === "dispatch_error") {
-        terminal = outcome;
-        break;
-      }
-      allEventSummaries.push(...outcome.eventSummary);
-      if (outcome.lastAssistant) lastAssistant = outcome.lastAssistant;
-
-      if (outcome.kind === "done") {
-        terminal = outcome;
-        break;
-      }
-
-      if (turn >= maxTurns) {
-        terminal = {
-          kind: "done",
-          result: outcome.result,
-          lastAssistant: outcome.lastAssistant,
-          inbandError: "max_turns_reached",
-          eventSummary: [],
-        };
-        break;
-      }
-
-      currentPrompt = buildContinuationPrompt(prompt, outcome.lastAssistant);
-    }
-
-    if (!terminal) {
-      terminal = {
-        kind: "dispatch_error",
-        message: "unreachable_no_terminal_outcome",
-      };
     }
 
     await step.do("trigger-record-session-end", async () => {
       try {
         const finalStatus =
-          terminal!.kind === "dispatch_error"
+          terminal.kind === "dispatch_error"
             ? "error"
-            : terminal!.kind === "done" &&
-                terminal!.result.exit_code === 0
+            : terminal.kind === "done" && terminal.result.exit_code === 0
               ? "completed"
               : "error";
         const errorMsg =
-          terminal!.kind === "dispatch_error"
-            ? terminal!.message
-            : terminal!.kind === "done" && terminal!.inbandError
-              ? terminal!.inbandError
+          terminal.kind === "dispatch_error"
+            ? terminal.message
+            : terminal.kind === "done" && terminal.inbandError
+              ? terminal.inbandError
               : null;
+        // See runAgentSessionMode — events are persisted live to
+        // `agent_session_events` so we don't write `messages` here.
         await new AgentSessionStore(this.env.DB).update(sessionId, {
           status: finalStatus,
           completedAt: Math.floor(Date.now() / 1000),
           error: errorMsg,
-          messages:
-            allEventSummaries.length > 0
-              ? JSON.stringify(allEventSummaries)
-              : null,
         });
       } catch (e) {
         console.error(
@@ -1092,6 +1145,7 @@ async function runTurn(
     model: string | null;
     githubToken: string | null;
     credentials: RunCredentials | null;
+    branch: string | null;
     turn: number;
   },
 ): Promise<TurnOutcome> {
@@ -1100,10 +1154,11 @@ async function runTurn(
     env.DISPATCHER_URL,
     env.DISPATCH_HMAC_SECRET,
   );
+  const eventStore = new AgentSessionEventStore(env.DB);
 
-  const events: NormalizedEvent[] = [];
   let result: TurnResult | null = null;
   let inbandError: string | null = null;
+  let lastAssistant: string | null = null;
   let turnEndReason: "completed" | "needs_continuation" | "error" | null = null;
 
   try {
@@ -1116,8 +1171,13 @@ async function runTurn(
       model: args.model,
       githubToken: args.githubToken,
       credentials: args.credentials,
+      branch: args.branch,
     })) {
-      events.push(ev);
+      // Persist every event to D1 as it arrives. Wrapped in `safe`
+      // because a transient D1 hiccup must not abort the turn — the
+      // engine keeps streaming regardless, and a missing timeline row
+      // is strictly less bad than killing the whole run.
+      await safe(() => persistEvent(eventStore, sessionId, args.turn, ev));
 
       if (ev.type === "result") {
         result = {
@@ -1131,6 +1191,9 @@ async function runTurn(
       if (ev.type === "turn_end") {
         turnEndReason = ev.reason;
         continue;
+      }
+      if (ev.type === "assistant_msg" && ev.text.length > 0) {
+        lastAssistant = ev.text;
       }
       if (ev.type === "error") {
         inbandError = ev.message;
@@ -1165,22 +1228,22 @@ async function runTurn(
     };
   }
 
-  const lastAssistant = lastAssistantText(events);
-  const eventSummary = summarizeEvents(events);
-
   if (turnEndReason === "needs_continuation" && result.exit_code === 0) {
-    return { kind: "needs_continuation", result, lastAssistant, eventSummary };
+    return { kind: "needs_continuation", result, lastAssistant };
   }
-  return { kind: "done", result, lastAssistant, inbandError, eventSummary };
+  return { kind: "done", result, lastAssistant, inbandError };
 }
 
 /**
  * Headless turn — drives the dispatcher SSE stream like `runTurn` but
  * never posts back into Linear. Used by trigger-initiated sessions
- * which have no Linear AgentSession id to attach activities to.
+ * which have no Linear AgentSession id to attach activities to. Still
+ * persists each event to `agent_session_events` so the dashboard can
+ * surface the timeline for headless runs.
  */
 async function runTurnHeadless(
   env: Env,
+  sessionId: string,
   args: {
     scope: string;
     issueId: string;
@@ -1190,6 +1253,7 @@ async function runTurnHeadless(
     model: string | null;
     githubToken: string | null;
     credentials: RunCredentials | null;
+    branch: string | null;
     turn: number;
   },
 ): Promise<TurnOutcome> {
@@ -1197,10 +1261,11 @@ async function runTurnHeadless(
     env.DISPATCHER_URL,
     env.DISPATCH_HMAC_SECRET,
   );
+  const eventStore = new AgentSessionEventStore(env.DB);
 
-  const events: NormalizedEvent[] = [];
   let result: TurnResult | null = null;
   let inbandError: string | null = null;
+  let lastAssistant: string | null = null;
   let turnEndReason: "completed" | "needs_continuation" | "error" | null = null;
 
   try {
@@ -1213,8 +1278,10 @@ async function runTurnHeadless(
       model: args.model,
       githubToken: args.githubToken,
       credentials: args.credentials,
+      branch: args.branch,
     })) {
-      events.push(ev);
+      await safe(() => persistEvent(eventStore, sessionId, args.turn, ev));
+
       if (ev.type === "result") {
         result = {
           exit_code: ev.exit_code,
@@ -1227,6 +1294,9 @@ async function runTurnHeadless(
       if (ev.type === "turn_end") {
         turnEndReason = ev.reason;
         continue;
+      }
+      if (ev.type === "assistant_msg" && ev.text.length > 0) {
+        lastAssistant = ev.text;
       }
       if (ev.type === "error") {
         inbandError = ev.message;
@@ -1249,13 +1319,10 @@ async function runTurnHeadless(
     };
   }
 
-  const lastAssistant = lastAssistantText(events);
-  const eventSummary = summarizeEvents(events);
-
   if (turnEndReason === "needs_continuation" && result.exit_code === 0) {
-    return { kind: "needs_continuation", result, lastAssistant, eventSummary };
+    return { kind: "needs_continuation", result, lastAssistant };
   }
-  return { kind: "done", result, lastAssistant, inbandError, eventSummary };
+  return { kind: "done", result, lastAssistant, inbandError };
 }
 
 function parseMaxTurns(raw: string | undefined): number {
@@ -1281,29 +1348,45 @@ function buildContinuationPrompt(
   return `${previous}Continuing the same task. Original request:\n\n${originalPrompt}`;
 }
 
-function summarizeEvents(events: NormalizedEvent[]): EventSummaryItem[] {
-  const now = new Date().toISOString();
-  return events
-    .filter((e) => e.type !== "turn_end")
-    .map((e) => {
-      const item: EventSummaryItem = { type: e.type, timestamp: now };
-      if (e.type === "thought" || e.type === "assistant_msg") {
-        item.body = truncate(e.text, 500);
-      } else if (e.type === "tool_call") {
-        const argStr =
-          typeof e.args === "string"
-            ? e.args
-            : JSON.stringify(e.args ?? "");
-        item.body = `${e.tool}(${truncate(argStr, 200)})`;
-      } else if (e.type === "tool_result") {
-        item.body = truncate(e.result ?? (e.ok ? "ok" : "error"), 200);
-      } else if (e.type === "error") {
-        item.body = e.message;
-      } else if (e.type === "result") {
-        item.body = `exit_code=${e.exit_code}`;
-      }
-      return item;
-    });
+// Build the truncated `body` column for one normalized event. Mirrors
+// the per-type formatting that used to live in `summarizeEvents` but
+// runs once per event instead of over an accumulated array. Returns
+// null when the event has no useful body (e.g. `turn_end`) — the row
+// is still inserted so consumers can see the boundary, just with a
+// NULL body.
+function summarizeOne(ev: NormalizedEvent): string | null {
+  if (ev.type === "thought" || ev.type === "assistant_msg") {
+    return truncate(ev.text, 500);
+  }
+  if (ev.type === "tool_call") {
+    const argStr =
+      typeof ev.args === "string" ? ev.args : JSON.stringify(ev.args ?? "");
+    return `${ev.tool}(${truncate(argStr, 200)})`;
+  }
+  if (ev.type === "tool_result") {
+    return truncate(ev.result ?? (ev.ok ? "ok" : "error"), 200);
+  }
+  if (ev.type === "error") {
+    return ev.message;
+  }
+  if (ev.type === "result") {
+    return `exit_code=${ev.exit_code}`;
+  }
+  return null;
+}
+
+async function persistEvent(
+  store: AgentSessionEventStore,
+  sessionId: string,
+  turn: number,
+  ev: NormalizedEvent,
+): Promise<void> {
+  await store.append(sessionId, {
+    turn,
+    ts: Date.now(),
+    type: ev.type,
+    body: summarizeOne(ev),
+  });
 }
 
 async function safe(fn: () => Promise<unknown>): Promise<void> {

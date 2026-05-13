@@ -240,29 +240,34 @@ describe("POST /run (Accept: text/event-stream)", () => {
       "thought",
       "thought",
       "thought",
+      "thought",
       "assistant_msg",
       "turn_end",
       "result",
     ]);
     expect(events[0]).toMatchObject({
       type: "thought",
-      text: expect.stringContaining("baseline"),
+      text: expect.stringContaining("Spinning up a sandbox"),
     });
     expect(events[1]).toMatchObject({
       type: "thought",
-      text: expect.stringContaining("Cloning"),
+      text: expect.stringContaining("Configuring environment"),
     });
     expect(events[2]).toMatchObject({
       type: "thought",
-      text: expect.stringContaining("Calling model"),
+      text: expect.stringContaining("Cloning"),
     });
     expect(events[3]).toMatchObject({
+      type: "thought",
+      text: expect.stringContaining("Calling model"),
+    });
+    expect(events[4]).toMatchObject({
       type: "assistant_msg",
       text: "Done — opened PR #123.",
     });
-    expect(events[4]).toMatchObject({ type: "turn_end", turn: 1, reason: "completed" });
-    expect(events[5]).toMatchObject({ type: "result", exit_code: 0 });
-    expect(events[5]?.duration_ms).toEqual(expect.any(Number));
+    expect(events[5]).toMatchObject({ type: "turn_end", turn: 1, reason: "completed" });
+    expect(events[6]).toMatchObject({ type: "result", exit_code: 0 });
+    expect(events[6]?.duration_ms).toEqual(expect.any(Number));
     expect(sandbox.destroyed).toBe(true);
   });
 
@@ -306,6 +311,7 @@ describe("POST /run (Accept: text/event-stream)", () => {
     expect(res.status).toBe(200);
     const events = await consumeSseFrames(res);
     expect(events.map((e) => e.type)).toEqual([
+      "thought",
       "thought",
       "thought",
       "thought",
@@ -385,11 +391,12 @@ describe("POST /run (Accept: text/event-stream)", () => {
 
     expect(res.status).toBe(200);
     const events = await consumeSseFrames(res);
-    expect(events.map((e) => e.type)).toEqual(["error", "result"]);
-    expect((events[0] as { message: string }).message).toContain(
+    expect(events.map((e) => e.type)).toEqual(["thought", "error", "result"]);
+    expect((events[0] as { text: string }).text).toContain("Spinning up");
+    expect((events[1] as { message: string }).message).toContain(
       "missing_baseline",
     );
-    expect((events[1] as { exit_code: number }).exit_code).not.toBe(0);
+    expect((events[2] as { exit_code: number }).exit_code).not.toBe(0);
   });
 
   it("embeds the github_token in the clone URL and redacts it from clone_failed", async () => {
@@ -471,11 +478,12 @@ describe("POST /run (Accept: text/event-stream)", () => {
     expect(events.map((e) => e.type)).toEqual([
       "thought",
       "thought",
+      "thought",
       "error",
       "result",
     ]);
-    expect((events[2] as { message: string }).message).toContain("clone_failed");
-    expect((events[3] as { exit_code: number }).exit_code).toBe(128);
+    expect((events[3] as { message: string }).message).toContain("clone_failed");
+    expect((events[4] as { exit_code: number }).exit_code).toBe(128);
     expect(sandbox.destroyed).toBe(true);
   });
 
@@ -516,13 +524,112 @@ describe("POST /run (Accept: text/event-stream)", () => {
     expect(events.map((e) => e.type)).toEqual([
       "thought",
       "thought",
+      "thought",
       "error",
       "result",
     ]);
-    expect((events[2] as { message: string }).message).toContain(
+    expect((events[3] as { message: string }).message).toContain(
       "mcp_config_write_failed",
     );
-    expect((events[3] as { exit_code: number }).exit_code).toBe(1);
+    expect((events[4] as { exit_code: number }).exit_code).toBe(1);
     expect(sandbox.destroyed).toBe(true);
+  });
+
+  it("emits 'Creating new branch' thought when the branch is absent on origin", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-510"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      { exitCode: 0, stdout: "", stderr: "" }, // ls-remote (empty)
+      { exitCode: 0, stdout: "", stderr: "" }, // git checkout -b
+    ];
+    sandbox.streamScript = [
+      { type: "stdout", data: '{"type":"agent_start"}\n' },
+      { type: "stdout", data: '{"type":"agent_end"}\n' },
+      { type: "complete", exitCode: 0 },
+    ];
+    sandboxHandles[runSandboxId("SYM-510")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-510",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+      branch: "symphony/sym-510",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+    const thoughts = events
+      .filter((e) => e.type === "thought")
+      .map((e) => (e as { text: string }).text);
+
+    const cloningIdx = thoughts.findIndex((t) => t.includes("Cloning"));
+    expect(cloningIdx).toBeGreaterThanOrEqual(0);
+    expect(thoughts[cloningIdx + 1]).toBe(
+      "Creating new branch symphony/sym-510…",
+    );
+    const resultEvent = events.find((e) => e.type === "result");
+    expect((resultEvent as { branch: string }).branch).toBe("symphony/sym-510");
+  });
+
+  it("emits 'Checking out existing branch' thought when the branch is on origin", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-511"));
+    sandbox.execQueue = [
+      { exitCode: 0, stdout: "", stderr: "" }, // mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // rm + mkdir
+      { exitCode: 0, stdout: "", stderr: "" }, // git clone
+      {
+        exitCode: 0,
+        stdout: "abc123\trefs/heads/symphony/sym-511\n",
+        stderr: "",
+      }, // ls-remote (hit)
+      { exitCode: 0, stdout: "", stderr: "" }, // git fetch + checkout
+    ];
+    sandbox.streamScript = [
+      { type: "stdout", data: '{"type":"agent_start"}\n' },
+      { type: "stdout", data: '{"type":"agent_end"}\n' },
+      { type: "complete", exitCode: 0 },
+    ];
+    sandboxHandles[runSandboxId("SYM-511")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-511",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+      branch: "symphony/sym-511",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+    const thoughts = events
+      .filter((e) => e.type === "thought")
+      .map((e) => (e as { text: string }).text);
+
+    const cloningIdx = thoughts.findIndex((t) => t.includes("Cloning"));
+    expect(cloningIdx).toBeGreaterThanOrEqual(0);
+    expect(thoughts[cloningIdx + 1]).toBe(
+      "Checking out existing branch symphony/sym-511…",
+    );
   });
 });

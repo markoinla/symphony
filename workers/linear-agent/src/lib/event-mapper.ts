@@ -12,18 +12,21 @@
  *   NormalizedEvent              → Linear AgentActivityContent
  *   thought       → { type: "thought", body }
  *   tool_call     → { type: "action",  action: tool, parameter, ephemeral: true }
- *   tool_result   → { type: "action",  action: "tool_result", parameter, result, ephemeral: true }
- *                   (ok=false → { type: "error", body })
+ *   tool_result   → null on ok=true (the tool_call activity already
+ *                   tells the user what ran; the result body is rarely
+ *                   useful in the timeline and each post burns a Linear
+ *                   request from our 5k/hr OAuth-app bucket)
+ *                   ok=false → { type: "error", body }
  *   assistant_msg → null (held back; surfaced as the terminal
  *                         `response` activity by SessionRunner)
  *   turn_end      → null (turn boundary is implicit in subsequent activities)
  *   error         → { type: "error", body }
  *   result        → null (handled separately by SessionRunner)
  *
- * Interim tool activities (`tool_call`, successful `tool_result`) are
- * marked `ephemeral: true` so Linear can collapse / hide them once the
- * session moves on, per the agent-interaction docs. Thoughts, errors,
- * and failed tool results stay non-ephemeral so they remain visible.
+ * `tool_call` is marked `ephemeral: true` so Linear can collapse / hide
+ * it once the session moves on, per the agent-interaction docs.
+ * Thoughts, errors, and failed tool results stay non-ephemeral so they
+ * remain visible.
  */
 
 import type { AgentActivityContent } from "../types/agent-session";
@@ -31,7 +34,6 @@ import type { NormalizedEvent } from "./dispatcher";
 
 const THOUGHT_LIMIT = 1000;
 const TOOL_PARAM_LIMIT = 300;
-const TOOL_RESULT_LIMIT = 500;
 const ERROR_LIMIT = 500;
 
 export function mapToActivity(
@@ -54,16 +56,12 @@ export function mapToActivity(
       };
 
     case "tool_result":
-      if (event.ok) {
-        return {
-          type: "action",
-          action: "tool_result",
-          parameter: event.tool_id ?? "",
-          result: truncate(event.result ?? "", TOOL_RESULT_LIMIT),
-          ephemeral: true,
-        };
-      }
-      // Tool failures stay non-ephemeral — errors must stick.
+      // Successful results are dropped from the live stream: the
+      // matching `tool_call` activity already tells the user what ran,
+      // and posting every result roughly doubles per-turn Linear API
+      // traffic without giving the timeline meaningfully more signal.
+      // Failures still surface as a non-ephemeral error activity.
+      if (event.ok) return null;
       return {
         type: "error",
         body: truncate(event.result ?? "tool_call_failed", ERROR_LIMIT),
