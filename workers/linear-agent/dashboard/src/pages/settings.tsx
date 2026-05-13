@@ -1,12 +1,15 @@
 import { useMemo, useRef, useState, useEffect, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  Check,
+  Copy,
   Eye,
   EyeOff,
   ExternalLink,
   Github,
   Globe,
   Key,
+  KeyRound,
   Link2,
   Lock,
   Radio,
@@ -18,13 +21,19 @@ import {
 
 import {
   type AgentSettingsDefaults,
+  type ApiToken,
+  type ApiTokenScope,
+  type ApiTokenWithPlaintext,
   type ProxyPingResult,
   type Setting,
   changePassword,
+  createApiToken,
+  deleteApiToken,
   deleteSetting,
   getIntegrations,
   getProxyStatus,
   getSettings,
+  listApiTokens,
   proxyPing,
   revokeOAuth,
   upsertSetting,
@@ -49,6 +58,14 @@ import {
   TabsList,
   TabsTrigger,
 } from '../components/ui'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../components/dialog'
 import {
   EmptyState,
   ErrorPanel,
@@ -181,6 +198,10 @@ export function SettingsView() {
             <Lock className="mr-1.5 h-3.5 w-3.5" />
             Security
           </TabsTrigger>
+          <TabsTrigger value="api-tokens">
+            <KeyRound className="mr-1.5 h-3.5 w-3.5" />
+            API tokens
+          </TabsTrigger>
           <TabsTrigger value="advanced">
             <Settings className="mr-1.5 h-3.5 w-3.5" />
             Advanced
@@ -203,6 +224,10 @@ export function SettingsView() {
 
         <TabsContent value="security">
           <ChangePasswordSection />
+        </TabsContent>
+
+        <TabsContent value="api-tokens">
+          <ApiTokensSection />
         </TabsContent>
 
         <TabsContent value="advanced">
@@ -1203,5 +1228,325 @@ function DomainSection() {
         </form>
       </CardContent>
     </Card>
+  )
+}
+
+// ── API tokens ─────────────────────────────────────────────────────
+//
+// Mint tokens for the MCP transport and any other bearer caller of
+// /api/v1. The dashboard cookie session already grants admin scope so
+// this section is accessible to any signed-in user; revisit if/when
+// per-user roles land.
+
+const SCOPE_OPTIONS: { value: ApiTokenScope; label: string; description: string }[] = [
+  { value: 'read', label: 'read', description: 'List + get on every resource.' },
+  {
+    value: 'write',
+    label: 'write',
+    description: 'Mutations on workflows, triggers, projects, settings.',
+  },
+  {
+    value: 'admin',
+    label: 'admin',
+    description: 'Issue + revoke other tokens. Implies read + write everywhere.',
+  },
+]
+
+function formatTimestamp(unixSeconds: number | null): string {
+  if (unixSeconds === null) return 'never'
+  const ms = unixSeconds * 1000
+  const date = new Date(ms)
+  const diff = Date.now() - ms
+  const oneDay = 24 * 60 * 60 * 1000
+  if (diff < 60 * 1000) return 'just now'
+  if (diff < 60 * 60 * 1000) return `${Math.floor(diff / 60000)}m ago`
+  if (diff < oneDay) return `${Math.floor(diff / (60 * 60 * 1000))}h ago`
+  if (diff < 30 * oneDay) return `${Math.floor(diff / oneDay)}d ago`
+  return date.toLocaleDateString()
+}
+
+function ApiTokensSection() {
+  const queryClient = useQueryClient()
+  const tokensQuery = useQuery({
+    queryKey: ['api-tokens'],
+    queryFn: listApiTokens,
+  })
+
+  const [name, setName] = useState('')
+  const [scopes, setScopes] = useState<Set<ApiTokenScope>>(
+    () => new Set<ApiTokenScope>(['read', 'write']),
+  )
+  const [feedback, setFeedback] = useState<string | null>(null)
+  const [issuedToken, setIssuedToken] = useState<ApiTokenWithPlaintext | null>(null)
+
+  const createMutation = useMutation({
+    mutationFn: () =>
+      createApiToken(name.trim(), [...scopes] as ApiTokenScope[]),
+    onSuccess: async ({ token }) => {
+      await queryClient.invalidateQueries({ queryKey: ['api-tokens'] })
+      setIssuedToken(token)
+      setName('')
+      setScopes(new Set<ApiTokenScope>(['read', 'write']))
+      setFeedback(null)
+    },
+    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+  })
+
+  const revokeMutation = useMutation({
+    mutationFn: (id: string) => deleteApiToken(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['api-tokens'] })
+      setFeedback('Token revoked.')
+    },
+    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+  })
+
+  const toggleScope = (scope: ApiTokenScope) => {
+    setScopes((current) => {
+      const next = new Set(current)
+      if (next.has(scope)) next.delete(scope)
+      else next.add(scope)
+      return next
+    })
+  }
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault()
+    setFeedback(null)
+    if (name.trim().length === 0) {
+      setFeedback('Name is required.')
+      return
+    }
+    if (scopes.size === 0) {
+      setFeedback('At least one scope is required.')
+      return
+    }
+    void createMutation.mutateAsync()
+  }
+
+  return (
+    <div className="space-y-5">
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <KeyRound className="h-4 w-4 text-th-text-3" />
+            <CardTitle>API tokens</CardTitle>
+          </div>
+          <CardDescription>
+            Bearer tokens for <code className="rounded bg-th-inset px-1.5 py-0.5 text-[12px]">/api/v1/*</code> and the MCP transport at{' '}
+            <code className="rounded bg-th-inset px-1.5 py-0.5 text-[12px]">/mcp</code>.
+            Plaintext is only shown once at creation — store it now or revoke and reissue.
+          </CardDescription>
+        </CardHeader>
+
+        <CardContent className="space-y-5">
+          {feedback ? <FeedbackBanner message={feedback} /> : null}
+
+          <form className="space-y-4" onSubmit={submit}>
+            <Field label="Name">
+              <Input
+                onChange={(event) => setName(event.target.value)}
+                placeholder="claude-desktop-mcp"
+                value={name}
+              />
+            </Field>
+
+            <Field label="Scopes">
+              <div className="space-y-2">
+                {SCOPE_OPTIONS.map((option) => {
+                  const checked = scopes.has(option.value)
+                  return (
+                    <label
+                      className="flex cursor-pointer items-start gap-3 rounded-lg border border-th-border bg-th-surface px-3 py-2.5 transition-colors hover:bg-th-muted"
+                      key={option.value}
+                    >
+                      <input
+                        checked={checked}
+                        className="mt-0.5 h-4 w-4 accent-th-accent"
+                        onChange={() => toggleScope(option.value)}
+                        type="checkbox"
+                      />
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium text-th-text-1">
+                          {option.label}
+                        </div>
+                        <div className="text-xs text-th-text-3">{option.description}</div>
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+            </Field>
+
+            <Button
+              disabled={createMutation.isPending || name.trim().length === 0 || scopes.size === 0}
+              type="submit"
+              variant="secondary"
+            >
+              {createMutation.isPending ? 'Creating…' : 'Create token'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      {tokensQuery.isPending ? <LoadingPanel title="Loading tokens" compact /> : null}
+      {tokensQuery.isError ? (
+        <ErrorPanel
+          detail={formatQueryError(tokensQuery.error)}
+          title="Could not list tokens"
+        />
+      ) : null}
+
+      {tokensQuery.data && tokensQuery.data.tokens.length > 0 ? (
+        <Card className="gap-0 p-0 overflow-hidden">
+          <div className="px-5 pt-5 pb-3 sm:px-6">
+            <CardTitle className="text-sm">Existing tokens</CardTitle>
+          </div>
+          <div className="divide-y divide-th-border">
+            {tokensQuery.data.tokens.map((token) => (
+              <ApiTokenRow
+                key={token.id}
+                token={token}
+                onRevoke={() => {
+                  setFeedback(null)
+                  void revokeMutation.mutateAsync(token.id)
+                }}
+                revoking={revokeMutation.isPending}
+              />
+            ))}
+          </div>
+        </Card>
+      ) : tokensQuery.data && !tokensQuery.isPending ? (
+        <EmptyState
+          title="No tokens yet"
+          description="Create one above to authenticate the MCP transport or any /api/v1 caller."
+        />
+      ) : null}
+
+      <IssuedTokenDialog
+        token={issuedToken}
+        onClose={() => setIssuedToken(null)}
+      />
+    </div>
+  )
+}
+
+function ApiTokenRow({
+  token,
+  onRevoke,
+  revoking,
+}: {
+  token: ApiToken
+  onRevoke: () => void
+  revoking: boolean
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4 px-5 py-3 sm:px-6">
+      <div className="min-w-0 space-y-1">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-th-text-1">{token.name}</span>
+          {token.scopes.map((scope) => (
+            <Badge key={scope} variant="secondary">
+              {scope}
+            </Badge>
+          ))}
+        </div>
+        <div className="text-xs text-th-text-3">
+          created {formatTimestamp(token.created_at)} · last used {formatTimestamp(token.last_used_at)}
+        </div>
+      </div>
+      <Button
+        aria-label="Revoke token"
+        disabled={revoking}
+        onClick={onRevoke}
+        size="icon"
+        type="button"
+        variant="ghost"
+      >
+        <Trash2 className="h-3.5 w-3.5 text-th-danger" />
+      </Button>
+    </div>
+  )
+}
+
+function IssuedTokenDialog({
+  token,
+  onClose,
+}: {
+  token: ApiTokenWithPlaintext | null
+  onClose: () => void
+}) {
+  const [copied, setCopied] = useState(false)
+
+  // Reset copied state when a fresh token rolls in. Using the
+  // prev-ref pattern instead of useEffect so we don't trip the
+  // "no setState in useEffect" lint rule.
+  const prevTokenId = useRef(token?.id ?? null)
+  if (token?.id !== prevTokenId.current) {
+    prevTokenId.current = token?.id ?? null
+    if (copied) setCopied(false)
+  }
+
+  const copy = async () => {
+    if (!token) return
+    try {
+      await navigator.clipboard.writeText(token.plaintext)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard API unavailable (insecure context or denied) —
+      // the textarea below is selectable so the user can copy manually.
+    }
+  }
+
+  return (
+    <Dialog open={token !== null} onOpenChange={(open) => (open ? null : onClose())}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Token created</DialogTitle>
+          <DialogDescription>
+            Copy this now — it will never be shown again. If you lose it, revoke
+            and create a new one.
+          </DialogDescription>
+        </DialogHeader>
+
+        {token ? (
+          <div className="space-y-3">
+            <div className="flex items-stretch gap-2">
+              <code className="flex-1 break-all rounded-lg border border-th-border bg-th-inset px-3 py-2.5 font-mono text-xs text-th-text-1">
+                {token.plaintext}
+              </code>
+              <Button onClick={copy} type="button" variant="secondary">
+                {copied ? (
+                  <>
+                    <Check className="mr-1.5 h-3.5 w-3.5" />
+                    Copied
+                  </>
+                ) : (
+                  <>
+                    <Copy className="mr-1.5 h-3.5 w-3.5" />
+                    Copy
+                  </>
+                )}
+              </Button>
+            </div>
+            <div className="text-xs text-th-text-3">
+              Use as{' '}
+              <code className="rounded bg-th-inset px-1 py-0.5">
+                Authorization: Bearer {'<token>'}
+              </code>{' '}
+              against <code className="rounded bg-th-inset px-1 py-0.5">/api/v1/*</code>{' '}
+              or POST <code className="rounded bg-th-inset px-1 py-0.5">/mcp</code>.
+            </div>
+          </div>
+        ) : null}
+
+        <DialogFooter>
+          <Button onClick={onClose} type="button">
+            Done
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

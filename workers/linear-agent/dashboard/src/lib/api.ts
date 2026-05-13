@@ -678,6 +678,43 @@ export function deleteSetting(key: string): Promise<{ ok: boolean }> {
   )
 }
 
+// ── API tokens (used by MCP + CI) ───────────────────────────────────
+
+export type ApiTokenScope = 'read' | 'write' | 'admin'
+
+export type ApiToken = {
+  id: string
+  name: string
+  scopes: ApiTokenScope[]
+  created_at: number
+  last_used_at: number | null
+}
+
+// `plaintext` only present on the create response; lost forever once
+// the modal closes.
+export type ApiTokenWithPlaintext = ApiToken & { plaintext: string }
+
+export function listApiTokens(): Promise<{ tokens: ApiToken[] }> {
+  return requestJson<{ tokens: ApiToken[] }>('/api/v1/api-tokens')
+}
+
+export function createApiToken(
+  name: string,
+  scopes: ApiTokenScope[],
+): Promise<{ token: ApiTokenWithPlaintext }> {
+  return requestJson<{ token: ApiTokenWithPlaintext }>('/api/v1/api-tokens', {
+    method: 'POST',
+    body: JSON.stringify({ name, scopes }),
+  })
+}
+
+export function deleteApiToken(id: string): Promise<{ ok: boolean }> {
+  return requestJson<{ ok: boolean }>(
+    `/api/v1/api-tokens/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  )
+}
+
 // ── OAuth status (derived from /dashboard/api/integrations) ─────────
 
 export type OAuthStatus = {
