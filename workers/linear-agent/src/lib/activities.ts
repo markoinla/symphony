@@ -102,10 +102,15 @@ export async function postThought(
   client: ActivityClient,
   agentSessionId: string,
   body: string,
+  opts?: { ephemeral?: boolean },
 ): Promise<void> {
   await client.createAgentActivity({
     agentSessionId,
-    content: { type: "thought", body },
+    content: {
+      type: "thought",
+      body,
+      ...(opts?.ephemeral !== undefined ? { ephemeral: opts.ephemeral } : {}),
+    },
   });
 }
 
@@ -137,6 +142,7 @@ export async function postAction(
   action: string,
   parameter: string,
   result?: string,
+  opts?: { ephemeral?: boolean },
 ): Promise<void> {
   await client.createAgentActivity({
     agentSessionId,
@@ -145,6 +151,7 @@ export async function postAction(
       action,
       parameter,
       ...(result !== undefined ? { result } : {}),
+      ...(opts?.ephemeral !== undefined ? { ephemeral: opts.ephemeral } : {}),
     },
   });
 }

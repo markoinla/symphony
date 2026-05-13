@@ -78,4 +78,13 @@ export interface AgentActivityContent {
   action?: string;
   parameter?: string;
   result?: string;
+  // Per Linear's agent-interaction docs, `ephemeral` is only meaningful
+  // on `thought` and `action` activities — Linear may collapse or hide
+  // them once the session moves on. Other types ignore the field.
+  ephemeral?: boolean;
+  // Linear stamps incoming `prompt`-type activities with a `signal` to
+  // indicate user intent (e.g. "stop" when the user hits Stop in the
+  // session UI). We don't emit `auth`/`select` ourselves, but the field
+  // is modeled here so callers can read it off webhook payloads.
+  signal?: "stop" | "auth" | "select";
 }
