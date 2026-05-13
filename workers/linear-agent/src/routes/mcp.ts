@@ -14,6 +14,14 @@
 // to the internal Request unchanged, so token scope governs which
 // tools are usable. The cookie path is rejected because MCP clients
 // don't carry browser cookies.
+//
+// Workflow surface: the MCP server intentionally exposes the *same*
+// subset of workflow fields that the dashboard editor surfaces. The
+// "hidden" columns (allowed_tools, mcp_servers, hook_*, permission_mode,
+// allowed_domains, additional_*_paths, max_continuations) aren't wired
+// through to the dispatcher / engine layer yet, so the editor hides
+// them and the MCP tools mirror that. See workflow-editor/index.tsx
+// for the canonical list.
 
 import { Hono } from "hono";
 import { z } from "zod";
@@ -22,13 +30,35 @@ import type { Env } from "../index";
 import { extractBearer } from "../lib/auth/bearer";
 import { respondError } from "../lib/responses";
 import { ApiTokenCreateSchema } from "../schemas/api-token";
-import { ProjectCreateSchema, ProjectUpdateSchema } from "../schemas/project";
-import { TriggerCreateSchema, TriggerUpdateSchema } from "../schemas/trigger";
+import {
+  ProjectCreateSchema,
+  ProjectSchema,
+  ProjectUpdateSchema,
+} from "../schemas/project";
+import {
+  TriggerCreateSchema,
+  TriggerSchema,
+  TriggerUpdateSchema,
+} from "../schemas/trigger";
 import {
   WorkflowCreateSchema,
   WorkflowUpdateSchema,
+  workflowStatusSchema,
+  engineSchema,
 } from "../schemas/workflow";
 import { buildApiV1Router } from "./api-v1";
+
+// ────────────────────────────────────────────────────────────────────
+// Protocol versions we speak. Ordered newest first. If the client
+// requests a version we support we echo it back; otherwise we send our
+// newest and let the client decide.
+// ────────────────────────────────────────────────────────────────────
+const SUPPORTED_PROTOCOL_VERSIONS = [
+  "2025-06-18",
+  "2025-03-26",
+  "2024-11-05",
+] as const;
+const LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0];
 
 // JSON-RPC 2.0 wire types.
 interface JsonRpcRequest {
@@ -58,15 +88,29 @@ const ERR = {
 
 type Scope = "read" | "write" | "admin";
 
+interface ToolAnnotations {
+  title?: string;
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint?: boolean;
+}
+
 interface Tool {
   name: string;
   description: string;
   scope: Scope;
   inputSchema: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  annotations?: ToolAnnotations;
   // Dispatch an MCP `tools/call` invocation into the v1 REST surface.
   // Returns the JSON body (object) plus the response status so the
   // MCP envelope can carry both.
   dispatch: (args: Record<string, unknown>, ctx: DispatchCtx) => Promise<DispatchResult>;
+  // Optional projector applied to the v1 response body before it's
+  // surfaced as structuredContent. Used to strip workflow columns that
+  // aren't part of the user-visible surface.
+  projectResult?: (body: unknown) => unknown;
 }
 
 interface DispatchCtx {
@@ -130,6 +174,111 @@ function qs(params: Record<string, unknown>): string {
 }
 
 // ────────────────────────────────────────────────────────────────────
+// MCP-visible workflow projection. Inputs and outputs both clip to
+// the fields the dashboard editor exposes. Hidden columns round-trip
+// untouched on update (the v1 partial-update treats absent fields as
+// "leave alone") and are stripped from responses before the agent sees
+// them.
+// ────────────────────────────────────────────────────────────────────
+
+const McpWorkflowCreateSchema = WorkflowCreateSchema.pick({
+  name: true,
+  description: true,
+  engine: true,
+  model: true,
+  max_turns: true,
+  prompt_template: true,
+});
+
+const McpWorkflowUpdateSchema = WorkflowUpdateSchema.pick({
+  name: true,
+  description: true,
+  engine: true,
+  model: true,
+  max_turns: true,
+  prompt_template: true,
+});
+
+const McpWorkflowSchema = z.object({
+  id: z.string(),
+  organization_id: z.string().nullable(),
+  team_id: z.string().nullable(),
+  user_id: z.string().nullable(),
+  name: z.string(),
+  description: z.string().nullable().optional(),
+  engine: engineSchema,
+  model: z.string().nullable().optional(),
+  max_turns: z.number().int().positive(),
+  prompt_template: z.string(),
+  version: z.number().int().positive(),
+  status: workflowStatusSchema,
+  published_at: z.number().int().nullable().optional(),
+  created_at: z.number().int(),
+  updated_at: z.number().int(),
+});
+
+const WORKFLOW_VISIBLE_KEYS = Object.keys(
+  McpWorkflowSchema.shape,
+) as Array<keyof z.infer<typeof McpWorkflowSchema>>;
+
+function projectWorkflowRow(row: unknown): unknown {
+  if (!row || typeof row !== "object") return row;
+  const src = row as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const k of WORKFLOW_VISIBLE_KEYS) {
+    if (k in src) out[k] = src[k];
+  }
+  return out;
+}
+
+// Applied to every workflow tool's response. Handles the three shapes
+// the v1 surface returns: `{ workflow }`, `{ workflows: [...] }`, and
+// publish's `{ workflow, version }`.
+function projectWorkflowResponse(body: unknown): unknown {
+  if (!body || typeof body !== "object") return body;
+  const src = body as Record<string, unknown>;
+  // Error envelopes pass through unchanged so the agent sees the
+  // real `error`/`message` fields.
+  if (typeof src.error === "string") return body;
+  const out: Record<string, unknown> = { ...src };
+  if (src.workflow && typeof src.workflow === "object") {
+    out.workflow = projectWorkflowRow(src.workflow);
+  }
+  if (Array.isArray(src.workflows)) {
+    out.workflows = src.workflows.map(projectWorkflowRow);
+  }
+  return out;
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Output schemas. Reused across tools so we only convert once. These
+// reflect the structuredContent the client will see on success — on
+// errors `isError: true` is set and the schema is best-effort.
+// ────────────────────────────────────────────────────────────────────
+
+const NextCursor = z.string().nullable();
+
+const McpWorkflowListResponseSchema = z.toJSONSchema(
+  z.object({
+    workflows: z.array(McpWorkflowSchema),
+    next_cursor: NextCursor,
+  }),
+);
+const McpWorkflowSingleResponseSchema = z.toJSONSchema(
+  z.object({ workflow: McpWorkflowSchema }),
+);
+const McpWorkflowPublishResponseSchema = z.toJSONSchema(
+  z.object({
+    workflow: McpWorkflowSchema,
+    version: z.object({
+      id: z.string(),
+      version: z.number().int().positive(),
+      created_at: z.number().int(),
+    }),
+  }),
+);
+
+// ────────────────────────────────────────────────────────────────────
 // Tool registry — 1:1 with the v1 routes per docs/linear_agent_api_v1.md.
 // Token CRUD is intentionally absent: agents shouldn't issue agent
 // credentials.
@@ -138,43 +287,98 @@ function qs(params: Record<string, unknown>): string {
 const TOOLS: Tool[] = [
   {
     name: "workflows.list",
-    description: "List workflows in the calling token's org. Cursor paginated.",
+    description:
+      "List workflows in the calling token's organization. Cursor paginated — pass the returned `next_cursor` as `before_id` to fetch the next page. Filter by `status` (draft / published / archived). Returns the user-visible workflow shape only; the dashboard editor exposes the same fields.",
     scope: "read",
+    annotations: {
+      title: "List workflows",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: "object",
+      additionalProperties: false,
       properties: {
-        limit: { type: "integer", minimum: 1, maximum: 200 },
-        before_id: { type: "string" },
-        status: { type: "string", enum: ["draft", "published", "archived"] },
+        limit: { type: "integer", minimum: 1, maximum: 200, default: 50 },
+        before_id: {
+          type: "string",
+          description: "Pagination cursor — typically the `next_cursor` from a prior call.",
+        },
+        status: {
+          type: "string",
+          enum: ["draft", "published", "archived"],
+        },
       },
     },
+    outputSchema: McpWorkflowListResponseSchema,
     dispatch: (args, ctx) =>
       callV1("GET", `/api/v1/workflows${qs(args)}`, undefined, ctx),
+    projectResult: projectWorkflowResponse,
   },
   {
     name: "workflows.get",
-    description: "Get a workflow by id.",
+    description:
+      "Fetch a single workflow by id. Returns the user-visible field set. Errors: 404 if the workflow doesn't exist or isn't owned by the calling org.",
     scope: "read",
-    inputSchema: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
-    dispatch: (args, ctx) =>
-      callV1("GET", `/api/v1/workflows/${encId(args.id)}`, undefined, ctx),
-  },
-  {
-    name: "workflows.create",
-    description: "Create a new workflow in the calling token's org.",
-    scope: "write",
-    inputSchema: z.toJSONSchema(WorkflowCreateSchema),
-    dispatch: (args, ctx) => callV1("POST", "/api/v1/workflows", args, ctx),
-  },
-  {
-    name: "workflows.update",
-    description: "Update a workflow. Only `draft` workflows are editable.",
-    scope: "write",
+    annotations: {
+      title: "Get workflow",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: "object",
       required: ["id"],
-      properties: { id: { type: "string" }, patch: z.toJSONSchema(WorkflowUpdateSchema) },
+      additionalProperties: false,
+      properties: { id: { type: "string", description: "Workflow UUID." } },
     },
+    outputSchema: McpWorkflowSingleResponseSchema,
+    dispatch: (args, ctx) =>
+      callV1("GET", `/api/v1/workflows/${encId(args.id)}`, undefined, ctx),
+    projectResult: projectWorkflowResponse,
+  },
+  {
+    name: "workflows.create",
+    description:
+      "Create a new draft workflow scoped to the calling token's organization. Only the user-visible fields are accepted: `name`, `description`, `engine`, `model`, `max_turns`, `prompt_template`. Hidden sandbox / hook columns are not yet wired through the engine and cannot be set from this surface. Returns the created workflow (status `draft`, version `1`).",
+    scope: "write",
+    annotations: {
+      title: "Create workflow",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    inputSchema: z.toJSONSchema(McpWorkflowCreateSchema),
+    outputSchema: McpWorkflowSingleResponseSchema,
+    dispatch: (args, ctx) => callV1("POST", "/api/v1/workflows", args, ctx),
+    projectResult: projectWorkflowResponse,
+  },
+  {
+    name: "workflows.update",
+    description:
+      "Partially update a workflow. Only the user-visible fields can be patched (`name`, `description`, `engine`, `model`, `max_turns`, `prompt_template`); omitted fields are unchanged. Published workflows are immutable — duplicate first if you need to edit one. Errors: 404 if not found, 409 if the workflow is not in `draft` status.",
+    scope: "write",
+    annotations: {
+      title: "Update workflow",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      required: ["id"],
+      additionalProperties: false,
+      properties: {
+        id: { type: "string", description: "Workflow UUID." },
+        patch: z.toJSONSchema(McpWorkflowUpdateSchema),
+      },
+    },
+    outputSchema: McpWorkflowSingleResponseSchema,
     dispatch: (args, ctx) =>
       callV1(
         "PUT",
@@ -182,39 +386,99 @@ const TOOLS: Tool[] = [
         (args.patch ?? {}) as Record<string, unknown>,
         ctx,
       ),
+    projectResult: projectWorkflowResponse,
   },
   {
     name: "workflows.delete",
-    description: "Delete a workflow.",
+    description:
+      "Delete a workflow. This cascades to its triggers but does not delete historical agent sessions that were spawned from it. Irreversible.",
     scope: "write",
-    inputSchema: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+    annotations: {
+      title: "Delete workflow",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      required: ["id"],
+      additionalProperties: false,
+      properties: { id: { type: "string", description: "Workflow UUID." } },
+    },
     dispatch: (args, ctx) =>
       callV1("DELETE", `/api/v1/workflows/${encId(args.id)}`, undefined, ctx),
+    projectResult: projectWorkflowResponse,
   },
   {
     name: "workflows.publish",
-    description: "Snapshot a workflow + flip its status to `published`.",
+    description:
+      "Snapshot a draft workflow and flip its status to `published`. The version number increments. Once published, the workflow is immutable — further edits require `workflows.duplicate` to get a new draft. Returns the published workflow plus the snapshot metadata.",
     scope: "write",
-    inputSchema: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+    annotations: {
+      title: "Publish workflow",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      required: ["id"],
+      additionalProperties: false,
+      properties: { id: { type: "string", description: "Workflow UUID." } },
+    },
+    outputSchema: McpWorkflowPublishResponseSchema,
     dispatch: (args, ctx) =>
       callV1("POST", `/api/v1/workflows/${encId(args.id)}/publish`, undefined, ctx),
+    projectResult: projectWorkflowResponse,
   },
   {
     name: "workflows.duplicate",
-    description: "Duplicate a workflow (returns a new draft).",
+    description:
+      "Clone an existing workflow into a new draft. Triggers are NOT copied — the new workflow starts with no triggers attached. Use this to fork a published workflow when you need to edit it.",
     scope: "write",
-    inputSchema: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+    annotations: {
+      title: "Duplicate workflow",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      required: ["id"],
+      additionalProperties: false,
+      properties: { id: { type: "string", description: "Source workflow UUID." } },
+    },
+    outputSchema: McpWorkflowSingleResponseSchema,
     dispatch: (args, ctx) =>
       callV1("POST", `/api/v1/workflows/${encId(args.id)}/duplicate`, undefined, ctx),
+    projectResult: projectWorkflowResponse,
   },
   {
     name: "workflows.preview",
-    description: "Render a workflow's prompt template against an issue.",
+    description:
+      "Render a workflow's prompt template against a specific Linear issue. Useful for debugging template variables before publishing. The issue must be accessible to the org's connected Linear workspace.",
     scope: "read",
+    annotations: {
+      title: "Preview workflow prompt",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: "object",
       required: ["id", "issue_id"],
-      properties: { id: { type: "string" }, issue_id: { type: "string" } },
+      additionalProperties: false,
+      properties: {
+        id: { type: "string", description: "Workflow UUID." },
+        issue_id: {
+          type: "string",
+          description: "Linear issue UUID or identifier (e.g. `SYM-123`).",
+        },
+      },
     },
     dispatch: (args, ctx) =>
       callV1(
@@ -226,9 +490,25 @@ const TOOLS: Tool[] = [
   },
   {
     name: "triggers.list",
-    description: "List triggers for a workflow.",
+    description:
+      "List the triggers attached to a workflow. Triggers map Linear webhook events (issue.created, comment, etc.) to dispatched actions.",
     scope: "read",
-    inputSchema: { type: "object", required: ["workflow_id"], properties: { workflow_id: { type: "string" } } },
+    annotations: {
+      title: "List triggers",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      required: ["workflow_id"],
+      additionalProperties: false,
+      properties: { workflow_id: { type: "string", description: "Parent workflow UUID." } },
+    },
+    outputSchema: z.toJSONSchema(
+      z.object({ triggers: z.array(TriggerSchema) }),
+    ),
     dispatch: (args, ctx) =>
       callV1(
         "GET",
@@ -239,16 +519,26 @@ const TOOLS: Tool[] = [
   },
   {
     name: "triggers.create",
-    description: "Create a trigger on a workflow.",
+    description:
+      "Attach a new trigger to a workflow. Returns 404 if the workflow doesn't exist.",
     scope: "write",
+    annotations: {
+      title: "Create trigger",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: "object",
       required: ["workflow_id", "trigger"],
+      additionalProperties: false,
       properties: {
-        workflow_id: { type: "string" },
+        workflow_id: { type: "string", description: "Parent workflow UUID." },
         trigger: z.toJSONSchema(TriggerCreateSchema),
       },
     },
+    outputSchema: z.toJSONSchema(z.object({ trigger: TriggerSchema })),
     dispatch: (args, ctx) =>
       callV1(
         "POST",
@@ -259,21 +549,47 @@ const TOOLS: Tool[] = [
   },
   {
     name: "triggers.get",
-    description: "Get a trigger by id.",
+    description: "Fetch a single trigger by id.",
     scope: "read",
-    inputSchema: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+    annotations: {
+      title: "Get trigger",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      required: ["id"],
+      additionalProperties: false,
+      properties: { id: { type: "string", description: "Trigger UUID." } },
+    },
+    outputSchema: z.toJSONSchema(z.object({ trigger: TriggerSchema })),
     dispatch: (args, ctx) =>
       callV1("GET", `/api/v1/triggers/${encId(args.id)}`, undefined, ctx),
   },
   {
     name: "triggers.update",
-    description: "Update a trigger.",
+    description:
+      "Partially update a trigger. Omitted fields are unchanged. Errors: 404 if not found.",
     scope: "write",
+    annotations: {
+      title: "Update trigger",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: "object",
       required: ["id"],
-      properties: { id: { type: "string" }, patch: z.toJSONSchema(TriggerUpdateSchema) },
+      additionalProperties: false,
+      properties: {
+        id: { type: "string", description: "Trigger UUID." },
+        patch: z.toJSONSchema(TriggerUpdateSchema),
+      },
     },
+    outputSchema: z.toJSONSchema(z.object({ trigger: TriggerSchema })),
     dispatch: (args, ctx) =>
       callV1(
         "PUT",
@@ -284,43 +600,98 @@ const TOOLS: Tool[] = [
   },
   {
     name: "triggers.delete",
-    description: "Delete a trigger.",
+    description: "Delete a trigger. Irreversible.",
     scope: "write",
-    inputSchema: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+    annotations: {
+      title: "Delete trigger",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      required: ["id"],
+      additionalProperties: false,
+      properties: { id: { type: "string", description: "Trigger UUID." } },
+    },
     dispatch: (args, ctx) =>
       callV1("DELETE", `/api/v1/triggers/${encId(args.id)}`, undefined, ctx),
   },
   {
     name: "projects.list",
-    description: "List projects in the calling token's org.",
+    description:
+      "List projects in the calling token's organization. A project pairs a Symphony workspace with a Linear team.",
     scope: "read",
-    inputSchema: { type: "object" },
+    annotations: {
+      title: "List projects",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: { type: "object", additionalProperties: false },
+    outputSchema: z.toJSONSchema(z.object({ projects: z.array(ProjectSchema) })),
     dispatch: (_args, ctx) => callV1("GET", "/api/v1/projects", undefined, ctx),
   },
   {
     name: "projects.get",
-    description: "Get a project by id.",
+    description: "Fetch a single project by id.",
     scope: "read",
-    inputSchema: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+    annotations: {
+      title: "Get project",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      required: ["id"],
+      additionalProperties: false,
+      properties: { id: { type: "string", description: "Project UUID." } },
+    },
+    outputSchema: z.toJSONSchema(z.object({ project: ProjectSchema })),
     dispatch: (args, ctx) =>
       callV1("GET", `/api/v1/projects/${encId(args.id)}`, undefined, ctx),
   },
   {
     name: "projects.create",
-    description: "Create a project. Returns 409 if (org, linear_team_id) already exists.",
+    description:
+      "Create a new project. Returns 409 if a project with the same (organization, linear_team_id) pair already exists — projects are unique per Linear team within an org.",
     scope: "write",
+    annotations: {
+      title: "Create project",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
     inputSchema: z.toJSONSchema(ProjectCreateSchema),
+    outputSchema: z.toJSONSchema(z.object({ project: ProjectSchema })),
     dispatch: (args, ctx) => callV1("POST", "/api/v1/projects", args, ctx),
   },
   {
     name: "projects.update",
-    description: "Update a project.",
+    description: "Partially update a project. Omitted fields are unchanged.",
     scope: "write",
+    annotations: {
+      title: "Update project",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: "object",
       required: ["id"],
-      properties: { id: { type: "string" }, patch: z.toJSONSchema(ProjectUpdateSchema) },
+      additionalProperties: false,
+      properties: {
+        id: { type: "string", description: "Project UUID." },
+        patch: z.toJSONSchema(ProjectUpdateSchema),
+      },
     },
+    outputSchema: z.toJSONSchema(z.object({ project: ProjectSchema })),
     dispatch: (args, ctx) =>
       callV1(
         "PUT",
@@ -331,35 +702,80 @@ const TOOLS: Tool[] = [
   },
   {
     name: "projects.delete",
-    description: "Delete a project.",
+    description:
+      "Delete a project. Workflows and triggers under it survive — only the org↔Linear-team binding is removed.",
     scope: "write",
-    inputSchema: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+    annotations: {
+      title: "Delete project",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      required: ["id"],
+      additionalProperties: false,
+      properties: { id: { type: "string", description: "Project UUID." } },
+    },
     dispatch: (args, ctx) =>
       callV1("DELETE", `/api/v1/projects/${encId(args.id)}`, undefined, ctx),
   },
   {
     name: "settings.list",
-    description: "List settings + agent_defaults.",
+    description:
+      "List per-org settings overrides plus the `agent_defaults` payload that backs unset values.",
     scope: "read",
-    inputSchema: { type: "object" },
+    annotations: {
+      title: "List settings",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: { type: "object", additionalProperties: false },
     dispatch: (_args, ctx) => callV1("GET", "/api/v1/settings", undefined, ctx),
   },
   {
     name: "settings.get",
-    description: "Get a single setting by key.",
+    description: "Fetch a single setting by key. Returns 404 if unset.",
     scope: "read",
-    inputSchema: { type: "object", required: ["key"], properties: { key: { type: "string" } } },
+    annotations: {
+      title: "Get setting",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      required: ["key"],
+      additionalProperties: false,
+      properties: { key: { type: "string", description: "Setting key (e.g. `agent.default_model`)." } },
+    },
     dispatch: (args, ctx) =>
       callV1("GET", `/api/v1/settings/${encId(args.key)}`, undefined, ctx),
   },
   {
     name: "settings.set",
-    description: "Upsert a setting.",
+    description:
+      "Upsert a setting. Both `key` and `value` are strings; structured values must be JSON-encoded.",
     scope: "write",
+    annotations: {
+      title: "Set setting",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: "object",
       required: ["key", "value"],
-      properties: { key: { type: "string" }, value: { type: "string" } },
+      additionalProperties: false,
+      properties: {
+        key: { type: "string", description: "Setting key." },
+        value: { type: "string", description: "Setting value — encode JSON as a string if structured." },
+      },
     },
     dispatch: (args, ctx) =>
       callV1(
@@ -371,34 +787,72 @@ const TOOLS: Tool[] = [
   },
   {
     name: "settings.delete",
-    description: "Delete a setting.",
+    description: "Delete a setting key, reverting the org to the default value.",
     scope: "write",
-    inputSchema: { type: "object", required: ["key"], properties: { key: { type: "string" } } },
+    annotations: {
+      title: "Delete setting",
+      readOnlyHint: false,
+      destructiveHint: true,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      required: ["key"],
+      additionalProperties: false,
+      properties: { key: { type: "string", description: "Setting key." } },
+    },
     dispatch: (args, ctx) =>
       callV1("DELETE", `/api/v1/settings/${encId(args.key)}`, undefined, ctx),
   },
   {
     name: "integrations.status",
-    description: "Connected-status payload for every provider.",
+    description:
+      "Connection-status payload for every supported provider (Linear, GitHub App, Anthropic, OpenAI, Cloudflare Workers AI). Read-only.",
     scope: "read",
-    inputSchema: { type: "object" },
+    annotations: {
+      title: "Integration status",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: { type: "object", additionalProperties: false },
     dispatch: (_args, ctx) =>
       callV1("GET", "/api/v1/integrations", undefined, ctx),
   },
   {
     name: "webhook_events.list",
-    description: "List webhook deliveries (cursor paginated).",
+    description:
+      "List inbound webhook deliveries from Linear. Cursor paginated — pass `next_cursor` as `before_id`. Filter by `envelope`, `dispatched_action`, signature verification result, or dedup status. Useful for debugging missed triggers.",
     scope: "read",
+    annotations: {
+      title: "List webhook events",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
     inputSchema: {
       type: "object",
+      additionalProperties: false,
       properties: {
-        limit: { type: "integer", minimum: 1, maximum: 200 },
-        before_id: { type: "string" },
-        envelope: { type: "string" },
-        dispatched_action: { type: "string" },
+        limit: { type: "integer", minimum: 1, maximum: 200, default: 50 },
+        before_id: { type: "string", description: "Pagination cursor." },
+        envelope: {
+          type: "string",
+          description: "Filter by envelope type (e.g. `Issue`, `Comment`).",
+        },
+        dispatched_action: {
+          type: "string",
+          description: "Filter by the action the agent dispatched.",
+        },
         signature_ok: { type: "boolean" },
         deduped: { type: "boolean" },
-        since_ts: { type: "integer" },
+        since_ts: {
+          type: "integer",
+          description: "Unix seconds — return only events received after this timestamp.",
+        },
       },
     },
     dispatch: (args, ctx) =>
@@ -406,17 +860,38 @@ const TOOLS: Tool[] = [
   },
   {
     name: "webhook_events.get",
-    description: "Get one webhook event (full raw_body).",
+    description:
+      "Fetch one webhook event including the full raw_body. Returns 404 if the event id is unknown.",
     scope: "read",
-    inputSchema: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+    annotations: {
+      title: "Get webhook event",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    },
+    inputSchema: {
+      type: "object",
+      required: ["id"],
+      additionalProperties: false,
+      properties: { id: { type: "string", description: "Webhook event id." } },
+    },
     dispatch: (args, ctx) =>
       callV1("GET", `/api/v1/webhook-events/${encId(args.id)}`, undefined, ctx),
   },
   {
     name: "openapi.get",
-    description: "Fetch the OpenAPI 3.1 description of /api/v1.",
+    description:
+      "Fetch the OpenAPI 3.1 description of /api/v1. Use this to discover REST surfaces not yet wrapped as MCP tools.",
     scope: "read",
-    inputSchema: { type: "object" },
+    annotations: {
+      title: "OpenAPI document",
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+    inputSchema: { type: "object", additionalProperties: false },
     dispatch: (_args, ctx) => callV1("GET", "/openapi.json", undefined, ctx),
   },
 ];
@@ -473,6 +948,35 @@ function err(
   return { jsonrpc: "2.0", id, error: { code, message, data } };
 }
 
+// Build the unified result envelope used for both v1-mapped errors and
+// internal exceptions, so agents see one shape.
+function toolResultEnvelope(
+  status: number,
+  body: unknown,
+): {
+  content: Array<{ type: "text"; text: string }>;
+  isError: boolean;
+  structuredContent: unknown;
+  _meta: { http_status: number };
+} {
+  return {
+    content: [{ type: "text", text: JSON.stringify(body) }],
+    isError: status >= 400,
+    structuredContent: body,
+    _meta: { http_status: status },
+  };
+}
+
+function negotiateProtocolVersion(requested: unknown): string {
+  if (
+    typeof requested === "string" &&
+    (SUPPORTED_PROTOCOL_VERSIONS as readonly string[]).includes(requested)
+  ) {
+    return requested;
+  }
+  return LATEST_PROTOCOL_VERSION;
+}
+
 export function buildMcpRouter() {
   const app = new Hono<{ Bindings: Env }>();
 
@@ -502,14 +1006,16 @@ export function buildMcpRouter() {
     }
 
     if (body.method === "initialize") {
+      const requested = (body.params as { protocolVersion?: unknown } | undefined)
+        ?.protocolVersion;
       return c.json(
         ok(id, {
-          protocolVersion: "2024-11-05",
+          protocolVersion: negotiateProtocolVersion(requested),
           serverInfo: {
             name: "symphony-linear-agent",
             version: "1.0.0",
           },
-          capabilities: { tools: {} },
+          capabilities: { tools: { listChanged: false } },
         }),
       );
     }
@@ -518,11 +1024,16 @@ export function buildMcpRouter() {
       const scopes = await lookupScopes(dispatchCtx);
       if (!scopes)
         return c.json(err(id, ERR.InvalidRequest, "Unknown or revoked bearer token."));
-      const tools = filterTools(TOOLS, scopes).map((t) => ({
-        name: t.name,
-        description: t.description,
-        inputSchema: t.inputSchema,
-      }));
+      const tools = filterTools(TOOLS, scopes).map((t) => {
+        const out: Record<string, unknown> = {
+          name: t.name,
+          description: t.description,
+          inputSchema: t.inputSchema,
+        };
+        if (t.outputSchema) out.outputSchema = t.outputSchema;
+        if (t.annotations) out.annotations = t.annotations;
+        return out;
+      });
       return c.json(ok(id, { tools }));
     }
 
@@ -544,23 +1055,14 @@ export function buildMcpRouter() {
 
       try {
         const result = await tool.dispatch(args, dispatchCtx);
-        const isError = result.status >= 400;
-        return c.json(
-          ok(id, {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(result.body),
-              },
-            ],
-            isError,
-            structuredContent: result.body,
-            _meta: { http_status: result.status },
-          }),
-        );
+        const projected = tool.projectResult
+          ? tool.projectResult(result.body)
+          : result.body;
+        return c.json(ok(id, toolResultEnvelope(result.status, projected)));
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "unknown_tool_error";
-        return c.json(err(id, ERR.ToolError, msg));
+        const message = e instanceof Error ? e.message : "unknown_tool_error";
+        const body = { error: "internal_error", message };
+        return c.json(ok(id, toolResultEnvelope(500, body)));
       }
     }
 

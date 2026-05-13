@@ -353,6 +353,143 @@ describe("POST /mcp", () => {
     expect(body.result.structuredContent.error).toBe("forbidden");
   });
 
+  it("projects workflow responses to user-visible fields only", async () => {
+    const db = new McpD1();
+    await seedToken(db, "tok-rw", ["read", "write"]);
+
+    const res = await buildApp().fetch(
+      new Request("https://agent.example/mcp", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer tok-rw",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "tools/call",
+          params: {
+            name: "workflows.create",
+            arguments: { name: "Projected", prompt_template: "x" },
+          },
+        }),
+      }),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    const body = (await res.json()) as {
+      result: {
+        structuredContent: { workflow: Record<string, unknown> };
+      };
+    };
+    const wf = body.result.structuredContent.workflow;
+    expect(Object.keys(wf).sort()).toEqual(
+      [
+        "created_at",
+        "description",
+        "engine",
+        "id",
+        "max_turns",
+        "model",
+        "name",
+        "organization_id",
+        "prompt_template",
+        "published_at",
+        "status",
+        "team_id",
+        "updated_at",
+        "user_id",
+        "version",
+      ].sort(),
+    );
+    // Hidden columns must not leak through the MCP surface.
+    expect(wf).not.toHaveProperty("mcp_servers");
+    expect(wf).not.toHaveProperty("hook_timeout_ms");
+    expect(wf).not.toHaveProperty("allowed_tools");
+  });
+
+  it("tools/list exposes annotations and outputSchema where present", async () => {
+    const db = new McpD1();
+    await seedToken(db, "tok-rw", ["read", "write"]);
+    const res = await buildApp().fetch(
+      new Request("https://agent.example/mcp", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer tok-rw",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      }),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    const body = (await res.json()) as {
+      result: {
+        tools: Array<{
+          name: string;
+          annotations?: Record<string, unknown>;
+          outputSchema?: Record<string, unknown>;
+        }>;
+      };
+    };
+    const wfList = body.result.tools.find((t) => t.name === "workflows.list");
+    expect(wfList?.annotations?.readOnlyHint).toBe(true);
+    expect(wfList?.annotations?.destructiveHint).toBe(false);
+    expect(wfList?.outputSchema).toBeDefined();
+
+    const wfDelete = body.result.tools.find((t) => t.name === "workflows.delete");
+    expect(wfDelete?.annotations?.destructiveHint).toBe(true);
+    expect(wfDelete?.annotations?.idempotentHint).toBe(true);
+  });
+
+  it("initialize negotiates the protocol version requested by the client", async () => {
+    const db = new McpD1();
+    await seedToken(db, "tok1", ["read"]);
+    const res = await buildApp().fetch(
+      new Request("https://agent.example/mcp", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer tok1",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "2025-06-18" },
+        }),
+      }),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    const body = (await res.json()) as { result: { protocolVersion: string } };
+    expect(body.result.protocolVersion).toBe("2025-06-18");
+  });
+
+  it("initialize falls back to the latest version for an unknown request", async () => {
+    const db = new McpD1();
+    await seedToken(db, "tok1", ["read"]);
+    const res = await buildApp().fetch(
+      new Request("https://agent.example/mcp", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer tok1",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method: "initialize",
+          params: { protocolVersion: "1999-01-01" },
+        }),
+      }),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    const body = (await res.json()) as { result: { protocolVersion: string } };
+    expect(body.result.protocolVersion).toBe("2025-06-18");
+  });
+
   it("returns MethodNotFound for an unknown tool", async () => {
     const db = new McpD1();
     await seedToken(db, "tok-rw", ["read", "write"]);
