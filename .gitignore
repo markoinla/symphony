@@ -69,6 +69,7 @@ workers/*/dist/
 
 # Root-level Wrangler/miniflare state (from running wrangler dev at repo root).
 .wrangler/
+/node_modules/
 node_modules/.cache/
 node_modules/.mf/
 

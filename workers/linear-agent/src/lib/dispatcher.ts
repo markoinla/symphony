@@ -33,14 +33,14 @@ export interface RunCredentials {
   openai_api_key?: string;
   github_token?: string;
   /**
-   * Linear OAuth bearer (user or app-scoped) for the engine to call
-   * Linear's GraphQL API at https://api.linear.app/graphql. The
-   * dispatcher exposes this as `LINEAR_API_TOKEN` in the sandbox env.
-   * We used to wire Linear's hosted MCP via `mcp_servers` instead; the
-   * raw GraphQL path is engine-agnostic and avoids the MCP cold-start
-   * + hosted-MCP availability dependency. See
-   * `src/lib/prompts/linear-graphql.ts` for the matching cheatsheet
-   * appended to every prompt.
+   * Linear OAuth bearer (user or app-scoped) used by the sandbox's
+   * `linear` skill (baked into the engine baseline) to call Linear's
+   * GraphQL API. The dispatcher exposes this as `LINEAR_API_TOKEN` in
+   * the sandbox env; the skill reads it as its bearer. We used to wire
+   * Linear's hosted MCP via `mcp_servers` instead; the skill path is
+   * engine-agnostic and avoids the MCP cold-start + hosted-MCP
+   * availability dependency. See `src/lib/prompts/linear-graphql.ts`
+   * for the skill pointer appended to every prompt.
    */
   linear_token?: string;
   mcp_servers?: McpServerCredential[];
