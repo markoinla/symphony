@@ -1,5 +1,6 @@
 export { Badge } from './badge'
 export { Button } from './button'
+export { Checkbox } from './checkbox'
 export {
   Card,
   CardHeader,
@@ -22,4 +23,5 @@ export {
   SelectTrigger,
   SelectValue,
 } from './select'
+export { Switch } from './switch'
 export { Tabs, TabsContent, TabsList, TabsTrigger } from './tabs'

@@ -43,6 +43,7 @@ import { formatQueryError, isPositiveInteger } from '../lib/helpers'
 import {
   Badge,
   Button,
+  Checkbox,
   Card,
   CardContent,
   CardHeader,
@@ -54,6 +55,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
+  Switch,
   Tabs,
   TabsContent,
   TabsList,
@@ -513,15 +515,12 @@ function GitHubOAuthSection() {
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {connected && settingsUrl ? (
-                <a
-                  href={settingsUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex h-8 items-center justify-center gap-1.5 rounded-lg border border-th-border bg-th-surface px-3 text-[13px] font-medium text-th-text-2 shadow-sm transition-all hover:bg-th-muted hover:text-th-text-1"
-                >
-                  Manage on GitHub
-                  <ExternalLink className="h-3 w-3" />
-                </a>
+                <Button asChild size="sm" variant="outline">
+                  <a href={settingsUrl} target="_blank" rel="noopener noreferrer">
+                    Manage on GitHub
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                </Button>
               ) : null}
               <Button
                 onClick={handleInstall}
@@ -962,10 +961,10 @@ function ProxySection() {
     mutationFn: async (enabled: boolean) => {
       await upsertSetting('proxy.enabled', enabled ? 'true' : 'false')
     },
-    onSuccess: async () => {
+    onSuccess: async (_result, enabled) => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
       await queryClient.invalidateQueries({ queryKey: ['proxy-status'] })
-      toast.success(proxyEnabled ? 'Proxy disabled.' : 'Proxy enabled.')
+      toast.success(enabled ? 'Proxy enabled.' : 'Proxy disabled.')
       setPingResult(null)
     },
     onError: (error: unknown) => toast.error(formatQueryError(error)),
@@ -997,18 +996,20 @@ function ProxySection() {
 
       <CardContent className="space-y-4">
         <div className="flex items-center gap-3">
-        <Button
-          disabled={toggleMutation.isPending}
-          onClick={() => {
-            setPingResult(null)
-            void toggleMutation.mutateAsync(!proxyEnabled)
-          }}
-          size="sm"
-          type="button"
-          variant={proxyEnabled ? 'destructive' : 'secondary'}
-        >
-          {proxyEnabled ? 'Disable proxy' : 'Enable proxy'}
-        </Button>
+        <div className="flex items-center gap-2 rounded-lg border border-th-border bg-th-surface px-3 py-2">
+          <Switch
+            aria-label={proxyEnabled ? 'Disable proxy' : 'Enable proxy'}
+            checked={proxyEnabled}
+            disabled={toggleMutation.isPending}
+            onCheckedChange={(enabled) => {
+              setPingResult(null)
+              void toggleMutation.mutateAsync(enabled)
+            }}
+          />
+          <span className="text-sm text-th-text-2">
+            {proxyEnabled ? 'Proxy enabled' : 'Proxy disabled'}
+          </span>
+        </div>
         <Button
           disabled={pingMutation.isPending}
           onClick={() => {
@@ -1296,11 +1297,10 @@ function ApiTokensSection() {
                       className="flex cursor-pointer items-start gap-3 rounded-lg border border-th-border bg-th-surface px-3 py-2.5 transition-colors hover:bg-th-muted"
                       key={option.value}
                     >
-                      <input
+                      <Checkbox
                         checked={checked}
-                        className="mt-0.5 h-4 w-4 accent-th-accent"
-                        onChange={() => toggleScope(option.value)}
-                        type="checkbox"
+                        className="mt-0.5"
+                        onCheckedChange={() => toggleScope(option.value)}
                       />
                       <div className="min-w-0">
                         <div className="text-sm font-medium text-th-text-1">
