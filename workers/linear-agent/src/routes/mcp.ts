@@ -360,7 +360,7 @@ const TOOLS: Tool[] = [
   {
     name: "workflows.update",
     description:
-      "Partially update a workflow. Only the user-visible fields can be patched (`name`, `description`, `engine`, `model`, `max_turns`, `prompt_template`); omitted fields are unchanged. Published workflows are immutable — duplicate first if you need to edit one. Errors: 404 if not found, 409 if the workflow is not in `draft` status.",
+      "Partially update a workflow. Only the user-visible fields can be patched (`name`, `description`, `engine`, `model`, `max_turns`, `prompt_template`); omitted fields are unchanged. Works on draft AND published workflows — edits to a published workflow take effect immediately without bumping `version`. Call `workflows.publish` afterward if you want to snapshot the new content as a versioned checkpoint. Returns 404 if not found.",
     scope: "write",
     annotations: {
       title: "Update workflow",
@@ -413,7 +413,7 @@ const TOOLS: Tool[] = [
   {
     name: "workflows.publish",
     description:
-      "Snapshot a draft workflow and flip its status to `published`. The version number increments. Once published, the workflow is immutable — further edits require `workflows.duplicate` to get a new draft. Returns the published workflow plus the snapshot metadata.",
+      "Snapshot the current workflow content into `workflow_versions` and bump the live row's `version`. Used to cut an auditable checkpoint after a meaningful edit. Works on draft or already-published workflows; live edits via `workflows.update` still take effect without calling this. Returns the workflow plus the snapshot metadata.",
     scope: "write",
     annotations: {
       title: "Publish workflow",
@@ -436,7 +436,7 @@ const TOOLS: Tool[] = [
   {
     name: "workflows.duplicate",
     description:
-      "Clone an existing workflow into a new draft. Triggers are NOT copied — the new workflow starts with no triggers attached. Use this to fork a published workflow when you need to edit it.",
+      "Clone an existing workflow into a new draft with a fresh id. Triggers are NOT copied — the new workflow starts with no triggers attached. Use this when you want a true fork (a separate workflow side-by-side with the original). To simply edit an existing workflow, use `workflows.update` directly — published workflows accept in-place edits.",
     scope: "write",
     annotations: {
       title: "Duplicate workflow",

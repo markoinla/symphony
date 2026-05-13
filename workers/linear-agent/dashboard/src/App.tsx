@@ -9,7 +9,6 @@ import {
   QueryClientProvider,
   useQuery,
 } from '@tanstack/react-query'
-import * as Collapsible from '@radix-ui/react-collapsible'
 import { useEffect, useState } from 'react'
 import {
   LayoutDashboard,
@@ -20,7 +19,6 @@ import {
   Sun,
   Moon,
   Menu,
-  X,
   User,
   Webhook,
   Workflow as WorkflowIcon,
@@ -34,6 +32,14 @@ import {
 import { cn } from './lib/utils'
 import { useTheme } from './hooks/use-theme'
 import { Button } from './components/ui'
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from './components/ui/sheet'
+import { Toaster } from './components/ui/sonner'
 import { ChangelogButton } from './components/changelog-button'
 
 import {
@@ -113,6 +119,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
+      <Toaster richColors closeButton position="bottom-right" />
     </QueryClientProvider>
   )
 }
@@ -202,105 +209,106 @@ function RootLayout() {
   return (
     <div className="min-h-screen bg-th-bg text-th-text-2 transition-colors duration-200">
       <div className="mx-auto flex min-h-screen w-full max-w-[1120px] flex-col px-4 sm:px-6 lg:px-10">
-        <Collapsible.Root
-          className="border-b border-th-border"
-          onOpenChange={(open) => setMobileNavState({ open, path: pathname })}
-          open={mobileNavOpen}
-        >
-          <header className="flex min-h-14 items-center justify-between gap-3 py-3 md:py-0">
-            <div className="flex min-w-0 items-center gap-3 sm:gap-8">
-              <Link to="/" className="flex shrink-0 items-center gap-2.5">
-                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-th-accent">
-                  <svg className="h-3.5 w-3.5 text-white" viewBox="0 0 16 16" fill="currentColor">
-                    <path d="M8 1l2.5 5h5L11 9.5l1.5 5.5L8 12l-4.5 3 1.5-5.5L0.5 6h5z" />
-                  </svg>
-                </div>
-                <span className="text-sm font-semibold text-th-text-1">Linear Agent</span>
-              </Link>
+        <header className="flex min-h-14 items-center justify-between gap-3 border-b border-th-border py-3 md:py-0">
+          <div className="flex min-w-0 items-center gap-3 sm:gap-8">
+            <Link to="/" className="flex shrink-0 items-center gap-2.5">
+              <div className="flex h-6 w-6 items-center justify-center rounded-md bg-th-accent">
+                <svg className="h-3.5 w-3.5 text-white" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M8 1l2.5 5h5L11 9.5l1.5 5.5L8 12l-4.5 3 1.5-5.5L0.5 6h5z" />
+                </svg>
+              </div>
+              <span className="text-sm font-semibold text-th-text-1">Linear Agent</span>
+            </Link>
 
-              <nav className="hidden min-w-0 items-center gap-0.5 md:flex">
-                {navItems.map((item) => (
-                  <Link
-                    key={item.to}
-                    className={cn(
-                      'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors duration-100',
-                      item.match(pathname)
-                        ? 'bg-th-muted text-th-text-1'
-                        : 'text-th-text-3 hover:text-th-text-1',
-                    )}
-                    to={item.to}
-                  >
-                    <item.icon className="h-3.5 w-3.5" />
-                    {item.label}
-                  </Link>
-                ))}
-              </nav>
-            </div>
-
-            <div className="flex items-center gap-1">
-              {showLogout && authQuery.data?.user && (
-                <span className="mr-1 hidden items-center gap-1.5 text-[13px] text-th-text-3 sm:flex">
-                  <User className="h-3.5 w-3.5" />
-                  {authQuery.data.user.name || authQuery.data.user.email}
-                </span>
-              )}
-              {showLogout && (
-                <Button
-                  aria-label="Sign out"
-                  onClick={handleLogout}
-                  size="icon"
-                  type="button"
-                  variant="ghost"
+            <nav className="hidden min-w-0 items-center gap-0.5 md:flex">
+              {navItems.map((item) => (
+                <Link
+                  key={item.to}
+                  className={cn(
+                    'flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors duration-100',
+                    item.match(pathname)
+                      ? 'bg-th-muted text-th-text-1'
+                      : 'text-th-text-3 hover:text-th-text-1',
+                  )}
+                  to={item.to}
                 >
-                  <LogOut className="h-4 w-4" />
-                </Button>
-              )}
-              <ChangelogButton />
+                  <item.icon className="h-3.5 w-3.5" />
+                  {item.label}
+                </Link>
+              ))}
+            </nav>
+          </div>
+
+          <div className="flex items-center gap-1">
+            {showLogout && authQuery.data?.user && (
+              <span className="mr-1 hidden items-center gap-1.5 text-[13px] text-th-text-3 sm:flex">
+                <User className="h-3.5 w-3.5" />
+                {authQuery.data.user.name || authQuery.data.user.email}
+              </span>
+            )}
+            {showLogout && (
               <Button
-                aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
-                onClick={toggle}
+                aria-label="Sign out"
+                onClick={handleLogout}
                 size="icon"
                 type="button"
                 variant="ghost"
               >
-                {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+                <LogOut className="h-4 w-4" />
               </Button>
+            )}
+            <ChangelogButton />
+            <Button
+              aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+              onClick={toggle}
+              size="icon"
+              type="button"
+              variant="ghost"
+            >
+              {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </Button>
 
-              <Collapsible.Trigger asChild>
+            <Sheet
+              open={mobileNavOpen}
+              onOpenChange={(open) => setMobileNavState({ open, path: pathname })}
+            >
+              <SheetTrigger asChild>
                 <Button
-                  aria-label={mobileNavOpen ? 'Close navigation menu' : 'Open navigation menu'}
+                  aria-label="Open navigation menu"
                   className="md:hidden"
                   size="icon"
                   type="button"
                   variant="secondary"
                 >
-                  {mobileNavOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+                  <Menu className="h-4 w-4" />
                 </Button>
-              </Collapsible.Trigger>
-            </div>
-          </header>
-
-          <Collapsible.Content className="border-t border-th-border/70 pb-3 md:hidden">
-            <nav className="grid gap-1 pt-3">
-              {navItems.map((item) => (
-                <Link
-                  key={item.to}
-                  className={cn(
-                    'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-100',
-                    item.match(pathname)
-                      ? 'bg-th-muted text-th-text-1'
-                      : 'text-th-text-3 hover:text-th-text-1',
-                  )}
-                  onClick={() => setMobileNavState((current) => ({ ...current, open: false }))}
-                  to={item.to}
-                >
-                  <item.icon className="h-4 w-4" />
-                  {item.label}
-                </Link>
-              ))}
-            </nav>
-          </Collapsible.Content>
-        </Collapsible.Root>
+              </SheetTrigger>
+              <SheetContent side="right" className="w-72">
+                <SheetHeader>
+                  <SheetTitle>Navigation</SheetTitle>
+                </SheetHeader>
+                <nav className="grid gap-1 px-4">
+                  {navItems.map((item) => (
+                    <Link
+                      key={item.to}
+                      className={cn(
+                        'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors duration-100',
+                        item.match(pathname)
+                          ? 'bg-th-muted text-th-text-1'
+                          : 'text-th-text-3 hover:text-th-text-1',
+                      )}
+                      onClick={() => setMobileNavState((current) => ({ ...current, open: false }))}
+                      to={item.to}
+                    >
+                      <item.icon className="h-4 w-4" />
+                      {item.label}
+                    </Link>
+                  ))}
+                </nav>
+              </SheetContent>
+            </Sheet>
+          </div>
+        </header>
 
         <main className="flex-1 py-6 sm:py-10">
           <Outlet />

@@ -1,7 +1,12 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { Bell } from 'lucide-react'
 
 import { Button } from './ui'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import {
   changelog,
   getLastSeenId,
@@ -19,37 +24,19 @@ const TAG_LABEL: Record<ChangelogTag, string> = {
 }
 
 const TAG_CLASS: Record<ChangelogTag, string> = {
-  feature: 'bg-th-accent-muted text-th-accent',
-  fix: 'bg-th-warning-muted text-th-warning',
-  improvement: 'bg-th-muted text-th-text-2',
+  feature: 'bg-accent text-accent-foreground',
+  fix: 'bg-[color-mix(in_oklab,var(--th-warning)_15%,transparent)] text-[var(--th-warning)]',
+  improvement: 'bg-muted text-foreground',
 }
 
 export function ChangelogButton() {
   const [open, setOpen] = useState(false)
   const [lastSeenId, setLastSeenIdState] = useState<string | null>(() => getLastSeenId())
-  const containerRef = useRef<HTMLDivElement | null>(null)
 
   const unread = unreadCount(changelog, lastSeenId)
   const newest = changelog[0]
 
-  useEffect(() => {
-    if (!open) return
-    function handlePointer(event: MouseEvent) {
-      if (!containerRef.current?.contains(event.target as Node)) setOpen(false)
-    }
-    function handleKey(event: KeyboardEvent) {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', handlePointer)
-    document.addEventListener('keydown', handleKey)
-    return () => {
-      document.removeEventListener('mousedown', handlePointer)
-      document.removeEventListener('keydown', handleKey)
-    }
-  }, [open])
-
-  function handleToggle() {
-    const next = !open
+  function handleOpenChange(next: boolean) {
     setOpen(next)
     if (next && newest && lastSeenId !== newest.id) {
       setLastSeenId(newest.id)
@@ -58,47 +45,47 @@ export function ChangelogButton() {
   }
 
   return (
-    <div ref={containerRef} className="relative">
-      <Button
-        aria-label={unread > 0 ? `What's new (${unread} unread)` : "What's new"}
-        onClick={handleToggle}
-        size="icon"
-        type="button"
-        variant="ghost"
-      >
-        <Bell className="h-4 w-4" />
-        {unread > 0 && (
-          <span
-            aria-hidden
-            className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-th-accent ring-2 ring-th-bg"
-          />
-        )}
-      </Button>
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>
+        <Button
+          aria-label={unread > 0 ? `What's new (${unread} unread)` : "What's new"}
+          className="relative"
+          size="icon"
+          type="button"
+          variant="ghost"
+        >
+          <Bell className="size-4" />
+          {unread > 0 && (
+            <span
+              aria-hidden
+              className="absolute right-2 top-2 size-1.5 rounded-full bg-primary ring-2 ring-background"
+            />
+          )}
+        </Button>
+      </PopoverTrigger>
 
-      {open && (
-        <div className="absolute right-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-th-border bg-th-surface shadow-lg">
-          <div className="flex items-center justify-between border-b border-th-border px-4 py-3">
-            <p className="text-sm font-semibold text-th-text-1">What&apos;s new</p>
-            {unread > 0 && (
-              <span className="text-[11px] text-th-text-4">{unread} new</span>
-            )}
-          </div>
-          <div className="max-h-96 overflow-y-auto">
-            {changelog.length === 0 ? (
-              <p className="px-4 py-6 text-center text-[13px] text-th-text-4">
-                No updates yet.
-              </p>
-            ) : (
-              <ul className="divide-y divide-th-border/70">
-                {changelog.map((entry) => (
-                  <ChangelogItem key={entry.id} entry={entry} />
-                ))}
-              </ul>
-            )}
-          </div>
+      <PopoverContent align="end" className="w-80 max-w-[calc(100vw-2rem)] overflow-hidden p-0">
+        <div className="flex items-center justify-between border-b px-4 py-3">
+          <p className="text-sm font-semibold">What&apos;s new</p>
+          {unread > 0 && (
+            <span className="text-[11px] text-muted-foreground">{unread} new</span>
+          )}
         </div>
-      )}
-    </div>
+        <div className="max-h-96 overflow-y-auto">
+          {changelog.length === 0 ? (
+            <p className="px-4 py-6 text-center text-[13px] text-muted-foreground">
+              No updates yet.
+            </p>
+          ) : (
+            <ul className="divide-y">
+              {changelog.map((entry) => (
+                <ChangelogItem key={entry.id} entry={entry} />
+              ))}
+            </ul>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -106,8 +93,8 @@ function ChangelogItem({ entry }: { entry: ChangelogEntry }) {
   return (
     <li className="px-4 py-3">
       <div className="flex items-baseline justify-between gap-3">
-        <p className="text-[13px] font-medium text-th-text-1">{entry.title}</p>
-        <time className="shrink-0 text-[11px] text-th-text-4">{entry.date}</time>
+        <p className="text-[13px] font-medium text-foreground">{entry.title}</p>
+        <time className="shrink-0 text-[11px] text-muted-foreground">{entry.date}</time>
       </div>
       <div className="mt-1.5 flex items-start gap-2">
         {entry.tag && (
@@ -121,7 +108,7 @@ function ChangelogItem({ entry }: { entry: ChangelogEntry }) {
           </span>
         )}
         {entry.description && (
-          <p className="text-[12px] leading-relaxed text-th-text-3">{entry.description}</p>
+          <p className="text-[12px] leading-relaxed text-muted-foreground">{entry.description}</p>
         )}
       </div>
     </li>

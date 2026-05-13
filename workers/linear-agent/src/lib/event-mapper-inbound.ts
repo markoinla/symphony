@@ -24,6 +24,12 @@ export interface IssueWebhookEnvelope {
   updatedFrom?: Record<string, unknown> | null;
   organizationId?: string;
   webhookId?: string;
+  // Per-delivery timestamp Linear stamps on every webhook payload.
+  // Retries of the same delivery carry the same value; distinct events
+  // (including re-entries into the same state) carry different ones.
+  // Used in the issue-envelope dedup key to keep retries collapsed
+  // while still letting real re-transitions through.
+  webhookTimestamp?: number;
 }
 
 export interface IssueWebhookData {

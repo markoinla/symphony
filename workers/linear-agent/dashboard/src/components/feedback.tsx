@@ -1,37 +1,55 @@
+import { Loader2, AlertCircle, CheckCircle2, Info } from 'lucide-react'
+
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { cn } from '@/lib/utils'
 
 export function LoadingPanel({ compact = false, title }: { compact?: boolean; title: string }) {
   return (
-    <div className={cn('flex flex-col items-center justify-center text-center', compact ? 'py-6' : 'py-24')}>
-      <div className="h-5 w-5 animate-spin rounded-full border-2 border-th-border border-t-th-accent" />
-      <p className="mt-4 text-sm font-medium text-th-text-2">{title}</p>
+    <div
+      className={cn(
+        'flex flex-col items-center justify-center text-center text-muted-foreground',
+        compact ? 'py-6' : 'py-24',
+      )}
+      role="status"
+      aria-live="polite"
+    >
+      <Loader2 className="size-5 animate-spin text-primary" aria-hidden />
+      <p className="mt-4 text-sm font-medium text-foreground">{title}</p>
     </div>
   )
 }
 
 export function ErrorPanel({ detail, title }: { detail: string; title: string }) {
   return (
-    <div className="rounded-lg border border-th-danger/15 bg-th-danger-muted px-5 py-4">
-      <p className="text-sm font-medium text-th-danger">{title}</p>
-      <p className="mt-1.5 whitespace-pre-wrap break-words text-[13px] leading-5 text-th-danger/70">{detail}</p>
-    </div>
+    <Alert variant="destructive">
+      <AlertCircle aria-hidden />
+      <AlertTitle>{title}</AlertTitle>
+      <AlertDescription className="whitespace-pre-wrap break-words">
+        {detail}
+      </AlertDescription>
+    </Alert>
   )
 }
 
-export function FeedbackBanner({ message, variant = 'info' }: { message: string; variant?: 'info' | 'success' | 'error' }) {
+export function FeedbackBanner({
+  message,
+  variant = 'info',
+}: {
+  message: string
+  variant?: 'info' | 'success' | 'error'
+}) {
+  const Icon = variant === 'error' ? AlertCircle : variant === 'success' ? CheckCircle2 : Info
   return (
-    <div
+    <Alert
+      variant={variant === 'error' ? 'destructive' : 'default'}
       className={cn(
-        'rounded-lg border px-4 py-3 text-sm',
-        variant === 'error'
-          ? 'border-th-danger/20 bg-th-danger-muted text-th-danger'
-          : variant === 'success'
-            ? 'border-th-success/20 bg-th-success-muted text-th-success'
-            : 'border-th-border bg-th-muted text-th-text-2',
+        variant === 'success' &&
+          'border-[color-mix(in_oklab,var(--th-success)_20%,transparent)] bg-[color-mix(in_oklab,var(--th-success)_8%,transparent)] text-[var(--th-success)] *:data-[slot=alert-description]:text-[color-mix(in_oklab,var(--th-success)_85%,var(--foreground))]',
       )}
     >
-      {message}
-    </div>
+      <Icon aria-hidden />
+      <AlertTitle>{message}</AlertTitle>
+    </Alert>
   )
 }
 
@@ -47,12 +65,12 @@ export function EmptyState({
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
       {icon ? (
-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-th-muted">
+        <div className="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
           {icon}
         </div>
       ) : null}
-      <p className={cn('text-sm font-medium text-th-text-2', icon ? 'mt-4' : '')}>{title}</p>
-      <p className="mt-1 max-w-xs text-[13px] text-th-text-4">{description}</p>
+      <p className={cn('text-sm font-medium text-foreground', icon ? 'mt-4' : '')}>{title}</p>
+      <p className="mt-1 max-w-xs text-[13px] text-muted-foreground">{description}</p>
     </div>
   )
 }

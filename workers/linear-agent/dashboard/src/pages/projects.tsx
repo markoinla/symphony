@@ -1,6 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import * as Collapsible from '@radix-ui/react-collapsible'
+import { toast } from 'sonner'
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible'
 import { ChevronRight, FolderKanban, Github, Plus, Trash2 } from 'lucide-react'
 
 import {
@@ -30,7 +35,6 @@ import {
 import {
   EmptyState,
   ErrorPanel,
-  FeedbackBanner,
   LoadingPanel,
 } from '../components/feedback'
 import { Field } from '../components/field'
@@ -41,7 +45,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from '../components/dialog'
+} from '@/components/ui/dialog'
 import {
   Combobox,
   ComboboxContent,
@@ -218,14 +222,12 @@ function ProjectFormDialog({
   const [selectedLinearName, setSelectedLinearName] = useState<string | null>(null)
   const [selectedGitHubName, setSelectedGitHubName] = useState<string | null>(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   // Reset form when dialog opens with new data
   const [lastEditId, setLastEditId] = useState<number | null | undefined>(undefined)
   const editId = editingProject?.id ?? null
   if (open && editId !== lastEditId) {
     setLastEditId(editId)
-    setError(null)
     if (editingProject) {
       setDraft(projectToDraft(editingProject))
       setSelectedLinearName(editingProject.linear_project_slug)
@@ -256,7 +258,7 @@ function ProjectFormDialog({
       await queryClient.invalidateQueries({ queryKey: ['projects'] })
       onSaved(isEditing ? 'Project updated.' : 'Project created.')
     },
-    onError: (err: unknown) => setError(formatQueryError(err)),
+    onError: (err: unknown) => toast.error(formatQueryError(err)),
   })
 
   function handleLinearProjectSelect(project: LinearProject) {
@@ -294,7 +296,6 @@ function ProjectFormDialog({
           className="grid gap-4"
           onSubmit={(event) => {
             event.preventDefault()
-            setError(null)
             void saveMutation.mutateAsync({
               id: editingProject?.id ?? null,
               body: normalizeProjectDraft(draft),
@@ -348,13 +349,13 @@ function ProjectFormDialog({
             />
           </Field>
 
-          <Collapsible.Root open={showAdvanced} onOpenChange={setShowAdvanced}>
-            <Collapsible.Trigger className="group flex w-full items-center gap-1.5 rounded-md py-1.5 text-xs font-medium text-th-text-3 transition hover:text-th-text-1">
+          <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
+            <CollapsibleTrigger className="group flex w-full items-center gap-1.5 rounded-md py-1.5 text-xs font-medium text-th-text-3 transition hover:text-th-text-1">
               <ChevronRight className="h-3 w-3 transition-transform group-data-[state=open]:rotate-90" />
               Advanced settings
-            </Collapsible.Trigger>
+            </CollapsibleTrigger>
 
-            <Collapsible.Content className="mt-3 grid gap-4">
+            <CollapsibleContent className="mt-3 grid gap-4">
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Linear project slug">
                   <Input
@@ -429,10 +430,8 @@ function ProjectFormDialog({
                   value={draft.env_vars ?? ''}
                 />
               </Field>
-            </Collapsible.Content>
-          </Collapsible.Root>
-
-          {error ? <FeedbackBanner message={error} variant="error" /> : null}
+            </CollapsibleContent>
+          </Collapsible>
 
           <div className="flex items-center justify-end gap-3 pt-1">
             <Button onClick={() => onOpenChange(false)} type="button" variant="ghost">
@@ -548,33 +547,30 @@ export function ProjectsView() {
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingProject, setEditingProject] = useState<Project | null>(null)
-  const [feedback, setFeedback] = useState<string | null>(null)
 
   const deleteMutation = useMutation({
     mutationFn: deleteProject,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['projects'] })
-      setFeedback('Project deleted.')
+      toast.success('Project deleted.')
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
   })
 
   function handleCreate() {
     setEditingProject(null)
     setDialogOpen(true)
-    setFeedback(null)
   }
 
   function handleEdit(project: Project) {
     setEditingProject(project)
     setDialogOpen(true)
-    setFeedback(null)
   }
 
   function handleSaved(message: string) {
     setDialogOpen(false)
     setEditingProject(null)
-    setFeedback(message)
+    toast.success(message)
   }
 
   const projects = projectsQuery.data?.projects ?? []
@@ -593,8 +589,6 @@ export function ProjectsView() {
           New project
         </Button>
       </div>
-
-      {feedback ? <FeedbackBanner message={feedback} /> : null}
 
       {projectsQuery.isPending ? <LoadingPanel title="Loading projects" compact /> : null}
       {projectsQuery.isError ? (
@@ -615,10 +609,7 @@ export function ProjectsView() {
             key={project.id}
             project={project}
             onEdit={handleEdit}
-            onDelete={(id) => {
-              setFeedback(null)
-              void deleteMutation.mutateAsync(id)
-            }}
+            onDelete={(id) => void deleteMutation.mutateAsync(id)}
             deleting={deleteMutation.isPending}
           />
         ))}

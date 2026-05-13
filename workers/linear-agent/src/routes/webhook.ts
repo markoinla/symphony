@@ -548,12 +548,15 @@ async function handleIssueEnvelope(
     return c.json({ ok: true, ignored: true });
   }
 
-  // Dedupe a state transition on (webhookId, issueId, newStateId).
-  // Only reached when we know we've got a real state transition, so
-  // the key tracks "this transition has been dispatched."
+  // Dedupe Linear retries of the *same delivery*. `webhookId` is the
+  // webhook registration UUID (constant across every delivery), so
+  // adding `webhookTimestamp` is what makes the key per-delivery: Linear
+  // stamps the same timestamp on every retry, but a re-entry into the
+  // same state gets a different one. Without the timestamp, distinct
+  // (issue, state) transitions within the 60-min TTL collapsed.
   const newStateId =
     envelope.data?.stateId ?? envelope.data?.state?.id ?? "no-state";
-  const dedupeKey = `webhook:issue:${envelope.webhookId ?? "?"}:${envelope.data?.id ?? "?"}:${newStateId}`;
+  const dedupeKey = `webhook:issue:${envelope.webhookId ?? "?"}:${envelope.data?.id ?? "?"}:${newStateId}:${envelope.webhookTimestamp ?? "?"}`;
   const seen = await c.env.LINEAR_TOKENS.get(dedupeKey);
   if (seen) {
     await events.update(logId, {

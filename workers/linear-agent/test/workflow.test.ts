@@ -1153,7 +1153,7 @@ function installFetchMockCapturing(opts: {
 }
 
 describe("SessionRunner.run — start-session-side-effects", () => {
-  it("on `created`: queries viewer + workflowStates, then issueUpdate + agentSessionUpdate (externalUrls + plan)", async () => {
+  it("on `created`: queries viewer, then issueUpdate (delegate only) + agentSessionUpdate (externalUrls + plan)", async () => {
     const kv = new FakeKV();
     const db = seededDb();
     const captured = installFetchMockCapturing({});
@@ -1175,21 +1175,23 @@ describe("SessionRunner.run — start-session-side-effects", () => {
     expect(ran).toContain("start-session-side-effects");
     expect(ran).toContain("update-final-plan");
 
-    // Status: fetchTeamStartedState was called with the team id.
-    const wfStates = captured.find((c) => c.operation === "workflowStates");
-    expect(wfStates?.variables).toEqual({ teamId: "team-abc" });
+    // Status transitions are owned by the workflow prompt now — the
+    // session runner must NOT fetch the team's started state.
+    expect(captured.find((c) => c.operation === "workflowStates")).toBeUndefined();
 
     // Viewer id was fetched (no cached entry on the cold KV).
     expect(captured.some((c) => c.operation === "viewer")).toBe(true);
 
-    // issueUpdate: both stateId (from workflowStates) and delegateId
-    // (from viewer) end up in the input.
+    // issueUpdate: delegateId only — no stateId.
     const issueUpdate = captured.find((c) => c.operation === "issueUpdate");
     expect(issueUpdate).toBeDefined();
     expect(issueUpdate!.variables).toMatchObject({
       id: "issue-1",
-      input: { stateId: "started-1", delegateId: "agent-viewer-1" },
+      input: { delegateId: "agent-viewer-1" },
     });
+    expect(
+      (issueUpdate!.variables.input as { stateId?: string }).stateId,
+    ).toBeUndefined();
 
     // agentSessionUpdate must fire at least twice: once with the
     // externalUrls and once with the initial plan (start-side-effects).
@@ -1346,34 +1348,4 @@ describe("SessionRunner.run — start-session-side-effects", () => {
     expect(await kv.get(`viewer:${LINEAR_ORG_ID}`)).toBe("agent-viewer-1");
   });
 
-  it("continues on workflowStates failure (skips stateId but still tries delegate)", async () => {
-    const kv = new FakeKV();
-    const db = seededDb();
-    const captured = installFetchMockCapturing({ startedStateId: null });
-
-    const runner = buildRunner(makeEnv(kv, {}, db));
-    const { step } = makeStep();
-
-    const event: AgentSessionEventWebhook = {
-      type: "AgentSessionEvent",
-      organizationId: LINEAR_ORG_ID,
-      action: "created",
-      webhookId: "wh-no-state",
-      agentSession: baseSession,
-      promptContext: baseSession.promptContext,
-    };
-
-    const result = await runner.run(makeEvent(event), step as never);
-    expect(result.status).toBe("ok");
-
-    const issueUpdate = captured.find((c) => c.operation === "issueUpdate");
-    // No stateId in the input, but delegateId still set.
-    expect(issueUpdate?.variables).toMatchObject({
-      id: "issue-1",
-      input: { delegateId: "agent-viewer-1" },
-    });
-    expect(
-      (issueUpdate?.variables.input as { stateId?: string }).stateId,
-    ).toBeUndefined();
-  });
 });

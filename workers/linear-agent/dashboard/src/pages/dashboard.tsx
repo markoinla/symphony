@@ -19,7 +19,7 @@ import {
 import { cn } from '../lib/utils'
 import { useNow } from '../hooks/use-now'
 import { formatQueryError } from '../lib/helpers'
-import { Badge } from '../components/ui'
+import { Badge, Button } from '../components/ui'
 import { EmptyState, ErrorPanel, LoadingPanel } from '../components/feedback'
 
 type RunningEntry = StatePayload['running'][number]
@@ -238,19 +238,21 @@ function ProjectSessionSection({
 
 function LinearIssueBadge({ identifier }: { identifier: string }) {
   return (
-    <button
-      className="inline-flex shrink-0 items-center gap-1 rounded bg-th-accent-muted px-1.5 py-0.5 text-[11px] font-medium text-th-accent transition-colors hover:opacity-80"
+    <Button
+      className="h-auto shrink-0 rounded bg-th-accent-muted px-1.5 py-0.5 text-[11px] font-medium text-th-accent shadow-none hover:bg-th-accent-muted hover:opacity-80"
       onClick={(e) => {
         e.stopPropagation()
         window.open(`https://linear.app/issue/${identifier}`, '_blank', 'noopener,noreferrer')
       }}
+      size="xs"
       type="button"
+      variant="ghost"
     >
       <svg className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
         <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
       Linear
-    </button>
+    </Button>
   )
 }
 

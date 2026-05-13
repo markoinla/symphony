@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { Plus, Workflow as WorkflowIcon } from 'lucide-react'
+import { toast } from 'sonner'
 
 import {
   useCreateWorkflow,
@@ -20,11 +21,10 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-} from '@/components/dialog'
+} from '@/components/ui/dialog'
 import {
   EmptyState,
   ErrorPanel,
-  FeedbackBanner,
   LoadingPanel,
 } from '@/components/feedback'
 
@@ -102,12 +102,10 @@ function TemplateGalleryDialog({
       onCreated(wf.id)
     },
   })
-  const [error, setError] = useState<string | null>(null)
 
   function handlePick(template: WorkflowTemplate) {
-    setError(null)
     create.mutate(template.body, {
-      onError: (err) => setError(formatQueryError(err)),
+      onError: (err) => toast.error(formatQueryError(err)),
     })
   }
 
@@ -124,24 +122,25 @@ function TemplateGalleryDialog({
 
         <div className="grid gap-3 pt-1">
           {workflowTemplates.map((template) => (
-            <button
+            <Button
               key={template.id}
-              className="rounded-lg border border-th-border bg-th-surface p-4 text-left transition hover:border-th-accent hover:shadow-sm disabled:opacity-60"
+              className="h-auto justify-start whitespace-normal rounded-lg border border-th-border bg-th-surface p-4 text-left font-normal shadow-none hover:border-th-accent hover:bg-th-surface hover:shadow-sm"
               disabled={create.isPending}
               onClick={() => handlePick(template)}
               type="button"
+              variant="outline"
             >
-              <p className="text-sm font-semibold text-th-text-1">
-                {template.name}
-              </p>
-              <p className="mt-1 text-[13px] text-th-text-3">
-                {template.description}
-              </p>
-            </button>
+              <span className="grid gap-1">
+                <span className="text-sm font-semibold text-th-text-1">
+                  {template.name}
+                </span>
+                <span className="text-[13px] text-th-text-3">
+                  {template.description}
+                </span>
+              </span>
+            </Button>
           ))}
         </div>
-
-        {error ? <FeedbackBanner message={error} variant="error" /> : null}
       </DialogContent>
     </Dialog>
   )
@@ -150,7 +149,6 @@ function TemplateGalleryDialog({
 export function WorkflowsView() {
   const workflowsQuery = useWorkflows()
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [feedback, setFeedback] = useState<string | null>(null)
 
   const workflows = workflowsQuery.data ?? []
 
@@ -171,8 +169,6 @@ export function WorkflowsView() {
           New workflow
         </Button>
       </div>
-
-      {feedback ? <FeedbackBanner message={feedback} /> : null}
 
       {workflowsQuery.isPending ? (
         <LoadingPanel compact title="Loading workflows" />
@@ -203,7 +199,7 @@ export function WorkflowsView() {
         onOpenChange={setDialogOpen}
         onCreated={(id) => {
           setDialogOpen(false)
-          setFeedback(`Workflow created. Edit it at /workflows/${id}.`)
+          toast.success(`Workflow created. Edit it at /workflows/${id}.`)
         }}
       />
     </div>

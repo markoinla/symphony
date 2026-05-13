@@ -6,7 +6,6 @@ import { BaselineStore } from "./storage";
 import { SANDBOX_HOME, safeDestroy, sanitizeScopeForId } from "./sandbox-helpers";
 import { piEngineAdapter } from "./engines/pi";
 import type { EngineAdapter, NormalizedEvent } from "./engines/types";
-import { commitAndPush } from "./git";
 
 /**
  * `/run` — execute one agent turn in a fresh per-issue sandbox.
@@ -157,33 +156,15 @@ export function buildRunRouter() {
       const cmd = buildEngineCommand(parsed, workspaceDir);
       const result = await sandbox.exec(cmd, { timeout: parsed.timeoutMs });
 
-      let branch: string | null = null;
-      let commitSha: string | null = null;
-      let pushError: string | null = null;
-      const pushToken = parsed.githubToken ?? c.env.DISPATCH_GITHUB_TOKEN;
-      if (result.exitCode === 0 && pushToken) {
-        try {
-          const pushed = await commitAndPush(sandbox, workspaceDir, {
-            issueIdentifier: parsed.issueId,
-            repoUrl: parsed.repoUrl,
-            githubToken: pushToken,
-          });
-          branch = pushed?.branch ?? null;
-          commitSha = pushed?.commit_sha ?? null;
-        } catch (e) {
-          pushError = e instanceof Error ? e.message : String(e);
-        }
-      }
-
       return c.json({
         engine: parsed.engine,
         exit_code: result.exitCode,
         stdout: result.stdout,
         stderr: result.stderr,
         duration_ms: Date.now() - startedAt,
-        branch,
-        commit_sha: commitSha,
-        push_error: pushError,
+        branch: null,
+        commit_sha: null,
+        push_error: null,
       });
     } finally {
       await safeDestroy(sandbox);
@@ -378,28 +359,7 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
       // themselves and we'll skip this block.
       await emit({ type: "turn_end", turn: 1, reason: "completed" });
 
-      // Item 4: commit and push to GitHub if the engine succeeded and
-      // a token is configured. Push failures don't fail the whole
-      // run — we surface them as an `error` event so users see them
-      // in the timeline, then continue to the result frame.
-      // SYM-269: prefer the per-run token from the body over the env.
-      let branch: string | null = null;
-      const streamPushToken = parsed.githubToken ?? env.DISPATCH_GITHUB_TOKEN;
-      if (exitCode === 0 && streamPushToken) {
-        try {
-          const pushed = await commitAndPush(sandbox, workspaceDir, {
-            issueIdentifier: parsed.issueId,
-            repoUrl: parsed.repoUrl,
-            githubToken: streamPushToken,
-          });
-          branch = pushed?.branch ?? null;
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e);
-          await emit({ type: "error", message: `push_failed: ${msg}` });
-        }
-      }
-
-      await emitTerminal(exitCode, { branch });
+      await emitTerminal(exitCode, { branch: null });
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       await emitTerminal(1, { message });

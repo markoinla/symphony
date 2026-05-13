@@ -44,7 +44,6 @@ import {
 } from "../lib/dispatcher";
 import { lastAssistantText, mapToActivity } from "../lib/event-mapper";
 import {
-  fetchTeamStartedState,
   updateAgentSession,
   updateIssue,
 } from "../lib/linear-mutations";
@@ -305,55 +304,42 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     });
 
     // Side-effects that make the session look "owned" in Linear's UI:
-    // move the issue to the team's first `started` state, set the
-    // agent as the issue's delegate, attach the dashboard link, and
-    // post an initial 2-item plan. All best-effort — every failure
+    // set the agent as the issue's delegate, attach the dashboard link,
+    // and post an initial 2-item plan. All best-effort — every failure
     // here is logged but never throws, since the actual run is the
     // real product and these are polish.
     //
+    // State transitions are intentionally NOT done here — they belong
+    // to the workflow prompt so each workflow can choose the right
+    // moment to move the issue (e.g. Land PR moves to "In Progress"
+    // only after gh pr checkout succeeds, Staged moves to "Human
+    // Review" after pushing a PR).
+    //
     // Only on `created` (the kickoff webhook). `prompted` follow-ups
-    // must NOT stomp user-driven status changes between turns.
+    // must NOT stomp user-driven changes between turns.
     if (webhookEvent.action === "created") {
       await step.do("start-session-side-effects", async () => {
         const issueId = webhookEvent.agentSession.issue?.id ?? null;
-        const teamId =
-          webhookEvent.agentSession.issue?.teamId ??
-          webhookEvent.agentSession.issue?.team?.id ??
-          null;
         const linearOrgId = webhookEvent.organizationId ?? null;
 
-        // Issue status + delegate. Both need the issue id; delegate
-        // additionally needs the agent's viewer id (KV-cached) and
-        // status needs the team's first started state.
+        // Set the agent as the issue's delegate so the AgentSession
+        // shows ownership in Linear's UI. Skip if we can't resolve the
+        // agent viewer id.
         if (issueId) {
           try {
-            const [startedState, viewerId] = await Promise.all([
-              teamId
-                ? fetchTeamStartedState(token, teamId).catch((e) => {
-                    console.error(
-                      "fetch_team_started_state_failed",
-                      e instanceof Error ? e.message : String(e),
-                    );
-                    return null;
-                  })
-                : Promise.resolve(null),
-              linearOrgId
-                ? resolveAgentViewerId(token, linearOrgId, this.env.LINEAR_TOKENS)
-                : Promise.resolve(null),
-            ]);
+            const viewerId = linearOrgId
+              ? await resolveAgentViewerId(
+                  token,
+                  linearOrgId,
+                  this.env.LINEAR_TOKENS,
+                )
+              : null;
 
-            const updateInput: {
-              issueId: string;
-              stateId?: string;
-              delegateId?: string;
-            } = { issueId };
-            if (startedState?.id) updateInput.stateId = startedState.id;
-            if (viewerId) updateInput.delegateId = viewerId;
-
-            // Skip the round-trip if there's nothing to change — Linear
-            // accepts no-op input but we save a request.
-            if (updateInput.stateId || updateInput.delegateId) {
-              await updateIssue(token, updateInput).catch((e) => {
+            if (viewerId) {
+              await updateIssue(token, {
+                issueId,
+                delegateId: viewerId,
+              }).catch((e) => {
                 console.error(
                   "issue_update_failed",
                   JSON.stringify({
@@ -366,7 +352,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
             }
           } catch (e) {
             console.error(
-              "start_session_status_delegate_failed",
+              "start_session_delegate_failed",
               e instanceof Error ? e.message : String(e),
             );
           }

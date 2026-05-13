@@ -1,5 +1,6 @@
-import { useMemo, useRef, useState, useEffect, type FormEvent } from 'react'
+import { useRef, useState, useEffect, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import {
   Check,
   Copy,
@@ -65,11 +66,10 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '../components/dialog'
+} from '@/components/ui/dialog'
 import {
   EmptyState,
   ErrorPanel,
-  FeedbackBanner,
   LoadingPanel,
 } from '../components/feedback'
 import { Field } from '../components/field'
@@ -245,27 +245,26 @@ function LinearApiKeySection() {
 
   const [apiKey, setApiKey] = useState('')
   const [showKey, setShowKey] = useState(false)
-  const [feedback, setFeedback] = useState<string | null>(null)
 
   const saveMutation = useMutation({
     mutationFn: (value: string) => upsertSetting('tracker.api_key', value),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      setFeedback('Linear API key saved.')
+      toast.success('Linear API key saved.')
       setApiKey('')
       setShowKey(false)
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
   })
 
   const removeMutation = useMutation({
     mutationFn: () => deleteSetting('tracker.api_key'),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      setFeedback('Linear API key removed.')
+      toast.success('Linear API key removed.')
       setApiKey('')
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
   })
 
   const maskedValue = existing
@@ -286,8 +285,6 @@ function LinearApiKeySection() {
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {feedback ? <FeedbackBanner message={feedback} /> : null}
-
         {existing ? (
           <div className="flex items-center justify-between gap-3 rounded-lg border border-th-border bg-th-inset px-4 py-3">
             <code className="min-w-0 break-all text-sm text-th-text-2">
@@ -306,10 +303,7 @@ function LinearApiKeySection() {
               <Button
                 aria-label="Remove key"
                 disabled={removeMutation.isPending}
-                onClick={() => {
-                  setFeedback(null)
-                  void removeMutation.mutateAsync()
-                }}
+                onClick={() => void removeMutation.mutateAsync()}
                 size="icon"
                 type="button"
                 variant="ghost"
@@ -324,7 +318,6 @@ function LinearApiKeySection() {
           className="flex gap-3"
           onSubmit={(event) => {
             event.preventDefault()
-            setFeedback(null)
             void saveMutation.mutateAsync(apiKey.trim())
           }}
         >
@@ -357,37 +350,30 @@ function LinearOAuthSection() {
   const connected = integrationsQuery.data?.linear.connected ?? false
   const email = integrationsQuery.data?.linear.email ?? null
 
-  const initialFeedback = useMemo(() => {
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const oauthResult = params.get('oauth')
-    if (oauthResult) {
-      window.history.replaceState({}, '', window.location.pathname)
-      if (oauthResult === 'success') return 'Successfully connected to Linear.'
-      const message = params.get('message') || 'Unknown error'
-      return `Linear OAuth failed: ${message}`
-    }
-    return null
-  }, [])
-
-  const [feedback, setFeedback] = useState<string | null>(initialFeedback)
-
-  useEffect(() => {
-    if (initialFeedback?.startsWith('Successfully')) {
+    if (!oauthResult) return
+    window.history.replaceState({}, '', window.location.pathname)
+    if (oauthResult === 'success') {
+      toast.success('Successfully connected to Linear.')
       void queryClient.invalidateQueries({ queryKey: ['integrations'] })
+    } else {
+      const message = params.get('message') || 'Unknown error'
+      toast.error(`Linear OAuth failed: ${message}`)
     }
-  }, [initialFeedback, queryClient])
+  }, [queryClient])
 
   const disconnectMutation = useMutation({
     mutationFn: revokeOAuth,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['integrations'] })
-      setFeedback('Disconnected from Linear.')
+      toast.success('Disconnected from Linear.')
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
   })
 
   const handleConnect = () => {
-    setFeedback(null)
     window.location.href = '/linear/agent-install'
   }
 
@@ -412,8 +398,6 @@ function LinearOAuthSection() {
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {feedback ? <FeedbackBanner message={feedback} /> : null}
-
         <div className="rounded-lg border border-th-border bg-th-inset p-4">
           <div className="flex items-center justify-between gap-4">
             <div className="text-sm text-th-text-2">
@@ -434,7 +418,7 @@ function LinearOAuthSection() {
                   </Button>
                   <Button
                     disabled={disconnectMutation.isPending}
-                    onClick={() => { setFeedback(null); void disconnectMutation.mutateAsync() }}
+                    onClick={() => void disconnectMutation.mutateAsync()}
                     size="sm"
                     type="button"
                     variant="destructive"
@@ -476,28 +460,21 @@ function GitHubOAuthSection() {
         ? 'selected repositories'
         : `${repoCount} selected ${repoCount === 1 ? 'repository' : 'repositories'}`
 
-  const initialFeedback = useMemo(() => {
+  useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const oauthResult = params.get('github_oauth')
-    if (oauthResult) {
-      window.history.replaceState({}, '', window.location.pathname)
-      if (oauthResult === 'success') return 'GitHub App installed.'
-      const message = params.get('message') || 'Unknown error'
-      return `GitHub install failed: ${message}`
-    }
-    return null
-  }, [])
-
-  const [feedback, setFeedback] = useState<string | null>(initialFeedback)
-
-  useEffect(() => {
-    if (initialFeedback?.startsWith('GitHub App installed')) {
+    if (!oauthResult) return
+    window.history.replaceState({}, '', window.location.pathname)
+    if (oauthResult === 'success') {
+      toast.success('GitHub App installed.')
       void queryClient.invalidateQueries({ queryKey: ['integrations'] })
+    } else {
+      const message = params.get('message') || 'Unknown error'
+      toast.error(`GitHub install failed: ${message}`)
     }
-  }, [initialFeedback, queryClient])
+  }, [queryClient])
 
   const handleInstall = () => {
-    setFeedback(null)
     window.location.href = '/github/install'
   }
 
@@ -522,8 +499,6 @@ function GitHubOAuthSection() {
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {feedback ? <FeedbackBanner message={feedback} /> : null}
-
         <div className="rounded-lg border border-th-border bg-th-inset p-4">
           <div className="flex items-center justify-between gap-4">
             <div className="text-sm text-th-text-2">
@@ -573,7 +548,6 @@ function AgentSettingsSection() {
   const [drafts, setDrafts] = useState<Record<string, string>>(() =>
     buildAgentSettingDrafts(settings, agentDefaults),
   )
-  const [feedback, setFeedback] = useState<string | null>(null)
 
   useEffect(() => {
     setDrafts(buildAgentSettingDrafts(settings, agentDefaults))
@@ -589,18 +563,18 @@ function AgentSettingsSection() {
     },
     onSuccess: async (_result, variables) => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      setFeedback(`${agentSettingLabel(variables.key)} saved.`)
+      toast.success(`${agentSettingLabel(variables.key)} saved.`)
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
   })
 
   const removeMutation = useMutation({
     mutationFn: async (key: string) => { await deleteSetting(key); return key },
     onSuccess: async (key) => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      setFeedback(`${agentSettingLabel(key)} reset to the default value.`)
+      toast.success(`${agentSettingLabel(key)} reset to the default value.`)
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
   })
 
   if (settingsQuery.isPending) return <LoadingPanel title="Loading agent settings" />
@@ -619,8 +593,6 @@ function AgentSettingsSection() {
       </CardHeader>
 
       <CardContent className="space-y-5">
-        {feedback ? <FeedbackBanner message={feedback} /> : null}
-
         <div className="divide-y divide-th-border">
         {agentSettingDefinitions.map((setting) => {
           const persistedValue = settingValue(settings, setting.key)
@@ -651,7 +623,6 @@ function AgentSettingsSection() {
                     value={draftValue}
                     onValueChange={(value) => {
                       setDrafts((current) => ({ ...current, [setting.key]: value }))
-                      setFeedback(null)
                     }}
                   >
                     <SelectTrigger className="w-32">
@@ -673,7 +644,6 @@ function AgentSettingsSection() {
                         ...current,
                         [setting.key]: event.target.value,
                       }))
-                      setFeedback(null)
                     }}
                     placeholder={defaultValue || 'provider/model-id'}
                     type="text"
@@ -689,7 +659,6 @@ function AgentSettingsSection() {
                         ...current,
                         [setting.key]: event.target.value,
                       }))
-                      setFeedback(null)
                     }}
                     step={1}
                     type="number"
@@ -705,7 +674,6 @@ function AgentSettingsSection() {
                     trimmedDraft === ''
                   }
                   onClick={() => {
-                    setFeedback(null)
                     void saveMutation.mutateAsync({ key: setting.key, value: trimmedDraft })
                   }}
                   size="sm"
@@ -719,7 +687,6 @@ function AgentSettingsSection() {
                     aria-label="Reset to default"
                     disabled={saveMutation.isPending || removeMutation.isPending}
                     onClick={() => {
-                      setFeedback(null)
                       void removeMutation.mutateAsync(setting.key)
                     }}
                     size="icon"
@@ -746,35 +713,33 @@ function AdvancedSettingsSection() {
   const [keyValue, setKeyValue] = useState('')
   const [settingValueStr, setSettingValueStr] = useState('')
   const [editingKey, setEditingKey] = useState<string | null>(null)
-  const [feedback, setFeedback] = useState<string | null>(null)
 
   const saveMutation = useMutation({
     mutationFn: ({ key, value }: { key: string; value: string }) => upsertSetting(key, value),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      setFeedback(editingKey === null ? 'Setting saved.' : 'Setting updated.')
+      toast.success(editingKey === null ? 'Setting saved.' : 'Setting updated.')
       setKeyValue('')
       setSettingValueStr('')
       setEditingKey(null)
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
   })
 
   const removeMutation = useMutation({
     mutationFn: deleteSetting,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      setFeedback('Setting deleted.')
+      toast.success('Setting deleted.')
       setKeyValue('')
       setSettingValueStr('')
       setEditingKey(null)
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
   })
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
-    setFeedback(null)
     void saveMutation.mutateAsync({ key: keyValue.trim(), value: settingValueStr })
   }
 
@@ -805,8 +770,6 @@ function AdvancedSettingsSection() {
         </CardHeader>
 
         <CardContent className="space-y-4">
-          {feedback ? <FeedbackBanner message={feedback} /> : null}
-
           <form className="space-y-4" onSubmit={handleSubmit}>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Key">
@@ -837,7 +800,6 @@ function AdvancedSettingsSection() {
                     setEditingKey(null)
                     setKeyValue('')
                     setSettingValueStr('')
-                    setFeedback(null)
                   }}
                   type="button"
                   variant="ghost"
@@ -871,7 +833,6 @@ function AdvancedSettingsSection() {
                       setEditingKey(setting.key)
                       setKeyValue(setting.key)
                       setSettingValueStr(setting.value)
-                      setFeedback(null)
                     }}
                     size="sm"
                     type="button"
@@ -881,10 +842,7 @@ function AdvancedSettingsSection() {
                   </Button>
                   <Button
                     disabled={removeMutation.isPending}
-                    onClick={() => {
-                      setFeedback(null)
-                      void removeMutation.mutateAsync(setting.key)
-                    }}
+                    onClick={() => void removeMutation.mutateAsync(setting.key)}
                     size="icon"
                     type="button"
                     variant="ghost"
@@ -910,30 +868,28 @@ function ChangePasswordSection() {
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
-  const [feedback, setFeedback] = useState<string | null>(null)
 
   const mutation = useMutation({
     mutationFn: () => changePassword(currentPassword, newPassword),
     onSuccess: () => {
-      setFeedback('Password changed successfully.')
+      toast.success('Password changed successfully.')
       setCurrentPassword('')
       setNewPassword('')
       setConfirmPassword('')
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
   })
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault()
-    setFeedback(null)
 
     if (newPassword.length < 8) {
-      setFeedback('New password must be at least 8 characters.')
+      toast.error('New password must be at least 8 characters.')
       return
     }
 
     if (newPassword !== confirmPassword) {
-      setFeedback('New passwords do not match.')
+      toast.error('New passwords do not match.')
       return
     }
 
@@ -953,8 +909,6 @@ function ChangePasswordSection() {
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {feedback ? <FeedbackBanner message={feedback} /> : null}
-
         <form className="space-y-4" onSubmit={handleSubmit}>
           <Field label="Current Password">
             <Input
@@ -1002,7 +956,6 @@ function ProxySection() {
 
   const proxyEnabled = proxyQuery.data?.enabled ?? true
 
-  const [feedback, setFeedback] = useState<string | null>(null)
   const [pingResult, setPingResult] = useState<ProxyPingResult | null>(null)
 
   const toggleMutation = useMutation({
@@ -1012,20 +965,19 @@ function ProxySection() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
       await queryClient.invalidateQueries({ queryKey: ['proxy-status'] })
-      setFeedback(proxyEnabled ? 'Proxy disabled.' : 'Proxy enabled.')
+      toast.success(proxyEnabled ? 'Proxy disabled.' : 'Proxy enabled.')
       setPingResult(null)
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
   })
 
   const pingMutation = useMutation({
     mutationFn: proxyPing,
     onSuccess: (data) => {
       setPingResult(data)
-      setFeedback(null)
     },
     onError: (error: unknown) => {
-      setFeedback(formatQueryError(error))
+      toast.error(formatQueryError(error))
       setPingResult(null)
     },
   })
@@ -1044,13 +996,10 @@ function ProxySection() {
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {feedback ? <FeedbackBanner message={feedback} /> : null}
-
         <div className="flex items-center gap-3">
         <Button
           disabled={toggleMutation.isPending}
           onClick={() => {
-            setFeedback(null)
             setPingResult(null)
             void toggleMutation.mutateAsync(!proxyEnabled)
           }}
@@ -1063,7 +1012,6 @@ function ProxySection() {
         <Button
           disabled={pingMutation.isPending}
           onClick={() => {
-            setFeedback(null)
             setPingResult(null)
             void pingMutation.mutateAsync()
           }}
@@ -1141,7 +1089,6 @@ function DomainSection() {
   const existing = settingsQuery.data?.settings.find((s) => s.key === 'domain')
 
   const [domain, setDomain] = useState(existing?.value ?? '')
-  const [feedback, setFeedback] = useState<string | null>(null)
 
   const prevExisting = useRef(existing?.value)
   if (existing?.value !== prevExisting.current) {
@@ -1153,19 +1100,19 @@ function DomainSection() {
     mutationFn: (value: string) => upsertSetting('domain', value),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      setFeedback('Domain saved.')
+      toast.success('Domain saved.')
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
   })
 
   const removeMutation = useMutation({
     mutationFn: () => deleteSetting('domain'),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      setFeedback('Domain removed.')
+      toast.success('Domain removed.')
       setDomain('')
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
   })
 
   return (
@@ -1182,13 +1129,10 @@ function DomainSection() {
       </CardHeader>
 
       <CardContent className="space-y-4">
-        {feedback ? <FeedbackBanner message={feedback} /> : null}
-
         <form
           className="space-y-4"
           onSubmit={(e) => {
             e.preventDefault()
-            setFeedback(null)
             void saveMutation.mutateAsync(domain.trim())
           }}
         >
@@ -1214,10 +1158,7 @@ function DomainSection() {
             {existing ? (
               <Button
                 disabled={removeMutation.isPending}
-                onClick={() => {
-                  setFeedback(null)
-                  void removeMutation.mutateAsync()
-                }}
+                onClick={() => void removeMutation.mutateAsync()}
                 type="button"
                 variant="destructive"
               >
@@ -1276,7 +1217,6 @@ function ApiTokensSection() {
   const [scopes, setScopes] = useState<Set<ApiTokenScope>>(
     () => new Set<ApiTokenScope>(['read', 'write']),
   )
-  const [feedback, setFeedback] = useState<string | null>(null)
   const [issuedToken, setIssuedToken] = useState<ApiTokenWithPlaintext | null>(null)
 
   const createMutation = useMutation({
@@ -1287,18 +1227,17 @@ function ApiTokensSection() {
       setIssuedToken(token)
       setName('')
       setScopes(new Set<ApiTokenScope>(['read', 'write']))
-      setFeedback(null)
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
   })
 
   const revokeMutation = useMutation({
     mutationFn: (id: string) => deleteApiToken(id),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ['api-tokens'] })
-      setFeedback('Token revoked.')
+      toast.success('Token revoked.')
     },
-    onError: (error: unknown) => setFeedback(formatQueryError(error)),
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
   })
 
   const toggleScope = (scope: ApiTokenScope) => {
@@ -1312,13 +1251,12 @@ function ApiTokensSection() {
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    setFeedback(null)
     if (name.trim().length === 0) {
-      setFeedback('Name is required.')
+      toast.error('Name is required.')
       return
     }
     if (scopes.size === 0) {
-      setFeedback('At least one scope is required.')
+      toast.error('At least one scope is required.')
       return
     }
     void createMutation.mutateAsync()
@@ -1340,8 +1278,6 @@ function ApiTokensSection() {
         </CardHeader>
 
         <CardContent className="space-y-5">
-          {feedback ? <FeedbackBanner message={feedback} /> : null}
-
           <form className="space-y-4" onSubmit={submit}>
             <Field label="Name">
               <Input
@@ -1407,10 +1343,7 @@ function ApiTokensSection() {
               <ApiTokenRow
                 key={token.id}
                 token={token}
-                onRevoke={() => {
-                  setFeedback(null)
-                  void revokeMutation.mutateAsync(token.id)
-                }}
+                onRevoke={() => void revokeMutation.mutateAsync(token.id)}
                 revoking={revokeMutation.isPending}
               />
             ))}

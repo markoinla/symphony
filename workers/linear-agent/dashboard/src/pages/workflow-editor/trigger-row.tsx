@@ -1,6 +1,17 @@
 import { Trash2 } from 'lucide-react'
 
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -112,15 +123,33 @@ export function TriggerRow({
           >
             {isSaving ? 'Saving…' : isDirty ? 'Save' : 'Saved'}
           </Button>
-          <Button
-            aria-label="Delete trigger"
-            onClick={onDelete}
-            size="icon-sm"
-            type="button"
-            variant="ghost"
-          >
-            <Trash2 className="h-3.5 w-3.5 text-th-danger" />
-          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                aria-label="Delete trigger"
+                size="icon-sm"
+                type="button"
+                variant="ghost"
+              >
+                <Trash2 className="h-3.5 w-3.5 text-th-danger" />
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete trigger?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This trigger will be removed from the workflow. This cannot be
+                  undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={onDelete} variant="destructive">
+                  Delete trigger
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </div>
       </div>
 

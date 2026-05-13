@@ -147,14 +147,15 @@ export function PromptEditor({
               </p>
               <div className="mt-1.5 grid gap-1">
                 {group.entries.map((name) => (
-                  <button
-                    className="rounded bg-th-muted px-2 py-1 text-left font-mono text-[11px] text-th-text-2 transition hover:bg-th-accent-muted hover:text-th-accent"
+                  <Button
+                    className="h-auto justify-start rounded bg-th-muted px-2 py-1 text-left font-mono text-[11px] font-normal text-th-text-2 shadow-none hover:bg-th-accent-muted hover:text-th-accent"
                     key={name}
                     onClick={() => insertVariable(name)}
                     type="button"
+                    variant="ghost"
                   >
                     {name}
-                  </button>
+                  </Button>
                 ))}
               </div>
             </div>

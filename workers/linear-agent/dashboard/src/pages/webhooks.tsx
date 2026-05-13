@@ -10,6 +10,7 @@ import {
 import { formatQueryError } from '../lib/helpers'
 import {
   Badge,
+  Button,
   Card,
   CardContent,
   CardDescription,
@@ -98,10 +99,11 @@ function WebhookRow({
 }) {
   return (
     <div>
-      <button
+      <Button
         type="button"
         onClick={onToggle}
-        className="grid w-full grid-cols-[auto_auto_1fr_auto_auto] items-center gap-3 px-4 py-3 text-left hover:bg-th-muted"
+        variant="ghost"
+        className="grid h-auto w-full grid-cols-[auto_auto_1fr_auto_auto] items-center justify-start gap-3 rounded-none px-4 py-3 text-left font-normal hover:bg-th-muted"
       >
         <ChevronRight
           className={cn(
@@ -130,7 +132,7 @@ function WebhookRow({
           {row.deduped ? <span>deduped</span> : null}
         </span>
         <DispatchedBadge action={row.dispatched_action} />
-      </button>
+      </Button>
 
       {expanded ? (
         <div className="bg-th-muted/40 px-4 pb-4">

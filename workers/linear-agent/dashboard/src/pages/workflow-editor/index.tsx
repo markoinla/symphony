@@ -2,7 +2,19 @@ import { useMemo, useState } from 'react'
 import { Link, useParams } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -17,7 +29,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Field } from '@/components/field'
 import {
   ErrorPanel,
-  FeedbackBanner,
   LoadingPanel,
 } from '@/components/feedback'
 import {
@@ -153,8 +164,6 @@ export function WorkflowEditorView() {
   }, [settingsQuery.data])
 
   const [draft, setDraft] = useState<Draft | null>(null)
-  const [feedback, setFeedback] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
   const [triggerDrafts, setTriggerDrafts] = useState<Record<string, Trigger>>(
     {},
   )
@@ -217,35 +226,31 @@ export function WorkflowEditorView() {
 
   function handleSave() {
     if (!draft) return
-    setError(null)
     updateWorkflow.mutate(draftToBody(draft), {
-      onSuccess: () => setFeedback('Workflow saved.'),
-      onError: (err) => setError(formatQueryError(err)),
+      onSuccess: () => toast.success('Workflow saved.'),
+      onError: (err) => toast.error(formatQueryError(err)),
     })
   }
 
   function handlePublish() {
-    setError(null)
     publish.mutate(undefined, {
-      onSuccess: () => setFeedback('Workflow published.'),
-      onError: (err) => setError(formatQueryError(err)),
+      onSuccess: () => toast.success('Workflow published.'),
+      onError: (err) => toast.error(formatQueryError(err)),
     })
   }
 
   function handleDelete() {
-    if (!confirm(`Delete workflow "${workflow.name}"? This cannot be undone.`))
-      return
     deleteWorkflow.mutate(workflow.id, {
       onSuccess: () => {
         window.location.href = '/dashboard/workflows'
       },
-      onError: (err) => setError(formatQueryError(err)),
+      onError: (err) => toast.error(formatQueryError(err)),
     })
   }
 
   function handleAddTrigger() {
     createTrigger.mutate(newTriggerDraft(), {
-      onError: (err) => setError(formatQueryError(err)),
+      onError: (err) => toast.error(formatQueryError(err)),
     })
   }
 
@@ -280,16 +285,15 @@ export function WorkflowEditorView() {
     updateTrigger.mutate(
       { id: triggerId, body },
       {
-        onSuccess: () => setFeedback('Trigger saved.'),
-        onError: (err) => setError(formatQueryError(err)),
+        onSuccess: () => toast.success('Trigger saved.'),
+        onError: (err) => toast.error(formatQueryError(err)),
       },
     )
   }
 
   function handleTriggerDelete(triggerId: string) {
-    if (!confirm('Delete this trigger?')) return
     deleteTrigger.mutate(triggerId, {
-      onError: (err) => setError(formatQueryError(err)),
+      onError: (err) => toast.error(formatQueryError(err)),
     })
   }
 
@@ -312,16 +316,34 @@ export function WorkflowEditorView() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Button
-            disabled={deleteWorkflow.isPending}
-            onClick={handleDelete}
-            size="sm"
-            type="button"
-            variant="ghost"
-          >
-            <Trash2 className="mr-1 h-3.5 w-3.5 text-th-danger" />
-            Delete
-          </Button>
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                disabled={deleteWorkflow.isPending}
+                size="sm"
+                type="button"
+                variant="ghost"
+              >
+                <Trash2 className="mr-1 h-3.5 w-3.5 text-th-danger" />
+                Delete
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Delete workflow?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will permanently delete &ldquo;{workflow.name}&rdquo; and
+                  all its triggers. This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={handleDelete} variant="destructive">
+                  Delete workflow
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
           <Button
             disabled={publish.isPending}
             onClick={handlePublish}
@@ -340,9 +362,6 @@ export function WorkflowEditorView() {
           </Button>
         </div>
       </div>
-
-      {feedback ? <FeedbackBanner message={feedback} variant="success" /> : null}
-      {error ? <FeedbackBanner message={error} variant="error" /> : null}
 
       <Tabs defaultValue="basics">
         <TabsList>
