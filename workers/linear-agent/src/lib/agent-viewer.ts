@@ -6,12 +6,10 @@
  * user id never changes for a given org install. We cache the lookup
  * in KV under `viewer:<linearOrgId>` with a generous TTL so we only
  * hit Linear's GraphQL on cold starts or post-reinstall.
- *
- * The fetch shape mirrors the existing `viewer { id }` queries in
- * `oauth-helper.ts` / `auth.ts`.
  */
 
-const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
+import { linearGraphQL, type LinearTokenRefresher } from "./linear-graphql";
+
 const VIEWER_TTL_SECONDS = 24 * 60 * 60; // 24h — viewer id is stable
 const VIEWER_QUERY = `query { viewer { id } }`;
 
@@ -31,11 +29,17 @@ export interface ViewerCache {
  * result in `cache` keyed by `linearOrgId`. Returns `null` if the
  * query fails (caller should log + continue — delegate-set is not
  * worth aborting a run for).
+ *
+ * `onTokenExpired` is honored even though this is a best-effort path:
+ * post-expiry `null`s would force the caller to fall back, and KV
+ * caching means a one-time refresh pays off across every subsequent
+ * session for the same org.
  */
 export async function resolveAgentViewerId(
   token: string,
   linearOrgId: string,
   cache: ViewerCache,
+  onTokenExpired?: LinearTokenRefresher,
 ): Promise<string | null> {
   const key = `viewer:${linearOrgId}`;
   try {
@@ -46,21 +50,13 @@ export async function resolveAgentViewerId(
   }
 
   try {
-    const res = await fetch(LINEAR_GRAPHQL_URL, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: token.startsWith("Bearer ") ? token : `Bearer ${token}`,
-      },
-      body: JSON.stringify({ query: VIEWER_QUERY }),
+    const data = await linearGraphQL<{ viewer?: { id?: string } }>({
+      accessToken: token,
+      query: VIEWER_QUERY,
+      opName: "viewer",
+      onTokenExpired,
     });
-    if (!res.ok) return null;
-    const json = (await res.json()) as {
-      data?: { viewer?: { id?: string } };
-      errors?: Array<{ message: string }>;
-    };
-    if (json.errors && json.errors.length > 0) return null;
-    const id = json.data?.viewer?.id;
+    const id = data.viewer?.id;
     if (!id) return null;
 
     try {

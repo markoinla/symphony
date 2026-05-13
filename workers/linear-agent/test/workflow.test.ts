@@ -316,6 +316,7 @@ function seededDb(): FakeD1 {
     status: "active",
     installed_at: NOW_SEC(),
     refreshed_at: NOW_SEC(),
+    expires_at: null,
   });
   db.projects.set(`${ORG_ID}:team-abc`, {
     id: "project-uuid-1",
@@ -495,6 +496,7 @@ describe("SessionRunner.run — abort branches", () => {
       status: "active",
       installed_at: NOW_SEC(),
       refreshed_at: NOW_SEC(),
+      expires_at: null,
     });
     const env = makeEnv(kv, {}, installOnlyDb);
     const runner = buildRunner(env);
@@ -825,6 +827,7 @@ describe("SessionRunner.run — multi-turn loop", () => {
       status: "active",
       installed_at: NOW_SEC(),
       refreshed_at: NOW_SEC(),
+      expires_at: null,
     });
     db.projects.set(`${ORG_ID}:team-abc`, {
       id: "project-uuid-1",

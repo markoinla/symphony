@@ -214,6 +214,7 @@ describe("/admin/installations", () => {
       status: "active",
       installed_at: nowSec(),
       refreshed_at: nowSec(),
+      expires_at: null,
     });
 
     const res = await app.fetch(

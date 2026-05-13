@@ -14,7 +14,7 @@
  *   https://linear.app/developers/agent-signals
  */
 
-const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
+import { linearGraphQL, type LinearTokenRefresher } from "./linear-graphql";
 
 // Workflow state lookup — finds the team's primary `started` state.
 const WORKFLOW_STATES_QUERY = `
@@ -75,32 +75,26 @@ export interface WorkflowStateRef {
   name: string;
 }
 
-type TokenRefresher = () => Promise<string | null>;
-
 // Update an issue's state and/or delegate. Used to reflect the agent
 // taking ownership of an issue when a session starts.
 export async function updateIssue(
   token: string,
   input: UpdateIssueInput,
-  onTokenExpired?: TokenRefresher,
+  onTokenExpired?: LinearTokenRefresher,
 ): Promise<{ success: boolean }> {
   const variablesInput: Record<string, string> = {};
   if (input.stateId !== undefined) variablesInput.stateId = input.stateId;
   if (input.delegateId !== undefined)
     variablesInput.delegateId = input.delegateId;
 
-  const body = JSON.stringify({
+  const data = await linearGraphQL<{ issueUpdate?: { success?: boolean } }>({
+    accessToken: token,
     query: ISSUE_UPDATE_MUTATION,
     variables: { id: input.issueId, input: variablesInput },
-  });
-
-  const json = await postGraphQL<{ issueUpdate?: { success?: boolean } }>(
-    token,
-    body,
-    "issueUpdate",
+    opName: "issueUpdate",
     onTokenExpired,
-  );
-  return { success: json.issueUpdate?.success ?? false };
+  });
+  return { success: data.issueUpdate?.success ?? false };
 }
 
 // Resolve the team's `started` workflow state with the lowest position
@@ -108,14 +102,9 @@ export async function updateIssue(
 export async function fetchTeamStartedState(
   token: string,
   teamId: string,
-  onTokenExpired?: TokenRefresher,
+  onTokenExpired?: LinearTokenRefresher,
 ): Promise<WorkflowStateRef | null> {
-  const body = JSON.stringify({
-    query: WORKFLOW_STATES_QUERY,
-    variables: { teamId },
-  });
-
-  const json = await postGraphQL<{
+  const data = await linearGraphQL<{
     workflowStates?: {
       nodes?: Array<{
         id: string;
@@ -124,9 +113,15 @@ export async function fetchTeamStartedState(
         type: string;
       }>;
     };
-  }>(token, body, "workflowStates", onTokenExpired);
+  }>({
+    accessToken: token,
+    query: WORKFLOW_STATES_QUERY,
+    variables: { teamId },
+    opName: "workflowStates",
+    onTokenExpired,
+  });
 
-  const nodes = json.workflowStates?.nodes ?? [];
+  const nodes = data.workflowStates?.nodes ?? [];
   if (nodes.length === 0) return null;
   const lowest = nodes.reduce((acc, node) =>
     node.position < acc.position ? node : acc,
@@ -140,69 +135,19 @@ export async function fetchTeamStartedState(
 export async function updateAgentSession(
   token: string,
   input: UpdateAgentSessionInput,
-  onTokenExpired?: TokenRefresher,
+  onTokenExpired?: LinearTokenRefresher,
 ): Promise<{ success: boolean }> {
   const variablesInput: Record<string, unknown> = {};
   if (input.externalUrls !== undefined)
     variablesInput.externalUrls = input.externalUrls;
   if (input.plan !== undefined) variablesInput.plan = input.plan;
 
-  const body = JSON.stringify({
+  const data = await linearGraphQL<{ agentSessionUpdate?: { success?: boolean } }>({
+    accessToken: token,
     query: AGENT_SESSION_UPDATE_MUTATION,
     variables: { id: input.agentSessionId, input: variablesInput },
-  });
-
-  const json = await postGraphQL<{ agentSessionUpdate?: { success?: boolean } }>(
-    token,
-    body,
-    "agentSessionUpdate",
+    opName: "agentSessionUpdate",
     onTokenExpired,
-  );
-  return { success: json.agentSessionUpdate?.success ?? false };
-}
-
-// Shared bearer-auth POST with 401-refresh + `{ data, errors }` envelope
-// handling. The `opName` is prefixed onto both HTTP and GraphQL errors
-// so callers can grep for the operation that failed.
-async function postGraphQL<T>(
-  initialToken: string,
-  body: string,
-  opName: string,
-  onTokenExpired: TokenRefresher | undefined,
-): Promise<T> {
-  let token = initialToken;
-  let res = await postWithToken(token, body);
-  if (res.status === 401 && onTokenExpired) {
-    const refreshed = await onTokenExpired();
-    if (refreshed) {
-      token = refreshed;
-      res = await postWithToken(token, body);
-    }
-  }
-  if (!res.ok) {
-    throw new Error(
-      `${opName} http ${res.status}: ${(await res.text()).slice(0, 500)}`,
-    );
-  }
-  const json = (await res.json()) as {
-    data?: T;
-    errors?: Array<{ message: string }>;
-  };
-  if (json.errors && json.errors.length > 0) {
-    throw new Error(
-      `${opName} graphql: ${json.errors.map((e) => e.message).join("; ")}`,
-    );
-  }
-  return (json.data ?? ({} as T)) as T;
-}
-
-async function postWithToken(token: string, body: string): Promise<Response> {
-  return fetch(LINEAR_GRAPHQL_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: token.startsWith("Bearer ") ? token : `Bearer ${token}`,
-    },
-    body,
   });
+  return { success: data.agentSessionUpdate?.success ?? false };
 }

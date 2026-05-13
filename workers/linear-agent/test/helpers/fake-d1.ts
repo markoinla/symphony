@@ -31,6 +31,7 @@ export interface LinearAgentInstallRow {
   status: string;
   installed_at: number;
   refreshed_at: number;
+  expires_at: number | null;
 }
 
 export interface ProjectRow {
@@ -176,6 +177,7 @@ class FakeStatement {
         installedByUserId,
         installedAt,
         refreshedAt,
+        expiresAt,
       ] = this.bindings as [
         string,
         string,
@@ -186,6 +188,7 @@ class FakeStatement {
         string,
         number,
         number,
+        number | null,
       ];
       const existing = findInstallByLinearOrg(this.db, linearOrganizationId);
       const row: LinearAgentInstallRow = {
@@ -199,6 +202,7 @@ class FakeStatement {
         status: "active",
         installed_at: existing?.installed_at ?? installedAt,
         refreshed_at: refreshedAt,
+        expires_at: expiresAt ?? null,
       };
       // Map is keyed by organization_id for fast getByOrgId. Drop any
       // previous row that pointed at the same org but a different
@@ -207,11 +211,22 @@ class FakeStatement {
       this.db.linearAgentInstalls.set(organizationId, row);
       return { success: true, meta: { changes: 1 } };
     }
-    if (/^UPDATE linear_agent_installs/i.test(sql)) {
-      const [accessToken, refreshTokenArg, refreshedAt, id] = this.bindings as [
+    if (/^UPDATE linear_agent_installs[\s\S]+expires_at\s*=\s*CASE/i.test(sql)) {
+      // refreshToken(...) UPDATE — preserves expires_at when the
+      // caller passed undefined (encoded as preserveExpires=1).
+      const [
+        accessToken,
+        refreshTokenArg,
+        refreshedAt,
+        preserveExpires,
+        expiresArg,
+        id,
+      ] = this.bindings as [
         string,
         string | null,
         number,
+        number,
+        number | null,
         string,
       ];
       for (const row of this.db.linearAgentInstalls.values()) {
@@ -219,6 +234,18 @@ class FakeStatement {
           row.access_token = accessToken;
           if (refreshTokenArg !== null) row.refresh_token = refreshTokenArg;
           row.refreshed_at = refreshedAt;
+          if (preserveExpires !== 1) row.expires_at = expiresArg;
+          row.status = "active";
+          return { success: true, meta: { changes: 1 } };
+        }
+      }
+      return { success: true, meta: { changes: 0 } };
+    }
+    if (/^UPDATE linear_agent_installs[\s\S]+status\s*=\s*'reconnect_required'/i.test(sql)) {
+      const [id] = this.bindings as [string];
+      for (const row of this.db.linearAgentInstalls.values()) {
+        if (row.id === id) {
+          row.status = "reconnect_required";
           return { success: true, meta: { changes: 1 } };
         }
       }

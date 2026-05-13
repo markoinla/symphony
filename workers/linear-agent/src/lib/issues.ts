@@ -18,7 +18,7 @@
  * accept state names directly.
  */
 
-const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
+import { linearGraphQL, type LinearTokenRefresher } from "./linear-graphql";
 
 export interface IssueSnapshot {
   id: string;
@@ -59,10 +59,17 @@ const UPDATE_ISSUE_STATE_MUTATION = `
 export async function getIssueState(
   accessToken: string,
   issueId: string,
+  onTokenExpired?: LinearTokenRefresher,
 ): Promise<IssueSnapshot | null> {
-  const json = await linearGql<{
+  const json = await linearGraphQL<{
     issue?: { id: string; identifier: string; state: { name: string } } | null;
-  }>(accessToken, GET_ISSUE_STATE_QUERY, { id: issueId });
+  }>({
+    accessToken,
+    query: GET_ISSUE_STATE_QUERY,
+    variables: { id: issueId },
+    opName: "linear_graphql.getIssueState",
+    onTokenExpired,
+  });
   if (!json.issue) return null;
   return {
     id: json.issue.id,
@@ -85,18 +92,22 @@ export async function transitionIssue(
   accessToken: string,
   issueId: string,
   targetStateName: string,
+  onTokenExpired?: LinearTokenRefresher,
 ): Promise<{ from: string; to: string } | null> {
-  const snapshot = await getIssueState(accessToken, issueId);
+  const snapshot = await getIssueState(accessToken, issueId, onTokenExpired);
   if (!snapshot) return null;
   if (snapshot.state.name === targetStateName) return null;
 
-  const resolved = await linearGql<{
+  const resolved = await linearGraphQL<{
     issue?: {
       team?: { states?: { nodes?: Array<{ id: string }> } };
     } | null;
-  }>(accessToken, RESOLVE_STATE_ID_QUERY, {
-    issueId,
-    stateName: targetStateName,
+  }>({
+    accessToken,
+    query: RESOLVE_STATE_ID_QUERY,
+    variables: { issueId, stateName: targetStateName },
+    opName: "linear_graphql.resolveStateId",
+    onTokenExpired,
   });
   const stateId = resolved.issue?.team?.states?.nodes?.[0]?.id;
   if (!stateId) {
@@ -111,11 +122,14 @@ export async function transitionIssue(
     return null;
   }
 
-  const updated = await linearGql<{
+  const updated = await linearGraphQL<{
     issueUpdate?: { success?: boolean };
-  }>(accessToken, UPDATE_ISSUE_STATE_MUTATION, {
-    issueId,
-    stateId,
+  }>({
+    accessToken,
+    query: UPDATE_ISSUE_STATE_MUTATION,
+    variables: { issueId, stateId },
+    opName: "linear_graphql.updateIssueState",
+    onTokenExpired,
   });
   if (!updated.issueUpdate?.success) {
     throw new Error(
@@ -123,36 +137,4 @@ export async function transitionIssue(
     );
   }
   return { from: snapshot.state.name, to: targetStateName };
-}
-
-async function linearGql<T>(
-  accessToken: string,
-  query: string,
-  variables: Record<string, unknown>,
-): Promise<T> {
-  const res = await fetch(LINEAR_GRAPHQL_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: accessToken.startsWith("Bearer ")
-        ? accessToken
-        : `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({ query, variables }),
-  });
-  if (!res.ok) {
-    throw new Error(
-      `linear_graphql http ${res.status}: ${(await res.text()).slice(0, 500)}`,
-    );
-  }
-  const json = (await res.json()) as {
-    data?: T;
-    errors?: Array<{ message: string }>;
-  };
-  if (json.errors && json.errors.length > 0) {
-    throw new Error(
-      `linear_graphql errors: ${json.errors.map((e) => e.message).join("; ")}`,
-    );
-  }
-  return json.data as T;
 }

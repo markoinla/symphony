@@ -16,6 +16,7 @@
  * SDK docs (https://linear.app/developers/agent-interaction).
  */
 
+import { linearGraphQL, type LinearTokenRefresher } from "./linear-graphql";
 import type { AgentActivityContent } from "../types/agent-session";
 
 export interface ActivityClient {
@@ -24,8 +25,6 @@ export interface ActivityClient {
     content: AgentActivityContent;
   }): Promise<{ success: boolean }>;
 }
-
-const LINEAR_GRAPHQL_URL = "https://api.linear.app/graphql";
 
 const AGENT_ACTIVITY_CREATE_MUTATION = `
   mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
@@ -48,54 +47,39 @@ const AGENT_ACTIVITY_CREATE_MUTATION = `
  * Pass `onTokenExpired` to enable the reactive refresh path; callers
  * without a refresh source (tests, one-shot smoke checks) can omit
  * it and the client will throw on 401 like before.
+ *
+ * Latching: the client caches the most recent post-refresh token so
+ * subsequent activities in the same stream skip the 401 round-trip.
+ * That matters for the dispatcher-stream call site, which can post
+ * dozens of activities per turn — we don't want each one to re-cycle
+ * through 401-then-refresh after the first expiry has already been
+ * observed.
  */
 export function buildActivityClient(
   accessToken: string,
-  onTokenExpired?: () => Promise<string | null>,
+  onTokenExpired?: LinearTokenRefresher,
 ): ActivityClient {
   let currentToken = accessToken;
   return {
     async createAgentActivity(input) {
-      const body = JSON.stringify({
+      const data = await linearGraphQL<{
+        agentActivityCreate?: { success?: boolean };
+      }>({
+        accessToken: currentToken,
         query: AGENT_ACTIVITY_CREATE_MUTATION,
         variables: { input },
+        opName: "agentActivityCreate",
+        onTokenExpired: onTokenExpired
+          ? async () => {
+              const refreshed = await onTokenExpired();
+              if (refreshed) currentToken = refreshed;
+              return refreshed;
+            }
+          : undefined,
       });
-      let res = await postWithToken(currentToken, body);
-      if (res.status === 401 && onTokenExpired) {
-        const refreshed = await onTokenExpired();
-        if (refreshed) {
-          currentToken = refreshed;
-          res = await postWithToken(currentToken, body);
-        }
-      }
-      if (!res.ok) {
-        throw new Error(
-          `agentActivityCreate http ${res.status}: ${(await res.text()).slice(0, 500)}`,
-        );
-      }
-      const json = (await res.json()) as {
-        data?: { agentActivityCreate?: { success?: boolean } };
-        errors?: Array<{ message: string }>;
-      };
-      if (json.errors && json.errors.length > 0) {
-        throw new Error(
-          `agentActivityCreate graphql: ${json.errors.map((e) => e.message).join("; ")}`,
-        );
-      }
-      return { success: json.data?.agentActivityCreate?.success ?? false };
+      return { success: data.agentActivityCreate?.success ?? false };
     },
   };
-}
-
-async function postWithToken(token: string, body: string): Promise<Response> {
-  return fetch(LINEAR_GRAPHQL_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: token.startsWith("Bearer ") ? token : `Bearer ${token}`,
-    },
-    body,
-  });
 }
 
 export async function postThought(
@@ -192,42 +176,23 @@ const AGENT_SESSION_CREATE_ON_ISSUE_MUTATION = `
 export async function createAgentSessionOnIssue(
   accessToken: string,
   issueId: string,
+  onTokenExpired?: LinearTokenRefresher,
 ): Promise<{ success: boolean; sessionId: string | null }> {
-  const res = await fetch(LINEAR_GRAPHQL_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: accessToken.startsWith("Bearer ")
-        ? accessToken
-        : `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({
-      query: AGENT_SESSION_CREATE_ON_ISSUE_MUTATION,
-      variables: { input: { issueId } },
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(
-      `agentSessionCreateOnIssue http ${res.status}: ${(await res.text()).slice(0, 500)}`,
-    );
-  }
-  const json = (await res.json()) as {
-    data?: {
-      agentSessionCreateOnIssue?: {
-        success?: boolean;
-        agentSession?: { id?: string };
-      };
+  const data = await linearGraphQL<{
+    agentSessionCreateOnIssue?: {
+      success?: boolean;
+      agentSession?: { id?: string };
     };
-    errors?: Array<{ message: string }>;
-  };
-  if (json.errors && json.errors.length > 0) {
-    throw new Error(
-      `agentSessionCreateOnIssue graphql: ${json.errors.map((e) => e.message).join("; ")}`,
-    );
-  }
+  }>({
+    accessToken,
+    query: AGENT_SESSION_CREATE_ON_ISSUE_MUTATION,
+    variables: { input: { issueId } },
+    opName: "agentSessionCreateOnIssue",
+    onTokenExpired,
+  });
   return {
-    success: json.data?.agentSessionCreateOnIssue?.success ?? false,
-    sessionId: json.data?.agentSessionCreateOnIssue?.agentSession?.id ?? null,
+    success: data.agentSessionCreateOnIssue?.success ?? false,
+    sessionId: data.agentSessionCreateOnIssue?.agentSession?.id ?? null,
   };
 }
 
@@ -254,48 +219,29 @@ export async function createAttachment(
     title: string;
     subtitle?: string;
   },
+  onTokenExpired?: LinearTokenRefresher,
 ): Promise<{ success: boolean; attachmentId: string | null }> {
-  const res = await fetch(LINEAR_GRAPHQL_URL, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: accessToken.startsWith("Bearer ")
-        ? accessToken
-        : `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({
-      query: ATTACHMENT_CREATE_MUTATION,
-      variables: {
-        input: {
-          issueId: args.issueId,
-          url: args.url,
-          title: args.title,
-          ...(args.subtitle ? { subtitle: args.subtitle } : {}),
-        },
-      },
-    }),
-  });
-  if (!res.ok) {
-    throw new Error(
-      `attachmentCreate http ${res.status}: ${(await res.text()).slice(0, 500)}`,
-    );
-  }
-  const json = (await res.json()) as {
-    data?: {
-      attachmentCreate?: {
-        success?: boolean;
-        attachment?: { id?: string };
-      };
+  const data = await linearGraphQL<{
+    attachmentCreate?: {
+      success?: boolean;
+      attachment?: { id?: string };
     };
-    errors?: Array<{ message: string }>;
-  };
-  if (json.errors && json.errors.length > 0) {
-    throw new Error(
-      `attachmentCreate graphql: ${json.errors.map((e) => e.message).join("; ")}`,
-    );
-  }
+  }>({
+    accessToken,
+    query: ATTACHMENT_CREATE_MUTATION,
+    variables: {
+      input: {
+        issueId: args.issueId,
+        url: args.url,
+        title: args.title,
+        ...(args.subtitle ? { subtitle: args.subtitle } : {}),
+      },
+    },
+    opName: "attachmentCreate",
+    onTokenExpired,
+  });
   return {
-    success: json.data?.attachmentCreate?.success ?? false,
-    attachmentId: json.data?.attachmentCreate?.attachment?.id ?? null,
+    success: data.attachmentCreate?.success ?? false,
+    attachmentId: data.attachmentCreate?.attachment?.id ?? null,
   };
 }

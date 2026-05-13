@@ -113,11 +113,21 @@ export function buildOAuthRouter() {
         );
       }
 
+      // Persist `expires_at` so the proactive refresh path in
+      // `refreshInstallTokenIfNeeded` can skip Linear's `/oauth/token`
+      // when the token still has runway. Linear's `expires_in` is in
+      // seconds; convert to a unix-seconds wall-clock value.
+      const expiresAt =
+        typeof token.expires_in === "number"
+          ? Math.floor(Date.now() / 1000) + token.expires_in
+          : null;
+
       await new LinearAgentInstallStore(c.env.DB).upsert({
         organizationId: stateData.orgId,
         linearOrganizationId: linearOrgId,
         accessToken: token.access_token,
         refreshToken: (token as { refresh_token?: string }).refresh_token,
+        expiresAt,
         scopes: token.scope,
         installedByUserId: stateData.userId,
       });
