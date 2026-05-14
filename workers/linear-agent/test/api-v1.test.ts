@@ -1144,6 +1144,58 @@ describe("/api/v1/workflows", () => {
     expect(db.workflows.size).toBe(1);
   });
 
+  it("duplicate idempotency is scoped to the source workflow id", async () => {
+    asUser("org-1");
+    const db = new ApiD1();
+    const env = makeEnv(db);
+    db.workflows.set("w1", baseWorkflow({ id: "w1", organization_id: "org-1", name: "Alpha" }));
+    db.workflows.set("w2", baseWorkflow({ id: "w2", organization_id: "org-1", name: "Beta" }));
+    const app = buildApp();
+    const headers = { "Idempotency-Key": "dup-key-1" };
+
+    // Duplicate w1
+    const first = await app.fetch(
+      new Request("https://agent.example/api/v1/workflows/w1/duplicate", {
+        method: "POST",
+        headers,
+      }),
+      env,
+      makeExecCtx(),
+    );
+    expect(first.status).toBe(201);
+    const firstBody = (await first.json()) as { workflow: { id: string; name: string } };
+    expect(firstBody.workflow.name).toBe("Alpha (copy)");
+
+    // Duplicate w2 with the same key — must create independently, not replay w1's duplicate
+    const second = await app.fetch(
+      new Request("https://agent.example/api/v1/workflows/w2/duplicate", {
+        method: "POST",
+        headers,
+      }),
+      env,
+      makeExecCtx(),
+    );
+    expect(second.status).toBe(201);
+    expect(second.headers.get("Idempotent-Replayed")).toBeNull();
+    const secondBody = (await second.json()) as { workflow: { id: string; name: string } };
+    expect(secondBody.workflow.name).toBe("Beta (copy)");
+    expect(secondBody.workflow.id).not.toBe(firstBody.workflow.id);
+
+    // Re-duplicate w1 with the same key — must replay the first duplicate
+    const third = await app.fetch(
+      new Request("https://agent.example/api/v1/workflows/w1/duplicate", {
+        method: "POST",
+        headers,
+      }),
+      env,
+      makeExecCtx(),
+    );
+    expect(third.status).toBe(201);
+    expect(third.headers.get("Idempotent-Replayed")).toBe("true");
+    const thirdBody = (await third.json()) as { workflow: { id: string; name: string } };
+    expect(thirdBody.workflow.id).toBe(firstBody.workflow.id);
+  });
+
   it("rejects cross-org workflow access (orgId scoping)", async () => {
     asUser("org-2");
     const db = new ApiD1();
