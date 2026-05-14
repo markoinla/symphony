@@ -517,6 +517,86 @@ class ApiStatement {
   async all<T>(): Promise<{ success: true; results: T[] }> {
     const sql = norm(this.sql);
 
+    if (/FROM workflow_triggers t JOIN workflows w/i.test(sql)) {
+      const [eventType, orgId, teamId, userId, toState, fromState, labelName] =
+        this.bindings as [
+          string,
+          string | null,
+          string | null,
+          string | null,
+          string | null,
+          string | null,
+          string | null,
+        ];
+
+      const rows = Array.from(this.db.triggers.values())
+        .map((t) => ({ t, w: this.db.workflows.get(t.workflow_id) }))
+        .filter((pair): pair is { t: TriggerRow; w: WorkflowRow } => !!pair.w)
+        .filter(({ t, w }) => t.enabled === 1 && w.status === "published")
+        .filter(({ t }) => t.event_type === eventType)
+        .filter(({ w }) =>
+          (w.organization_id !== null && w.organization_id === orgId) ||
+          (w.team_id !== null && w.team_id === teamId) ||
+          (w.user_id !== null && w.user_id === userId),
+        )
+        .filter(({ t }) => t.to_state === null || t.to_state === toState)
+        .filter(({ t }) => t.from_state === null || t.from_state === fromState)
+        .filter(({ t }) => t.label_name === null || t.label_name === labelName)
+        .sort((a, b) => {
+          const aTier = a.w.user_id !== null ? 2 : a.w.team_id !== null ? 1 : 0;
+          const bTier = b.w.user_id !== null ? 2 : b.w.team_id !== null ? 1 : 0;
+          return bTier - aTier || b.t.priority - a.t.priority || a.t.id.localeCompare(b.t.id);
+        })
+        .map(({ t, w }) => ({
+          t_id: t.id,
+          t_workflow_id: t.workflow_id,
+          t_event_type: t.event_type,
+          t_to_state: t.to_state,
+          t_from_state: t.from_state,
+          t_label_name: t.label_name,
+          t_comment_match: t.comment_match,
+          t_team_filter: t.team_filter,
+          t_project_filter: t.project_filter,
+          t_label_filter: t.label_filter,
+          t_skip_label_filter: t.skip_label_filter,
+          t_assignee_filter: t.assignee_filter,
+          t_action: t.action,
+          t_action_params: t.action_params,
+          t_priority: t.priority,
+          t_enabled: t.enabled,
+          t_created_at: t.created_at,
+          t_updated_at: t.updated_at,
+          w_id: w.id,
+          w_organization_id: w.organization_id,
+          w_team_id: w.team_id,
+          w_user_id: w.user_id,
+          w_name: w.name,
+          w_description: w.description,
+          w_engine: w.engine,
+          w_model: w.model,
+          w_max_turns: w.max_turns,
+          w_max_continuations: w.max_continuations,
+          w_allowed_tools: w.allowed_tools,
+          w_disallowed_tools: w.disallowed_tools,
+          w_allowed_domains: w.allowed_domains,
+          w_mcp_servers: w.mcp_servers,
+          w_permission_mode: w.permission_mode,
+          w_additional_read_paths: w.additional_read_paths,
+          w_additional_write_paths: w.additional_write_paths,
+          w_hook_after_create: w.hook_after_create,
+          w_hook_before_remove: w.hook_before_remove,
+          w_hook_timeout_ms: w.hook_timeout_ms,
+          w_prompt_template: w.prompt_template,
+          w_version: w.version,
+          w_status: w.status,
+          w_published_at: w.published_at,
+          w_created_at: w.created_at,
+          w_updated_at: w.updated_at,
+          scope_tier: w.user_id !== null ? 2 : w.team_id !== null ? 1 : 0,
+        }));
+      return { success: true, results: rows as unknown as T[] };
+    }
+
     if (/FROM workflows\s+WHERE .*\s+ORDER BY created_at/i.test(sql)) {
       // Cursor-paginated list. The handler emits:
       //   WHERE organization_id = ? [AND status = ?] [AND team_id = ?]
@@ -1269,6 +1349,69 @@ describe("/api/v1/workflows", () => {
       makeExecCtx(),
     );
     expect(res.status).toBe(404);
+  });
+
+  it("routes /resolve to the workflow resolver instead of treating resolve as an id", async () => {
+    asUser("org-1");
+    const db = new ApiD1();
+    db.workflows.set(
+      "workflow-1",
+      baseWorkflow({ id: "workflow-1", organization_id: "org-1", status: "published" }),
+    );
+    db.triggers.set("trigger-1", {
+      id: "trigger-1",
+      workflow_id: "workflow-1",
+      event_type: "state_entered",
+      to_state: "Todo",
+      from_state: null,
+      label_name: null,
+      comment_match: null,
+      team_filter: null,
+      project_filter: null,
+      label_filter: null,
+      skip_label_filter: null,
+      assignee_filter: null,
+      action: "start_session",
+      action_params: null,
+      priority: 0,
+      enabled: 1,
+      created_at: 0,
+      updated_at: 0,
+    });
+
+    const res = await buildApp().fetch(
+      new Request(
+        "https://agent.example/api/v1/workflows/resolve?event_type=state_entered&to_state=Todo&issue_id=issue-1",
+      ),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      result: { workflow: { id: string }; trigger: { id: string } } | null;
+      error?: string;
+    };
+    expect(body).not.toHaveProperty("error", "not_found");
+    expect(body.result?.workflow.id).toBe("workflow-1");
+    expect(body.result?.trigger.id).toBe("trigger-1");
+  });
+
+  it("still reads a real workflow id after the /resolve route", async () => {
+    asUser("org-1");
+    const db = new ApiD1();
+    db.workflows.set(
+      "workflow-1",
+      baseWorkflow({ id: "workflow-1", organization_id: "org-1" }),
+    );
+
+    const res = await buildApp().fetch(
+      new Request("https://agent.example/api/v1/workflows/workflow-1"),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { workflow: { id: string } };
+    expect(body.workflow.id).toBe("workflow-1");
   });
 });
 
