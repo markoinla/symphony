@@ -170,7 +170,13 @@ GET    /api/v1/workflows/resolve         (read)  debug helper
 - Error envelope is the standardized `{error, message, issues?}`.
 
 **Schemas:** `WorkflowCreateSchema`, `WorkflowUpdateSchema`,
-`WorkflowSchema` already in `src/schemas/workflow.ts`. No body changes.
+`WorkflowSchema` already in `src/schemas/workflow.ts`. Workflow runtime
+policy support is deliberately narrow: non-empty `allowed_tools`,
+`disallowed_tools`, and `permission_mode` are accepted and forwarded to the
+sandbox dispatcher for trigger-fired sessions. Non-empty `allowed_domains`,
+`mcp_servers`, `additional_read_paths`, `additional_write_paths`,
+`hook_after_create`, and `hook_before_remove` are rejected with
+`validation_failed` until the dispatcher/engine honors them end-to-end.
 
 **List filters:** `?status=draft|published|archived`, `?team_id=...`,
 `?user_id=...` (server narrows by `auth.orgId` always).

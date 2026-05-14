@@ -875,6 +875,68 @@ describe("/api/v1/workflows", () => {
     expect(Array.isArray(json.issues)).toBe(true);
   });
 
+  it("rejects unsupported runtime policy fields instead of storing ignored constraints", async () => {
+    asUser("org-1");
+    const db = new ApiD1();
+    const res = await buildApp().fetch(
+      new Request("https://agent.example/api/v1/workflows", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Unsupported policy",
+          prompt_template: "Run",
+          allowed_domains: ["example.com"],
+          mcp_servers: [{ name: "local", command: "server" }],
+          additional_read_paths: ["/tmp/read"],
+          additional_write_paths: ["/tmp/write"],
+          hook_after_create: "echo setup",
+          hook_before_remove: "echo cleanup",
+        }),
+      }),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as {
+      error: string;
+      issues: Array<{ path: string[] }>;
+    };
+    expect(json.error).toBe("validation_failed");
+    expect(json.issues.map((i) => i.path[0]).sort()).toEqual([
+      "additional_read_paths",
+      "additional_write_paths",
+      "allowed_domains",
+      "hook_after_create",
+      "hook_before_remove",
+      "mcp_servers",
+    ]);
+  });
+
+  it("accepts dispatcher-supported workflow policy fields", async () => {
+    asUser("org-1");
+    const db = new ApiD1();
+    const res = await buildApp().fetch(
+      new Request("https://agent.example/api/v1/workflows", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Supported policy",
+          prompt_template: "Run",
+          allowed_tools: ["Read", "Bash"],
+          disallowed_tools: ["WebFetch"],
+          permission_mode: "ask",
+        }),
+      }),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(201);
+    const json = (await res.json()) as { workflow: Record<string, unknown> };
+    expect(json.workflow.allowed_tools).toEqual(["Read", "Bash"]);
+    expect(json.workflow.disallowed_tools).toEqual(["WebFetch"]);
+    expect(json.workflow.permission_mode).toBe("ask");
+  });
+
   it("creates, reads, updates, and deletes a workflow", async () => {
     asUser("org-1");
     const db = new ApiD1();
