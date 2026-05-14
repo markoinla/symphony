@@ -163,7 +163,7 @@ function normalizeEntry(entry: SessionDebugMessage): {
 
 function formatEpoch(value: WorkerSessionDebug['started_at']): string {
   if (value === null || value === undefined) return ''
-  const ms = typeof value === 'number' ? value * 1000 : Date.parse(value)
+  const ms = Date.parse(value)
   if (!Number.isFinite(ms)) return String(value)
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',

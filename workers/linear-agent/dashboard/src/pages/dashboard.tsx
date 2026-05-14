@@ -366,6 +366,7 @@ export function ErrorCategoryBadge({ category }: { category: string | null }) {
 
 export function HistoryCard({ index, session }: { index: number; session: SessionsPayload['sessions'][number] }) {
   const issueIdentifier = session.issue_identifier
+  const detailSessionId = session.detail_session_id ?? session.session_id
   const failed = session.status === 'failed'
 
   const content = (
@@ -378,7 +379,7 @@ export function HistoryCard({ index, session }: { index: number; session: Sessio
           <div className="flex items-center gap-2">
             <span className={cn('h-2 w-2 shrink-0 rounded-full', failed ? 'bg-th-danger' : 'bg-th-text-4')} />
             <span className="truncate text-sm font-medium text-th-text-1">
-              {issueIdentifier ?? 'Unknown'}
+              {issueIdentifier ?? detailSessionId ?? 'Unknown'}
             </span>
             {issueIdentifier ? <LinearIssueBadge identifier={issueIdentifier} /> : null}
             {failed ? <Badge variant="destructive">Failed</Badge> : null}
@@ -404,15 +405,23 @@ export function HistoryCard({ index, session }: { index: number; session: Sessio
     </div>
   )
 
-  if (!issueIdentifier) {
-    return content
+  if (issueIdentifier) {
+    return (
+      <Link params={{ issueIdentifier }} to="/session/$issueIdentifier">
+        {content}
+      </Link>
+    )
   }
 
-  return (
-    <Link params={{ issueIdentifier }} to="/session/$issueIdentifier">
-      {content}
-    </Link>
-  )
+  if (detailSessionId) {
+    return (
+      <Link params={{ sessionId: detailSessionId }} to="/sessions/$sessionId">
+        {content}
+      </Link>
+    )
+  }
+
+  return content
 }
 
 function buildDashboardProjectSections(payload: StatePayload): DashboardProjectSection[] {

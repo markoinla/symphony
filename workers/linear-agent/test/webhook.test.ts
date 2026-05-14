@@ -417,6 +417,7 @@ describe("POST /webhook stop signal", () => {
       organization_id: orgId,
       project_id: null,
       linear_issue_id: null,
+      linear_issue_identifier: null,
       linear_issue_title: null,
       status: "running",
       started_at: now,

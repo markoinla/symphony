@@ -91,6 +91,7 @@ export const agentSessions = sqliteTable("agent_sessions", {
     onDelete: "set null",
   }),
   linearIssueId: text("linear_issue_id"),
+  linearIssueIdentifier: text("linear_issue_identifier"),
   linearIssueTitle: text("linear_issue_title"),
   status: text("status").notNull().default("running"),
   startedAt: integer("started_at", { mode: "timestamp" }).notNull(),

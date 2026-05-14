@@ -97,6 +97,7 @@ export interface AgentSessionRow {
   organization_id: string;
   project_id: string | null;
   linear_issue_id: string | null;
+  linear_issue_identifier: string | null;
   linear_issue_title: string | null;
   status: string;
   started_at: number;
@@ -430,26 +431,41 @@ class FakeStatement {
 
     // ── agent_sessions ──────────────────────────────────────────
     if (/^INSERT INTO agent_sessions/i.test(sql)) {
-      const [id, organizationId, projectId, linearIssueId, linearIssueTitle, status, startedAt, triggeredBy, team, repo, prompt, configSnapshot] =
-        this.bindings as [
-          string,
-          string,
-          string | null,
-          string | null,
-          string | null,
-          string,
-          number,
-          string | null,
-          string | null,
-          string | null,
-          string | null,
-          string | null,
-        ];
+      const [
+        id,
+        organizationId,
+        projectId,
+        linearIssueId,
+        linearIssueIdentifier,
+        linearIssueTitle,
+        status,
+        startedAt,
+        triggeredBy,
+        team,
+        repo,
+        prompt,
+        configSnapshot,
+      ] = this.bindings as [
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        string,
+        number,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+      ];
       this.db.agentSessions.set(id, {
         id,
         organization_id: organizationId,
         project_id: projectId,
         linear_issue_id: linearIssueId,
+        linear_issue_identifier: linearIssueIdentifier,
         linear_issue_title: linearIssueTitle,
         status,
         started_at: startedAt,
@@ -671,6 +687,10 @@ class FakeStatement {
     // workflow don't seed these — we just return an empty result so
     // the resolver gracefully returns null.
     if (/from "accounts"/i.test(sql) || /from accounts/i.test(sql)) {
+      return { success: true, results: [] as unknown as T[] };
+    }
+
+    if (/FROM agent_session_events/i.test(sql)) {
       return { success: true, results: [] as unknown as T[] };
     }
 

@@ -509,6 +509,7 @@ export interface AgentSessionRecord {
   organization_id: string;
   project_id: string | null;
   linear_issue_id: string | null;
+  linear_issue_identifier: string | null;
   linear_issue_title: string | null;
   status: string;
   started_at: number;
@@ -538,13 +539,14 @@ export class AgentSessionStore {
   constructor(private readonly db: D1Database) {}
 
   private static readonly COLUMNS =
-    "id, organization_id, project_id, linear_issue_id, linear_issue_title, status, started_at, completed_at, triggered_by, team, repo, prompt, config_snapshot, stderr, dispatcher_logs, messages, error";
+    "id, organization_id, project_id, linear_issue_id, linear_issue_identifier, linear_issue_title, status, started_at, completed_at, triggered_by, team, repo, prompt, config_snapshot, stderr, dispatcher_logs, messages, error";
 
   async create(input: {
     id: string;
     organizationId: string;
     projectId?: string | null;
     linearIssueId?: string | null;
+    linearIssueIdentifier?: string | null;
     linearIssueTitle?: string | null;
     status?: string;
     triggeredBy?: string | null;
@@ -556,15 +558,16 @@ export class AgentSessionStore {
     await this.db
       .prepare(
         `INSERT INTO agent_sessions
-           (id, organization_id, project_id, linear_issue_id, linear_issue_title,
+           (id, organization_id, project_id, linear_issue_id, linear_issue_identifier, linear_issue_title,
             status, started_at, triggered_by, team, repo, prompt, config_snapshot)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         input.id,
         input.organizationId,
         input.projectId ?? null,
         input.linearIssueId ?? null,
+        input.linearIssueIdentifier ?? null,
         input.linearIssueTitle ?? null,
         input.status ?? "running",
         Math.floor(Date.now() / 1000),
