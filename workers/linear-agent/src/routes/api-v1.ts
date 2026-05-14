@@ -396,6 +396,36 @@ export function buildApiV1Router() {
     }),
   );
 
+  // ── Resolve — debug helper ──────────────────────────────────────
+  // Register this static route before /:id so Hono cannot capture
+  // `resolve` as a workflow id.
+
+  app.get("/api/v1/workflows/resolve", async (c) => {
+    const auth = c.get("auth");
+    const eventType = c.req.query("event_type");
+    const issueId = c.req.query("issue_id");
+    if (!eventType)
+      return respondError(c, "validation_failed", "Missing `event_type` query parameter.");
+
+    // The shared eventTupleSchema is a discriminated union; build the
+    // shape variant-by-variant. The debug helper supports the simple
+    // forms — state_entered, comment_added, etc.
+    const candidate = buildResolveEvent(eventType, auth.orgId, issueId, c);
+    if (!candidate)
+      return respondError(c, "validation_failed", `Unsupported event_type: ${eventType}`);
+    const parsed = eventTupleSchema.safeParse(candidate);
+    if (!parsed.success) {
+      return respondError(
+        c,
+        "validation_failed",
+        undefined,
+        parsed.error.issues,
+      );
+    }
+    const result = await resolveWorkflow(c.env, parsed.data);
+    return c.json({ result });
+  });
+
   app.get("/api/v1/workflows/:id", async (c) => {
     const auth = c.get("auth");
     const row = await getWorkflow(c.env.DB, c.req.param("id"), auth.orgId);
@@ -627,34 +657,6 @@ export function buildApiV1Router() {
       new_comments: [],
     });
     return c.json({ rendered });
-  });
-
-  // ── Resolve — debug helper ──────────────────────────────────────
-
-  app.get("/api/v1/workflows/resolve", async (c) => {
-    const auth = c.get("auth");
-    const eventType = c.req.query("event_type");
-    const issueId = c.req.query("issue_id");
-    if (!eventType)
-      return respondError(c, "validation_failed", "Missing `event_type` query parameter.");
-
-    // The shared eventTupleSchema is a discriminated union; build the
-    // shape variant-by-variant. The debug helper supports the simple
-    // forms — state_entered, comment_added, etc.
-    const candidate = buildResolveEvent(eventType, auth.orgId, issueId, c);
-    if (!candidate)
-      return respondError(c, "validation_failed", `Unsupported event_type: ${eventType}`);
-    const parsed = eventTupleSchema.safeParse(candidate);
-    if (!parsed.success) {
-      return respondError(
-        c,
-        "validation_failed",
-        undefined,
-        parsed.error.issues,
-      );
-    }
-    const result = await resolveWorkflow(c.env, parsed.data);
-    return c.json({ result });
   });
 
   // ── Triggers ────────────────────────────────────────────────────
