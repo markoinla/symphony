@@ -536,7 +536,7 @@ export function buildApiV1Router() {
   // ── Duplicate ────────────────────────────────────────────────────
 
   app.post("/api/v1/workflows/:id/duplicate", async (c) =>
-    withIdempotency(c, "POST /api/v1/workflows/:id/duplicate", async () => {
+    withIdempotency(c, `POST /api/v1/workflows/${c.req.param("id")}/duplicate`, async () => {
     const auth = c.get("auth");
     const id = c.req.param("id");
     const src = await getWorkflow(c.env.DB, id, auth.orgId);
