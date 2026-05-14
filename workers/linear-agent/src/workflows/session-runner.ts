@@ -610,6 +610,8 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           id: sessionId,
           organizationId,
           linearIssueId: issueGraphqlId,
+          linearIssueIdentifier:
+            webhookEvent.agentSession.issue?.identifier ?? null,
           linearIssueTitle:
             webhookEvent.agentSession.issue?.title ?? null,
           status: "running",

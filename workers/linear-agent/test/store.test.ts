@@ -288,6 +288,7 @@ describe("AgentSessionStore", () => {
       id: "session-1",
       organizationId: "org-1",
       linearIssueId: "issue-1",
+      linearIssueIdentifier: "SYM-123",
       linearIssueTitle: "Add date to README",
       triggeredBy: "created",
       team: "SYM",
@@ -300,6 +301,7 @@ describe("AgentSessionStore", () => {
     expect(row).not.toBeNull();
     expect(row?.organization_id).toBe("org-1");
     expect(row?.linear_issue_id).toBe("issue-1");
+    expect(row?.linear_issue_identifier).toBe("SYM-123");
     expect(row?.status).toBe("running");
     expect(row?.team).toBe("SYM");
     expect(JSON.parse(row?.config_snapshot ?? "{}")).toMatchObject({

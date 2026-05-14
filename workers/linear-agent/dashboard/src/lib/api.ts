@@ -104,6 +104,7 @@ export type SessionsPayload = {
     issue_identifier: string | null
     issue_title: string | null
     session_id: string | null
+    detail_session_id: string | null
     status: string
     started_at: string | null
     ended_at: string | null
@@ -380,6 +381,7 @@ export function getIssue(_issueIdentifier: string): Promise<IssuePayload | null>
 type WorkerSessionRow = {
   id: string
   linear_issue_id: string | null
+  linear_issue_identifier: string | null
   linear_issue_title: string | null
   status: string
   started_at: string | null
@@ -408,16 +410,20 @@ export async function getSessions(params?: {
   if (params?.issueIdentifier) {
     const wanted = params.issueIdentifier
     sessions = sessions.filter(
-      (s) => s.linear_issue_title === wanted || s.linear_issue_id === wanted,
+      (s) =>
+        s.linear_issue_identifier === wanted ||
+        s.linear_issue_id === wanted ||
+        s.id === wanted,
     )
   }
 
   return {
     sessions: sessions.map((s) => ({
       id: stableHash(s.id),
-      issue_identifier: s.linear_issue_title,
+      issue_identifier: s.linear_issue_identifier,
       issue_title: s.linear_issue_title,
       session_id: s.id,
+      detail_session_id: s.id,
       status: s.status,
       started_at: s.started_at,
       ended_at: s.completed_at,
@@ -448,13 +454,13 @@ export type SessionDebugMessage =
 export type WorkerSessionDebug = {
   id: string
   linear_issue_id: string | null
+  linear_issue_identifier: string | null
   linear_issue_title: string | null
   status: string
-  // Worker stores these as epoch seconds (see AgentSessionRecord.
-  // started_at: number in workers/linear-agent/src/lib/store.ts) and
-  // returns the raw number over JSON.
-  started_at: number | null
-  completed_at: number | null
+  // Worker normalizes persisted epoch seconds to ISO strings before
+  // returning dashboard payloads.
+  started_at: string | null
+  completed_at: string | null
   triggered_by: string | null
   team: string | null
   repo: string | null

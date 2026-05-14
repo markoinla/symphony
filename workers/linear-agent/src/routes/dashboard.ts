@@ -1,8 +1,31 @@
 import { Hono } from "hono";
 
 import type { Env } from "../index";
-import { AgentSessionEventStore, AgentSessionStore } from "../lib/store";
+import {
+  AgentSessionEventStore,
+  AgentSessionStore,
+  type AgentSessionRecord,
+} from "../lib/store";
 import { requireDashboardAuth, requireOrg } from "../lib/dashboard-auth";
+
+function normalizeEpochSeconds(value: number | null): string | null {
+  return value === null ? null : new Date(value * 1000).toISOString();
+}
+
+function sessionSummaryRow(s: AgentSessionRecord) {
+  return {
+    id: s.id,
+    linear_issue_id: s.linear_issue_id,
+    linear_issue_identifier: s.linear_issue_identifier,
+    linear_issue_title: s.linear_issue_title,
+    status: s.status,
+    started_at: normalizeEpochSeconds(s.started_at),
+    completed_at: normalizeEpochSeconds(s.completed_at),
+    triggered_by: s.triggered_by,
+    team: s.team,
+    repo: s.repo,
+  };
+}
 
 export function buildDashboardRouter() {
   const router = new Hono<{ Bindings: Env }>();
@@ -24,17 +47,7 @@ export function buildDashboardRouter() {
       offset: parseInt(c.req.query("offset") || "0", 10),
     });
 
-    const rows = sessions.map((s) => ({
-      id: s.id,
-      linear_issue_id: s.linear_issue_id,
-      linear_issue_title: s.linear_issue_title,
-      status: s.status,
-      started_at: s.started_at,
-      completed_at: s.completed_at,
-      triggered_by: s.triggered_by,
-      team: s.team,
-      repo: s.repo,
-    }));
+    const rows = sessions.map(sessionSummaryRow);
 
     return c.json({ sessions: rows });
   });
@@ -68,17 +81,7 @@ export function buildDashboardRouter() {
               for (const session of running) {
                 sendEvent({
                   type: "session_update",
-                  session: {
-                    id: session.id,
-                    linear_issue_id: session.linear_issue_id,
-                    linear_issue_title: session.linear_issue_title,
-                    status: session.status,
-                    started_at: session.started_at,
-                    completed_at: session.completed_at,
-                    triggered_by: session.triggered_by,
-                    team: session.team,
-                    repo: session.repo,
-                  },
+                  session: sessionSummaryRow(session),
                 });
               }
             } catch (e) {
@@ -105,17 +108,7 @@ export function buildDashboardRouter() {
           for (const session of running) {
             sendEvent({
               type: "session_update",
-              session: {
-                id: session.id,
-                linear_issue_id: session.linear_issue_id,
-                linear_issue_title: session.linear_issue_title,
-                status: session.status,
-                started_at: session.started_at,
-                completed_at: session.completed_at,
-                triggered_by: session.triggered_by,
-                team: session.team,
-                repo: session.repo,
-              },
+              session: sessionSummaryRow(session),
             });
           }
         } catch {}
@@ -171,10 +164,11 @@ export function buildDashboardRouter() {
     return c.json({
       id: session.id,
       linear_issue_id: session.linear_issue_id,
+      linear_issue_identifier: session.linear_issue_identifier,
       linear_issue_title: session.linear_issue_title,
       status: session.status,
-      started_at: session.started_at,
-      completed_at: session.completed_at,
+      started_at: normalizeEpochSeconds(session.started_at),
+      completed_at: normalizeEpochSeconds(session.completed_at),
       triggered_by: session.triggered_by,
       team: session.team,
       repo: session.repo,
@@ -211,6 +205,7 @@ export function buildDashboardRouter() {
       organizationId: user.organizationId,
       projectId: session.project_id,
       linearIssueId: session.linear_issue_id,
+      linearIssueIdentifier: session.linear_issue_identifier,
       linearIssueTitle: session.linear_issue_title,
       status: "running",
       triggeredBy: "rerun",
@@ -234,7 +229,8 @@ export function buildDashboardRouter() {
               issue: session.linear_issue_id
                 ? {
                     id: session.linear_issue_id,
-                    identifier: session.linear_issue_title ?? "",
+                    identifier:
+                      session.linear_issue_identifier ?? session.linear_issue_id,
                     title: session.linear_issue_title ?? "",
                     teamId: session.team ?? undefined,
                   }
