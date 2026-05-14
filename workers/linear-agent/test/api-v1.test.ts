@@ -64,7 +64,6 @@ interface TriggerRow {
   to_state: string | null;
   from_state: string | null;
   label_name: string | null;
-  comment_match: string | null;
   team_filter: string | null;
   project_filter: string | null;
   label_filter: string | null;
@@ -282,7 +281,7 @@ class ApiStatement {
         to_state: (b[3] ?? null) as string | null,
         from_state: (b[4] ?? null) as string | null,
         label_name: (b[5] ?? null) as string | null,
-        comment_match: (b[6] ?? null) as string | null,
+        // b[6] is the dead comment_match column — always NULL.
         team_filter: (b[7] ?? null) as string | null,
         project_filter: (b[8] ?? null) as string | null,
         label_filter: (b[9] ?? null) as string | null,
@@ -554,7 +553,6 @@ class ApiStatement {
           t_to_state: t.to_state,
           t_from_state: t.from_state,
           t_label_name: t.label_name,
-          t_comment_match: t.comment_match,
           t_team_filter: t.team_filter,
           t_project_filter: t.project_filter,
           t_label_filter: t.label_filter,
@@ -797,7 +795,6 @@ function applyTriggerColumn(row: TriggerRow, col: string, v: unknown) {
     case "to_state":           row.to_state = (v ?? null) as string | null; break;
     case "from_state":         row.from_state = (v ?? null) as string | null; break;
     case "label_name":         row.label_name = (v ?? null) as string | null; break;
-    case "comment_match":      row.comment_match = (v ?? null) as string | null; break;
     case "team_filter":        row.team_filter = (v ?? null) as string | null; break;
     case "project_filter":     row.project_filter = (v ?? null) as string | null; break;
     case "label_filter":       row.label_filter = (v ?? null) as string | null; break;
@@ -1365,7 +1362,6 @@ describe("/api/v1/workflows", () => {
       to_state: "Todo",
       from_state: null,
       label_name: null,
-      comment_match: null,
       team_filter: null,
       project_filter: null,
       label_filter: null,

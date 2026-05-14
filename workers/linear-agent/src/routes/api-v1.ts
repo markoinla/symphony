@@ -90,7 +90,6 @@ interface TriggerRow {
   to_state: string | null;
   from_state: string | null;
   label_name: string | null;
-  comment_match: string | null;
   team_filter: string | null;
   project_filter: string | null;
   label_filter: string | null;
@@ -108,7 +107,7 @@ const WORKFLOW_COLS =
   "id, organization_id, team_id, user_id, name, description, engine, model, max_turns, max_continuations, allowed_tools, disallowed_tools, allowed_domains, mcp_servers, permission_mode, additional_read_paths, additional_write_paths, hook_after_create, hook_before_remove, hook_timeout_ms, prompt_template, version, status, published_at, created_at, updated_at";
 
 const TRIGGER_COLS =
-  "id, workflow_id, event_type, to_state, from_state, label_name, comment_match, team_filter, project_filter, label_filter, skip_label_filter, assignee_filter, action, action_params, priority, enabled, created_at, updated_at";
+  "id, workflow_id, event_type, to_state, from_state, label_name, team_filter, project_filter, label_filter, skip_label_filter, assignee_filter, action, action_params, priority, enabled, created_at, updated_at";
 
 function nowSec(): number {
   return Math.floor(Date.now() / 1000);
@@ -182,7 +181,6 @@ function serializeTrigger(row: TriggerRow): Record<string, unknown> {
     to_state: row.to_state,
     from_state: row.from_state,
     label_name: row.label_name,
-    comment_match: row.comment_match,
     team_filter: asJsonArray(row.team_filter),
     project_filter: asJsonArray(row.project_filter),
     label_filter: asJsonArray(row.label_filter),
@@ -727,7 +725,10 @@ export function buildApiV1Router() {
         t.to_state ?? null,
         t.from_state ?? null,
         t.label_name ?? null,
-        t.comment_match ?? null,
+        // `comment_match` column survives in the DB but isn't part of
+        // the trigger schema anymore — always insert NULL. See
+        // schemas/trigger.ts header for the rationale.
+        null,
         jsonOrNull(t.team_filter),
         jsonOrNull(t.project_filter),
         jsonOrNull(t.label_filter),
@@ -785,8 +786,6 @@ export function buildApiV1Router() {
     if (t.to_state !== undefined) set("to_state", t.to_state ?? null);
     if (t.from_state !== undefined) set("from_state", t.from_state ?? null);
     if (t.label_name !== undefined) set("label_name", t.label_name ?? null);
-    if (t.comment_match !== undefined)
-      set("comment_match", t.comment_match ?? null);
     if (t.team_filter !== undefined)
       set("team_filter", jsonOrNull(t.team_filter));
     if (t.project_filter !== undefined)
@@ -1256,10 +1255,7 @@ function buildResolveEvent(
       return { ...base, to_state: c.req.query("to_state") ?? "" };
     case "state_exited":
       return { ...base, from_state: c.req.query("from_state") ?? "" };
-    case "comment_added":
-      return { ...base, comment: c.req.query("comment") ?? "" };
     case "label_added":
-    case "label_removed":
       return { ...base, label_name: c.req.query("label_name") ?? "" };
     case "assignee_changed":
       return {

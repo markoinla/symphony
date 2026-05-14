@@ -195,12 +195,16 @@ export async function dispatchTrigger(
     engine: string;
     model?: string;
     max_turns: number;
+    name: string;
     allowed_tools?: string[];
     disallowed_tools?: string[];
     permission_mode?: string;
   } = {
     engine: workflow.engine,
     max_turns: workflow.max_turns,
+    // Surfaced in the initial thought activity. See
+    // session-runner.ts:post-initial-thought.
+    name: workflow.name,
   };
   if (workflow.model !== null && workflow.model !== "") {
     workflowOverrides.model = workflow.model;

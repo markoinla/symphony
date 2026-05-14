@@ -10,7 +10,7 @@ import type { Env } from "../../index";
 
 const DEFAULT_NAME = "Engineering Default";
 const DEFAULT_DESCRIPTION =
-  "Default workflow seeded on org install. Move issues to Todo to start, /retry in a comment to continue, label `blocked` to stop.";
+  "Default workflow seeded on org install. Move issues to Todo to start, label `blocked` to stop.";
 const DEFAULT_ENGINE = "pi";
 const DEFAULT_PROMPT_TEMPLATE = `You are working on Linear issue {{ issue.identifier }} - {{ issue.title }}.
 
@@ -74,18 +74,7 @@ const SEED_TRIGGERS: SeedTrigger[] = [
     action_params: { skill: "land" },
     priority: 50,
   },
-  // 5. `/retry` slash-command in a comment — continues the last run.
-  {
-    event_type: "comment_added",
-    to_state: null,
-    from_state: null,
-    label_name: null,
-    comment_match: "^/retry\\b",
-    action: "continue_session",
-    action_params: null,
-    priority: 80,
-  },
-  // 6. `blocked` label applied — stops the current run.
+  // 5. `blocked` label applied — stops the current run.
   {
     event_type: "label_added",
     to_state: null,

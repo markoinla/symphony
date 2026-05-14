@@ -2,10 +2,16 @@
 //
 // Rows in `workflow_triggers` route normalized events to a workflow's
 // dispatched action. The resolver evaluates each trigger's
-// event-specific match columns (`to_state`, `from_state`, `label_name`,
-// `comment_match`) and its scope filters (`team_filter`,
-// `project_filter`, `label_filter`, `skip_label_filter`,
-// `assignee_filter`) against the EventTuple.
+// event-specific match columns (`to_state`, `from_state`, `label_name`)
+// and its scope filters (`team_filter`, `project_filter`,
+// `label_filter`, `skip_label_filter`, `assignee_filter`) against the
+// EventTuple.
+//
+// The `comment_match` column survives in the DB schema for back-compat
+// with rows seeded under the old `comment_added` event type, but the
+// trigger schema no longer exposes it — comment_added required an
+// inline Linear GraphQL fetch in the 5s webhook window that we
+// chose not to pay.
 //
 // Filters are stored as JSON-encoded TEXT in D1 and surfaced as parsed
 // arrays here. NULL / missing means "match any".
@@ -35,7 +41,6 @@ export const TriggerSchema = z.object({
   to_state: z.string().nullable().optional(),
   from_state: z.string().nullable().optional(),
   label_name: z.string().nullable().optional(),
-  comment_match: z.string().nullable().optional(),
 
   team_filter: z.array(z.string()).nullable().optional(),
   project_filter: z.array(z.string()).nullable().optional(),
@@ -64,7 +69,6 @@ const triggerFieldShapes = {
   to_state: z.string().nullable().optional(),
   from_state: z.string().nullable().optional(),
   label_name: z.string().nullable().optional(),
-  comment_match: z.string().nullable().optional(),
 
   team_filter: z.array(z.string()).nullable().optional(),
   project_filter: z.array(z.string()).nullable().optional(),

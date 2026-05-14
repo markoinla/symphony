@@ -127,7 +127,6 @@ export function newTriggerDraft(): TriggerCreateBody {
     to_state: null,
     from_state: null,
     label_name: null,
-    comment_match: null,
     team_filter: null,
     project_filter: null,
     label_filter: null,

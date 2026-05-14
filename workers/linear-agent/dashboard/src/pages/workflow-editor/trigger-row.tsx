@@ -31,9 +31,7 @@ import type {
 const eventTypeOptions: { value: EventType; label: string }[] = [
   { value: 'state_entered', label: 'State entered' },
   { value: 'state_exited', label: 'State exited' },
-  { value: 'comment_added', label: 'Comment added' },
   { value: 'label_added', label: 'Label added' },
-  { value: 'label_removed', label: 'Label removed' },
   { value: 'assignee_changed', label: 'Assignee changed' },
   { value: 'session_started', label: 'Session started' },
 ]
@@ -77,7 +75,6 @@ export function TriggerRow({
                 from_state: null,
                 to_state: null,
                 label_name: null,
-                comment_match: null,
               })
             }
           >
@@ -153,9 +150,9 @@ export function TriggerRow({
         </div>
       </div>
 
-      {/* Event-type-specific match fields. The backend only has four
-          match columns: to_state, from_state, label_name, comment_match.
-          Assignee transitions match via scope filters only. */}
+      {/* Event-type-specific match fields. The backend has three
+          match columns: to_state, from_state, label_name. Assignee
+          transitions match via scope filters only. */}
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         {(trigger.event_type === 'state_entered' ||
           trigger.event_type === 'state_exited') && (
@@ -184,8 +181,7 @@ export function TriggerRow({
           </>
         )}
 
-        {(trigger.event_type === 'label_added' ||
-          trigger.event_type === 'label_removed') && (
+        {trigger.event_type === 'label_added' && (
           <Field label="Label name">
             <Input
               onChange={(event) =>
@@ -193,21 +189,6 @@ export function TriggerRow({
               }
               placeholder="rework"
               value={trigger.label_name ?? ''}
-            />
-          </Field>
-        )}
-
-        {trigger.event_type === 'comment_added' && (
-          <Field
-            label="Comment match (regex)"
-            hint="Anchored regex, e.g. ^/retry\b"
-          >
-            <Input
-              onChange={(event) =>
-                onChange({ comment_match: event.target.value || null })
-              }
-              placeholder="^/retry\b"
-              value={trigger.comment_match ?? ''}
             />
           </Field>
         )}

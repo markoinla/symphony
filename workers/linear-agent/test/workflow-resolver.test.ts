@@ -49,7 +49,6 @@ interface TriggerRow {
   to_state: string | null;
   from_state: string | null;
   label_name: string | null;
-  comment_match: string | null;
   team_filter: string | null;
   project_filter: string | null;
   label_filter: string | null;
@@ -114,7 +113,6 @@ class MockResolverDB {
       to_state: null,
       from_state: null,
       label_name: null,
-      comment_match: null,
       team_filter: null,
       project_filter: null,
       label_filter: null,
@@ -193,7 +191,6 @@ class MockStatement {
       if (t.to_state != null && t.to_state !== args.toState) continue;
       if (t.from_state != null && t.from_state !== args.fromState) continue;
       if (t.label_name != null && t.label_name !== args.labelName) continue;
-      // comment_match is regex/substring — applied in the resolver's JS pass.
 
       const scopeTier = w.user_id != null ? 2 : w.team_id != null ? 1 : 0;
       candidates.push({ t, w, scopeTier });
@@ -212,7 +209,6 @@ class MockStatement {
       t_to_state: t.to_state,
       t_from_state: t.from_state,
       t_label_name: t.label_name,
-      t_comment_match: t.comment_match,
       t_team_filter: t.team_filter,
       t_project_filter: t.project_filter,
       t_label_filter: t.label_filter,
@@ -456,37 +452,6 @@ describe("resolveWorkflow — event_type match columns", () => {
     expect(result?.trigger.id).toBe("t-blocker");
   });
 
-  it("comment_added honors comment_match as a regex against the comment body", async () => {
-    const db = new MockResolverDB();
-    db.addWorkflow({ id: "wf-1", organization_id: "org-1" });
-    db.addTrigger({
-      id: "t-retry",
-      workflow_id: "wf-1",
-      event_type: "comment_added",
-      comment_match: "^/retry\\b",
-      action: "continue_session",
-    });
-
-    const matching: EventTuple = {
-      event_type: "comment_added",
-      organization_id: "org-1",
-      team_id: null,
-      project_id: null,
-      user_id: null,
-      assignee_id: null,
-      labels: [],
-      issue: null,
-      actor_id: null,
-      comment: "/retry please",
-      comment_id: null,
-    };
-    expect((await resolveWorkflow(makeEnv(db), matching))?.trigger.id).toBe(
-      "t-retry",
-    );
-
-    const nonMatching: EventTuple = { ...matching, comment: "looks good" };
-    expect(await resolveWorkflow(makeEnv(db), nonMatching)).toBeNull();
-  });
 });
 
 describe("resolveWorkflow — scope filters", () => {

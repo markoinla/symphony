@@ -16,9 +16,7 @@ export const eventTypeSchema = z.enum([
   "session_started",
   "state_entered",
   "state_exited",
-  "comment_added",
   "label_added",
-  "label_removed",
   "assignee_changed",
 ]);
 export type EventType = z.infer<typeof eventTypeSchema>;
@@ -97,22 +95,8 @@ export const stateExitedEventSchema = z.object({
   to_state: z.string().nullable().optional(),
 });
 
-export const commentAddedEventSchema = z.object({
-  event_type: z.literal("comment_added"),
-  ...scopeFields,
-  comment: z.string(),
-  comment_id: z.string().nullable().optional(),
-});
-
 export const labelAddedEventSchema = z.object({
   event_type: z.literal("label_added"),
-  ...scopeFields,
-  label_name: z.string(),
-  label_id: z.string().nullable().optional(),
-});
-
-export const labelRemovedEventSchema = z.object({
-  event_type: z.literal("label_removed"),
   ...scopeFields,
   label_name: z.string(),
   label_id: z.string().nullable().optional(),
@@ -131,9 +115,7 @@ export const EventTupleSchema = z.discriminatedUnion("event_type", [
   sessionStartedEventSchema,
   stateEnteredEventSchema,
   stateExitedEventSchema,
-  commentAddedEventSchema,
   labelAddedEventSchema,
-  labelRemovedEventSchema,
   assigneeChangedEventSchema,
 ]);
 export type EventTuple = z.infer<typeof EventTupleSchema>;

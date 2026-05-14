@@ -7,7 +7,7 @@ import { dispatchTrigger } from "../lib/dispatch-trigger";
 import { refreshInstallToken } from "../lib/install-token";
 import {
   isIssueEnvelope,
-  mapIssueUpdateToEvent,
+  mapIssueEnvelopeToEvents,
   type IssueWebhookEnvelope,
 } from "../lib/event-mapper-inbound";
 import { verifyLinearSignature } from "../lib/signature";
@@ -534,8 +534,8 @@ async function handleIssueEnvelope(
   // Filter envelopes we don't process at all (e.g. `remove`). Both
   // `create` and `update` go to the mapper — `create` fires
   // state_entered when the new issue lands in a non-default state
-  // that matches a trigger's `to_state`. The mapper still returns
-  // null for non-state-changing updates (e.g. title edits).
+  // that matches a trigger's `to_state`. The mapper returns an empty
+  // array for envelopes that touched only fields we don't model.
   if (envelopeAction !== "update" && envelopeAction !== "create") {
     await events.update(logId, {
       organizationId: orgId,
@@ -546,15 +546,15 @@ async function handleIssueEnvelope(
     return c.json({ ok: true, ignored: true });
   }
 
-  const mapped = mapIssueUpdateToEvent(envelope, orgId);
-  if (!mapped) {
+  const mappedEvents = mapIssueEnvelopeToEvents(envelope, orgId);
+  if (mappedEvents.length === 0) {
     await events.update(logId, {
       organizationId: orgId,
       dispatchedAction: "ignored_envelope",
       eventSummary:
         envelopeAction === "create"
           ? "Issue created without state"
-          : "Issue update without state transition",
+          : "Issue update with no triggerable changes",
       latencyMs: Date.now() - startedMs,
     });
     return c.json({ ok: true, ignored: true });
@@ -562,13 +562,12 @@ async function handleIssueEnvelope(
 
   // Dedupe Linear retries of the *same delivery*. `webhookId` is the
   // webhook registration UUID (constant across every delivery), so
-  // adding `webhookTimestamp` is what makes the key per-delivery: Linear
-  // stamps the same timestamp on every retry, but a re-entry into the
-  // same state gets a different one. Without the timestamp, distinct
-  // (issue, state) transitions within the 60-min TTL collapsed.
-  const newStateId =
-    envelope.data?.stateId ?? envelope.data?.state?.id ?? "no-state";
-  const dedupeKey = `webhook:issue:${envelope.webhookId ?? "?"}:${envelope.data?.id ?? "?"}:${newStateId}:${envelope.webhookTimestamp ?? "?"}`;
+  // adding `webhookTimestamp` is what makes the key per-delivery:
+  // Linear stamps the same timestamp on every retry, but a separate
+  // edit (label add, state change, etc.) gets a different one. Same
+  // key collapses retries of a multi-event delivery as a whole — a
+  // partial replay would re-fire every trigger.
+  const dedupeKey = `webhook:issue:${envelope.webhookId ?? "?"}:${envelope.data?.id ?? "?"}:${envelope.webhookTimestamp ?? "?"}`;
   const seen = await c.env.LINEAR_TOKENS.get(dedupeKey);
   if (seen) {
     await events.update(logId, {
@@ -596,54 +595,107 @@ async function handleIssueEnvelope(
     );
   }
 
-  const resolved = await resolveWorkflow(c.env, mapped.event);
-  if (!resolved) {
-    await events.update(logId, {
-      organizationId: orgId,
-      dispatchedAction: "no_match",
-      eventSummary: mapped.summary,
-      latencyMs: Date.now() - startedMs,
-    });
-    return c.json({ ok: true, matched: false });
-  }
-
   const linearOrgId = envelope.organizationId ?? null;
   if (!linearOrgId) {
     await events.update(logId, {
       organizationId: orgId,
       dispatchedAction: "error",
       error: "missing_linear_organization_id",
-      eventSummary: mapped.summary,
+      eventSummary: mappedEvents.map((m) => m.summary).join("; "),
       latencyMs: Date.now() - startedMs,
     });
     return c.json({ ok: true, error: "missing_linear_organization_id" });
   }
 
-  const dispatched = await dispatchTrigger(c.env, {
-    workflow: resolved.workflow,
-    trigger: resolved.trigger,
-    event: mapped.event,
-    linearOrganizationId: linearOrgId,
-  });
+  // Run every emitted event through resolve + dispatch. A single
+  // delivery can match multiple triggers (state_entered + label_added
+  // on a "Done" label, for example). We record an aggregate result on
+  // the webhook_events row: first dispatched session wins the
+  // canonical columns, but `event_summary` captures every variant.
+  type Outcome = {
+    event_type: string;
+    summary: string;
+    matched: boolean;
+    workflow_id?: string;
+    trigger_id?: string;
+    dispatched?: string;
+    agent_session_id?: string;
+    error?: string;
+  };
+  const outcomes: Outcome[] = [];
+
+  for (const mapped of mappedEvents) {
+    const resolved = await resolveWorkflow(c.env, mapped.event);
+    if (!resolved) {
+      outcomes.push({
+        event_type: mapped.event.event_type,
+        summary: mapped.summary,
+        matched: false,
+      });
+      continue;
+    }
+    const dispatched = await dispatchTrigger(c.env, {
+      workflow: resolved.workflow,
+      trigger: resolved.trigger,
+      event: mapped.event,
+      linearOrganizationId: linearOrgId,
+    });
+    outcomes.push({
+      event_type: mapped.event.event_type,
+      summary: mapped.summary,
+      matched: true,
+      workflow_id: resolved.workflow.id,
+      trigger_id: resolved.trigger.id,
+      dispatched: dispatched.outcome,
+      agent_session_id: dispatched.agentSessionId ?? undefined,
+      error: dispatched.error ?? undefined,
+    });
+  }
+
+  const firstDispatched = outcomes.find(
+    (o) => o.matched && o.dispatched === "start_session",
+  );
+  const firstMatched = outcomes.find((o) => o.matched);
+  const firstError = outcomes.find((o) => o.error);
+  const canonical = firstDispatched ?? firstMatched;
+
+  const aggregateAction = firstDispatched
+    ? firstDispatched.dispatched ?? "start_session"
+    : firstMatched
+      ? firstMatched.dispatched ?? "no_handler"
+      : "no_match";
+
+  const summary = outcomes
+    .map((o) => {
+      const tag = o.matched
+        ? o.dispatched ?? "matched"
+        : "no_match";
+      return `${o.event_type}: ${tag} (${o.summary})`;
+    })
+    .join("; ");
 
   await events.update(logId, {
     organizationId: orgId,
-    matchedWorkflowId: resolved.workflow.id,
-    matchedTriggerId: resolved.trigger.id,
-    dispatchedAction: dispatched.outcome,
-    agentSessionId: dispatched.agentSessionId ?? null,
-    error: dispatched.error ?? null,
-    eventSummary: mapped.summary,
+    matchedWorkflowId: canonical?.workflow_id ?? null,
+    matchedTriggerId: canonical?.trigger_id ?? null,
+    dispatchedAction: aggregateAction,
+    agentSessionId: firstDispatched?.agent_session_id ?? null,
+    error: firstError?.error ?? null,
+    eventSummary: summary,
     latencyMs: Date.now() - startedMs,
   });
 
   return c.json({
     ok: true,
-    matched: true,
-    workflow_id: resolved.workflow.id,
-    trigger_id: resolved.trigger.id,
-    outcome: dispatched.outcome,
-    agent_session_id: dispatched.agentSessionId ?? null,
+    matched: !!firstMatched,
+    outcomes: outcomes.map((o) => ({
+      event_type: o.event_type,
+      matched: o.matched,
+      workflow_id: o.workflow_id ?? null,
+      trigger_id: o.trigger_id ?? null,
+      dispatched: o.dispatched ?? null,
+      agent_session_id: o.agent_session_id ?? null,
+    })),
   });
 }
 

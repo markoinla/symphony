@@ -84,6 +84,10 @@ export interface WorkflowOverrides {
   allowed_tools?: string[];
   disallowed_tools?: string[];
   permission_mode?: string;
+  // Display name of the resolved workflow. Used in the initial
+  // thought activity so the Linear timeline shows which workflow
+  // picked the issue up. Absent on @-mention runs (no workflow).
+  name?: string;
 }
 
 export type SessionRunnerParams =
@@ -331,11 +335,15 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
 
     await step.do("post-initial-thought", async () => {
       const linear = buildActivityClient(token, refreshLinearToken);
-      await postThought(
-        linear,
-        sessionId,
-        "Picked this up — preparing the sandbox. Cold-starts can take ~30–60s before tool activity begins streaming.",
-      );
+      // Trigger-initiated runs carry the resolved workflow's name on
+      // `workflow_overrides`; @-mention runs don't (there's no
+      // workflow row to point at), so they fall through to a generic
+      // message.
+      const workflowName = workflowOverrides?.name ?? null;
+      const body = workflowName
+        ? `Picking this up with **${workflowName}** workflow.`
+        : "Picked this up — preparing the sandbox. Cold-starts can take ~30–60s before tool activity begins streaming.";
+      await postThought(linear, sessionId, body);
     });
 
     // Side-effects that make the session look "owned" in Linear's UI:

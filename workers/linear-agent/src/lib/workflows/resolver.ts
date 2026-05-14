@@ -37,8 +37,7 @@ export async function resolveWorkflow(
   //
   // Equality match columns (`to_state`, `from_state`, `label_name`) are
   // filtered in SQL — they're cheap and let the DB throw out the bulk
-  // of non-matching rows. `comment_match` is a regex / substring test,
-  // so we apply it in JS along with the JSON-array scope filters.
+  // of non-matching rows. JSON-array scope filters are applied in JS.
   const rows = await env.DB.prepare(SELECT_SQL)
     .bind(
       event.event_type,
@@ -55,7 +54,6 @@ export async function resolveWorkflow(
     .all<RawJoinedRow>();
 
   for (const raw of rows.results ?? []) {
-    if (!passesCommentMatch(raw, event)) continue;
     if (!passesScopeFilters(raw, event)) continue;
     return {
       workflow: hydrateWorkflow(raw),
@@ -75,7 +73,6 @@ const SELECT_SQL = `
     t.to_state        AS t_to_state,
     t.from_state      AS t_from_state,
     t.label_name      AS t_label_name,
-    t.comment_match   AS t_comment_match,
     t.team_filter     AS t_team_filter,
     t.project_filter  AS t_project_filter,
     t.label_filter    AS t_label_filter,
@@ -142,25 +139,6 @@ function eventField(
 ): string | null {
   const v = (event as unknown as Record<string, unknown>)[key];
   return typeof v === "string" ? v : null;
-}
-
-// `comment_match` on a trigger is a regex pattern applied to the event's
-// `comment` body (only meaningful for `comment_added` events). NULL on
-// the trigger means "match any comment". If the regex fails to compile,
-// fall back to a substring check so a bad pattern doesn't silently kill
-// the trigger.
-function passesCommentMatch(raw: RawJoinedRow, event: EventTuple): boolean {
-  const pattern = raw.t_comment_match;
-  if (pattern == null) return true;
-  const body =
-    event.event_type === "comment_added"
-      ? (event as { comment?: string }).comment ?? ""
-      : "";
-  try {
-    return new RegExp(pattern).test(body);
-  } catch {
-    return body.includes(pattern);
-  }
 }
 
 // Scope filters live in JSON arrays. We evaluate them in JS so we can
@@ -267,7 +245,6 @@ function hydrateTrigger(raw: RawJoinedRow): Trigger {
     to_state: raw.t_to_state ?? null,
     from_state: raw.t_from_state ?? null,
     label_name: raw.t_label_name ?? null,
-    comment_match: raw.t_comment_match ?? null,
     team_filter: parseStringArray(raw.t_team_filter),
     project_filter: parseStringArray(raw.t_project_filter),
     label_filter: parseStringArray(raw.t_label_filter),
@@ -292,7 +269,6 @@ interface RawJoinedRow {
   t_to_state: string | null;
   t_from_state: string | null;
   t_label_name: string | null;
-  t_comment_match: string | null;
   t_team_filter: string | null;
   t_project_filter: string | null;
   t_label_filter: string | null;
