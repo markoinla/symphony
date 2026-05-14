@@ -136,6 +136,9 @@ function makeEvent(
           engine?: string;
           model?: string;
           max_turns?: number;
+          allowed_tools?: string[];
+          disallowed_tools?: string[];
+          permission_mode?: string;
         };
       },
 ) {
@@ -969,6 +972,42 @@ describe("SessionRunner.run — model resolution", () => {
       step as never,
     );
     expect(capturedBodies[0]?.model).toBe("workflow-explicit-model");
+  });
+
+  it("passes workflow policy overrides through to the dispatcher request", async () => {
+    const kv = new FakeKV();
+    const db = seededDb();
+    const capturedBodies: Record<string, unknown>[] = [];
+    captureDispatcherRunBodies(capturedBodies);
+
+    const runner = buildRunner(makeEnv(kv, {}, db));
+    const { step } = makeStep();
+
+    const event: AgentSessionEventWebhook = {
+      type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
+      action: "created",
+      webhookId: "wh-resolution-policy",
+      agentSession: baseSession,
+      promptContext: baseSession.promptContext,
+    };
+
+    await runner.run(
+      makeEvent({
+        mode: "agent_session",
+        event,
+        workflow_overrides: {
+          allowed_tools: ["Read", "Bash"],
+          disallowed_tools: ["WebFetch"],
+          permission_mode: "ask",
+        },
+      }),
+      step as never,
+    );
+
+    expect(capturedBodies[0]?.allowed_tools).toEqual(["Read", "Bash"]);
+    expect(capturedBodies[0]?.disallowed_tools).toEqual(["WebFetch"]);
+    expect(capturedBodies[0]?.permission_mode).toBe("ask");
   });
 });
 

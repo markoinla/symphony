@@ -54,15 +54,12 @@ import { formatQueryError } from '@/lib/helpers'
 import { TriggerRow } from './trigger-row'
 import { PromptEditor } from './prompt-editor'
 
-// MVP — the Tools & sandbox tab is hidden because the fields it
-// surfaced (allowed_tools, mcp_servers, hooks, permission_mode,
-// allowed_domains, additional_*_paths) aren't yet plumbed through to
-// the sandbox-dispatcher / pi engine. The columns are still in D1
-// and round-trip through the API, but the editor doesn't pretend they
-// do something they don't. Re-enable the tab + the ToolsTab/
-// McpServerEditor components once those fields are wired (Layer 2 of
-// the SYM-295 follow-up plan — sandbox-dispatcher /run schema +
-// engine adapter changes).
+// MVP — the Tools & sandbox tab stays hidden until we have a focused
+// editor for the supported policy subset. The API currently accepts
+// and dispatches allowed_tools, disallowed_tools, and permission_mode;
+// policy-looking fields the dispatcher does not honor yet (MCP servers,
+// hooks, allowed_domains, additional_*_paths) are rejected instead of
+// being stored as ignored constraints.
 
 // Editor-local working copy of a workflow. We normalize all nullable
 // string fields to empty strings and nullable arrays to [] so form

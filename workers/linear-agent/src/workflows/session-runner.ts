@@ -81,6 +81,9 @@ export interface WorkflowOverrides {
   // never be sent.
   model?: string;
   max_turns?: number;
+  allowed_tools?: string[];
+  disallowed_tools?: string[];
+  permission_mode?: string;
 }
 
 export type SessionRunnerParams =
@@ -122,10 +125,11 @@ export type SessionRunnerParams =
       issueIdentifier: string;
     };
 
-// Per-workflow engine/model/max_turns overrides flow in via
-// `workflow_overrides` on the agent_session params (populated by
-// `dispatch-trigger.ts`). Org-level defaults come from the
-// `settings` table; the worker-wide floor stays on env.DEFAULT_*.
+// Per-workflow engine/model/max_turns and dispatcher-supported policy
+// overrides flow in via `workflow_overrides` on the agent_session
+// params (populated by `dispatch-trigger.ts`). Org-level defaults come
+// from the `settings` table; the worker-wide floor stays on
+// env.DEFAULT_*.
 
 type ResolvedInputs =
   | {
@@ -136,6 +140,9 @@ type ResolvedInputs =
       model: string | null;
       maxTurns: number;
       scope: string;
+      allowedTools: string[] | null;
+      disallowedTools: string[] | null;
+      permissionMode: string | null;
     }
   | { kind: "no_repo" }
   | { kind: "no_prompt" };
@@ -531,6 +538,9 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           model,
           maxTurns,
           scope,
+          allowedTools: workflowOverrides?.allowed_tools ?? null,
+          disallowedTools: workflowOverrides?.disallowed_tools ?? null,
+          permissionMode: workflowOverrides?.permission_mode ?? null,
         } as const;
       },
     );
@@ -614,6 +624,9 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
             model: resolved.model,
             max_turns: resolved.maxTurns,
             engine: resolved.engine,
+            allowed_tools: resolved.allowedTools,
+            disallowed_tools: resolved.disallowedTools,
+            permission_mode: resolved.permissionMode,
           },
         });
       } catch (e) {
@@ -713,6 +726,9 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
               githubToken,
               credentials: linearMcpCredentials,
               branch: deriveBranchFromIssueIdentifier(issueIdentifier),
+              allowedTools: resolved.allowedTools,
+              disallowedTools: resolved.disallowedTools,
+              permissionMode: resolved.permissionMode,
               turn,
             }),
         );
@@ -1062,6 +1078,9 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
               githubToken,
               credentials: null,
               branch: deriveBranchFromIssueIdentifier(issueIdentifier),
+              allowedTools: params.workflow.allowed_tools ?? null,
+              disallowedTools: params.workflow.disallowed_tools ?? null,
+              permissionMode: params.workflow.permission_mode ?? null,
               turn,
             }),
         );
@@ -1171,6 +1190,9 @@ async function runTurn(
     githubToken: string | null;
     credentials: RunCredentials | null;
     branch: string | null;
+    allowedTools: string[] | null;
+    disallowedTools: string[] | null;
+    permissionMode: string | null;
     turn: number;
   },
 ): Promise<TurnOutcome> {
@@ -1197,6 +1219,9 @@ async function runTurn(
       githubToken: args.githubToken,
       credentials: args.credentials,
       branch: args.branch,
+      allowedTools: args.allowedTools,
+      disallowedTools: args.disallowedTools,
+      permissionMode: args.permissionMode,
     })) {
       // Persist every event to D1 as it arrives. Wrapped in `safe`
       // because a transient D1 hiccup must not abort the turn — the
@@ -1279,6 +1304,9 @@ async function runTurnHeadless(
     githubToken: string | null;
     credentials: RunCredentials | null;
     branch: string | null;
+    allowedTools: string[] | null;
+    disallowedTools: string[] | null;
+    permissionMode: string | null;
     turn: number;
   },
 ): Promise<TurnOutcome> {
@@ -1304,6 +1332,9 @@ async function runTurnHeadless(
       githubToken: args.githubToken,
       credentials: args.credentials,
       branch: args.branch,
+      allowedTools: args.allowedTools,
+      disallowedTools: args.disallowedTools,
+      permissionMode: args.permissionMode,
     })) {
       await safe(() => persistEvent(eventStore, sessionId, args.turn, ev));
 

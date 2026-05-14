@@ -121,12 +121,43 @@ const workflowFieldShapes = {
   prompt_template: z.string().min(1),
 };
 
+const unsupportedRuntimePolicyFields = [
+  "allowed_domains",
+  "mcp_servers",
+  "additional_read_paths",
+  "additional_write_paths",
+  "hook_after_create",
+  "hook_before_remove",
+] as const;
+
+function hasRuntimePolicyValue(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  return typeof value !== "string" || value.trim().length > 0;
+}
+
+export function unsupportedRuntimePolicyIssues(
+  input: Record<string, unknown>,
+): Array<{ path: string[]; message: string }> {
+  return unsupportedRuntimePolicyFields
+    .filter((field) => hasRuntimePolicyValue(input[field]))
+    .map((field) => ({
+      path: [field],
+      message:
+        "runtime policy field is not supported by dispatched sessions yet",
+    }));
+}
+
 // Body schema for `POST /api/v1/workflows`. The server applies scope
 // (org/team/user id, version=1, status=draft, timestamps) from the
 // auth context so we don't accept those columns in the body.
 //
 // `prompt_template` is required at the DB level (NOT NULL), and the
 // API layer matches that — a workflow without a template can't run.
+// Runtime policy fields are intentionally split: dispatcher-supported
+// fields (`allowed_tools`, `disallowed_tools`, `permission_mode`) are
+// accepted and plumbed into runs; unsupported policy-looking fields are
+// rejected instead of being stored and silently ignored.
 export const WorkflowCreateSchema = z.object({
   ...workflowFieldShapes,
   engine: workflowFieldShapes.engine.default("pi"),

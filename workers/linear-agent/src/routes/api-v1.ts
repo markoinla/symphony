@@ -45,6 +45,7 @@ import {
 } from "../schemas/trigger";
 import { eventTupleSchema } from "../schemas/event";
 import {
+  unsupportedRuntimePolicyIssues,
   WorkflowCreateSchema,
   WorkflowUpdateSchema,
 } from "../schemas/workflow";
@@ -344,6 +345,12 @@ export function buildApiV1Router() {
         parsed.error.issues,
       );
     }
+    const unsupportedIssues = unsupportedRuntimePolicyIssues(
+      parsed.data as Record<string, unknown>,
+    );
+    if (unsupportedIssues.length > 0) {
+      return respondError(c, "validation_failed", undefined, unsupportedIssues);
+    }
     const input = parsed.data;
     const id = crypto.randomUUID();
     const ts = nowSec();
@@ -415,6 +422,12 @@ export function buildApiV1Router() {
         undefined,
         parsed.error.issues,
       );
+    }
+    const unsupportedIssues = unsupportedRuntimePolicyIssues(
+      parsed.data as Record<string, unknown>,
+    );
+    if (unsupportedIssues.length > 0) {
+      return respondError(c, "validation_failed", undefined, unsupportedIssues);
     }
     const input = parsed.data;
 

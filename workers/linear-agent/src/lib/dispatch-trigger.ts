@@ -195,12 +195,24 @@ export async function dispatchTrigger(
     engine: string;
     model?: string;
     max_turns: number;
+    allowed_tools?: string[];
+    disallowed_tools?: string[];
+    permission_mode?: string;
   } = {
     engine: workflow.engine,
     max_turns: workflow.max_turns,
   };
   if (workflow.model !== null && workflow.model !== "") {
     workflowOverrides.model = workflow.model;
+  }
+  if (workflow.allowed_tools && workflow.allowed_tools.length > 0) {
+    workflowOverrides.allowed_tools = workflow.allowed_tools;
+  }
+  if (workflow.disallowed_tools && workflow.disallowed_tools.length > 0) {
+    workflowOverrides.disallowed_tools = workflow.disallowed_tools;
+  }
+  if (workflow.permission_mode) {
+    workflowOverrides.permission_mode = workflow.permission_mode;
   }
 
   try {

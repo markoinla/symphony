@@ -107,7 +107,7 @@ Every agent session resolves three runtime fields — `engine`, `model`,
 
 | Source | When it applies | Notes |
 |---|---|---|
-| `workflow_overrides` on the runner params | Trigger-fired runs only | `dispatch-trigger.ts` snapshots `workflow.engine` / `.model` / `.max_turns` from the resolved workflow row onto the session params at queue time. Frozen at dispatch — edits to the workflow row mid-run don't perturb in-flight sessions. NULL on `workflow.model` means "inherit", so dispatch-trigger omits the field in that case. |
+| `workflow_overrides` on the runner params | Trigger-fired runs only | `dispatch-trigger.ts` snapshots `workflow.engine` / `.model` / `.max_turns` plus dispatcher-supported runtime policy (`allowed_tools`, `disallowed_tools`, `permission_mode`) from the resolved workflow row onto the session params at queue time. Frozen at dispatch — edits to the workflow row mid-run don't perturb in-flight sessions. NULL on `workflow.model` means "inherit", so dispatch-trigger omits the field in that case. |
 | `settings('agent.default_engine')` / `('agent.default_model')` / `('agent.max_turns')` | All runs | Per-org overrides set via the Agent tab on the dashboard. Stored in the `settings` D1 table; one row per `(organization_id, key)`. |
 | `env.DEFAULT_ENGINE` / `DEFAULT_MODEL` / `DEFAULT_MAX_TURNS` | All runs | Worker-wide floor configured in `wrangler.jsonc`. |
 | Baked-in literal | Last resort | `engine = "pi"`, `model = null`, `max_turns = 10`. |
@@ -117,6 +117,14 @@ The `projects` table's `engine` / `model` / `max_turns` columns are
 but the runner ignores them; per-team customization should live on
 workflow rows (the workflow editor exposes `team_id` scope) or org
 settings.
+
+Workflow CRUD accepts only runtime policy fields that the current dispatcher
+request honors: `allowed_tools`, `disallowed_tools`, and `permission_mode`.
+Policy-looking fields that are not wired into dispatched sessions yet
+(`allowed_domains`, `mcp_servers`, `additional_read_paths`,
+`additional_write_paths`, `hook_after_create`, `hook_before_remove`) are
+rejected with `validation_failed` when set to a non-empty value, rather than
+being stored and silently ignored.
 
 ### Settings API
 
