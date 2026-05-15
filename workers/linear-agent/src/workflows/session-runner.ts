@@ -44,6 +44,7 @@ import {
   DispatcherClient,
   DispatcherError,
   deriveBranchFromIssueIdentifier,
+  dispatchBranchForSubject,
   type NormalizedEvent,
   type RunCredentials,
 } from "../lib/dispatcher";
@@ -1001,6 +1002,11 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         ? withLinearGraphqlReference(params.prompt, { issueIdentifier })
         : params.prompt;
 
+    const dispatchBranch = dispatchBranchForSubject(
+      params.event.subject,
+      issueIdentifier,
+    );
+
     const githubAppInstallationId: number | null = await step.do(
       "trigger-load-github-install",
       async () => {
@@ -1073,7 +1079,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
               model,
               githubToken,
               credentials: null,
-              branch: deriveBranchFromIssueIdentifier(issueIdentifier),
+              branch: dispatchBranch,
               allowedTools: params.workflow.allowed_tools ?? null,
               disallowedTools: params.workflow.disallowed_tools ?? null,
               permissionMode: params.workflow.permission_mode ?? null,

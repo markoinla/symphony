@@ -20,6 +20,8 @@
  * (Elixir, dispatcher worker, this client) wire-compatible.
  */
 
+import type { SubjectRef } from "../schemas/event";
+
 export interface McpServerCredential {
   name: string;
   url: string;
@@ -360,6 +362,31 @@ export function deriveBranchFromIssueIdentifier(
     .replace(/[^a-z0-9]+$/, "");
   if (sanitized.length === 0) return null;
   return `symphony/${sanitized}`;
+}
+
+/**
+ * Decide the branch the dispatcher should check out for a trigger run.
+ *
+ * A GitHub PR already has a real head branch — return that so the
+ * sandbox checks out the PR's actual code and pushes follow-up commits
+ * back to the same PR. `subject.head` is only a branch *name*: the
+ * dispatcher fetches it from `origin`, so this is correct for
+ * same-repo PRs. Fork PRs (head ref lives in a different repo) are a
+ * known gap — the dispatcher won't find the ref on origin and falls
+ * back to a fresh branch off the default branch. Tracked separately.
+ *
+ * Every other subject kind (Linear issue, GitHub issue, generic,
+ * Sentry) has no pre-existing branch, so derive a stable per-issue
+ * working branch from the identifier instead.
+ */
+export function dispatchBranchForSubject(
+  subject: SubjectRef | undefined,
+  issueIdentifier: string,
+): string | null {
+  if (subject?.kind === "github_pr" && subject.head) {
+    return subject.head;
+  }
+  return deriveBranchFromIssueIdentifier(issueIdentifier);
 }
 
 function serializeRunArgs(
