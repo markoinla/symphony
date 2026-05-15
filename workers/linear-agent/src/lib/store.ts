@@ -786,24 +786,26 @@ export class AgentSessionEventStore {
   }
 }
 
-// ── webhook_sources ─────────────────────────────────────────────────
+// ── webhook_sources ────────────────────────────────────────────────
 
 export interface WebhookSourceRecord {
   id: string;
   organization_id: string;
   kind: string;
   name: string;
+  enabled: number;
   secret: string;
   config: string | null;
   created_at: number;
   updated_at: number;
+  last_used_at: number | null;
 }
 
 export class WebhookSourceStore {
   constructor(private readonly db: D1Database) {}
 
   private static readonly COLUMNS =
-    "id, organization_id, kind, name, secret, config, created_at, updated_at";
+    "id, organization_id, kind, name, enabled, secret, config, created_at, updated_at, last_used_at";
 
   async list(orgId: string): Promise<WebhookSourceRecord[]> {
     const result = await this.db
@@ -817,26 +819,32 @@ export class WebhookSourceStore {
     return result.results ?? [];
   }
 
+  async listByOrg(orgId: string): Promise<WebhookSourceRecord[]> {
+    return await this.list(orgId);
+  }
+
   async create(input: {
     organizationId: string;
     kind: string;
     name: string;
     secret: string;
     config?: Record<string, unknown> | null;
+    enabled?: boolean;
   }): Promise<WebhookSourceRecord | null> {
     const id = crypto.randomUUID();
     const now = Math.floor(Date.now() / 1000);
     await this.db
       .prepare(
         `INSERT INTO webhook_sources
-           (id, organization_id, kind, name, secret, config, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+           (id, organization_id, kind, name, enabled, secret, config, created_at, updated_at, last_used_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
       )
       .bind(
         id,
         input.organizationId,
         input.kind,
         input.name,
+        input.enabled === false ? 0 : 1,
         input.secret,
         input.config ? JSON.stringify(input.config) : null,
         now,
@@ -865,13 +873,22 @@ export class WebhookSourceStore {
   async update(
     id: string,
     orgId: string,
-    fields: { name?: string; config?: Record<string, unknown> | null; secret?: string },
+    fields: {
+      name?: string;
+      enabled?: boolean;
+      config?: Record<string, unknown> | null;
+      secret?: string;
+    },
   ): Promise<WebhookSourceRecord | null> {
     const sets: string[] = [];
     const values: (string | null | number)[] = [];
     if (fields.name !== undefined) {
       sets.push("name = ?");
       values.push(fields.name);
+    }
+    if (fields.enabled !== undefined) {
+      sets.push("enabled = ?");
+      values.push(fields.enabled ? 1 : 0);
     }
     if (fields.config !== undefined) {
       sets.push("config = ?");
@@ -889,6 +906,14 @@ export class WebhookSourceStore {
       .bind(...values)
       .run();
     return await this.getById(id, orgId);
+  }
+
+  async touch(id: string): Promise<void> {
+    const ts = Math.floor(Date.now() / 1000);
+    await this.db
+      .prepare("UPDATE webhook_sources SET last_used_at = ?, updated_at = ? WHERE id = ?")
+      .bind(ts, ts, id)
+      .run();
   }
 
   async delete(id: string, orgId: string): Promise<boolean> {
@@ -985,6 +1010,7 @@ export class WebhookEventStore {
     id: string,
     fields: {
       organizationId?: string | null;
+      signatureOk?: boolean;
       deduped?: boolean;
       matchedWorkflowId?: string | null;
       matchedTriggerId?: string | null;
@@ -1001,6 +1027,10 @@ export class WebhookEventStore {
     if (fields.organizationId !== undefined) {
       sets.push("organization_id = ?");
       values.push(fields.organizationId);
+    }
+    if (fields.signatureOk !== undefined) {
+      sets.push("signature_ok = ?");
+      values.push(fields.signatureOk ? 1 : 0);
     }
     if (fields.deduped !== undefined) {
       sets.push("deduped = ?");

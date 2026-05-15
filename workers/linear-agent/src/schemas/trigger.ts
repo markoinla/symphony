@@ -13,6 +13,7 @@
 import { z } from "zod";
 
 import { eventTypeSchema } from "./event";
+import { PayloadMatchSchema } from "./webhook-source";
 
 export const triggerActionSchema = z.enum([
   "start_session",
@@ -49,6 +50,8 @@ export const TriggerSchema = z.object({
   from_state: z.string().nullable().optional(),
   label_name: z.string().nullable().optional(),
   comment_match: z.string().nullable().optional(),
+  external_id_filter: z.string().nullable().optional(),
+  payload_match: PayloadMatchSchema.nullable().optional(),
 
   ...triggerFilterShapes,
 
@@ -78,6 +81,8 @@ const triggerFieldShapes = {
   from_state: z.string().nullable().optional(),
   label_name: z.string().nullable().optional(),
   comment_match: z.string().nullable().optional(),
+  external_id_filter: z.string().nullable().optional(),
+  payload_match: PayloadMatchSchema.nullable().optional(),
 
   ...triggerFilterShapes,
 

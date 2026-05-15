@@ -683,6 +683,7 @@ export async function getWebhook(id: string): Promise<{ webhook: WebhookEvent }>
   return requestJson<{ webhook: WebhookEvent }>(`/api/v1/webhooks/${id}`)
 }
 
+
 // ── Settings ────────────────────────────────────────────────────────
 
 export function getSettings(): Promise<SettingsPayload> {
@@ -770,16 +771,27 @@ export type Integrations = {
   github_app_settings_url: string | null
 }
 
+export type WebhookSourceKind = 'github' | 'generic'
+
+export type WebhookSourceGenericConfig = {
+  external_id_path: string
+  signature_header: string
+  signature_algorithm: 'sha1' | 'sha256'
+}
+
 export type WebhookSource = {
   id: string
   organization_id: string
-  kind: 'github'
+  kind: WebhookSourceKind
   name: string
-  config: Record<string, unknown>
+  enabled: boolean
+  config: Record<string, unknown> & Partial<WebhookSourceGenericConfig>
   inbound_url: string
+  webhook_url: string
   secret?: string
   created_at: number
   updated_at: number
+  last_used_at: number | null
 }
 
 export function listWebhookSources(): Promise<{ webhook_sources: WebhookSource[] }> {
@@ -787,8 +799,9 @@ export function listWebhookSources(): Promise<{ webhook_sources: WebhookSource[]
 }
 
 export function createWebhookSource(input: {
-  kind: 'github'
+  kind: WebhookSourceKind
   name: string
+  enabled?: boolean
   config?: Record<string, unknown>
 }): Promise<{ webhook_source: WebhookSource }> {
   return requestJson<{ webhook_source: WebhookSource }>('/api/v1/webhook-sources', {

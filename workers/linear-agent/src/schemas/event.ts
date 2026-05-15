@@ -24,6 +24,7 @@ import { z } from "zod";
 
 export const eventTypeSchema = z.enum([
   "api.invoke",
+  "generic.webhook",
   "session_started",
   "state_entered",
   "state_exited",
@@ -208,6 +209,12 @@ export const apiInvokeEventSchema = z.object({
   context: z.record(z.string(), z.unknown()).default({}),
 });
 
+export const genericWebhookEventSchema = z.object({
+  event_type: z.literal("generic.webhook"),
+  ...scopeFields,
+  context: z.record(z.string(), z.unknown()).default({}),
+});
+
 export const sessionStartedEventSchema = z.object({
   event_type: z.literal("session_started"),
   ...scopeFields,
@@ -320,6 +327,7 @@ export const githubIssueClosedEventSchema = z.object({
 // dispatcher, and renderer all consume this shape.
 export const EventTupleSchema = z.discriminatedUnion("event_type", [
   apiInvokeEventSchema,
+  genericWebhookEventSchema,
   sessionStartedEventSchema,
   stateEnteredEventSchema,
   stateExitedEventSchema,

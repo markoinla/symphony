@@ -78,10 +78,12 @@ export interface WebhookSourceRow {
   organization_id: string;
   kind: string;
   name: string;
+  enabled: number;
   secret: string;
   config: string | null;
   created_at: number;
   updated_at: number;
+  last_used_at: number | null;
 }
 
 export interface WebhookEventRow {
@@ -497,17 +499,38 @@ class FakeStatement {
     }
     // ── webhook_sources ────────────────────────────────────────
     if (/^INSERT INTO webhook_sources/i.test(sql)) {
-      const [id, organizationId, kind, name, secret, config, createdAt, updatedAt] =
-        this.bindings as [string, string, string, string, string, string | null, number, number];
+      const [
+        id,
+        organizationId,
+        kind,
+        name,
+        enabled,
+        secret,
+        config,
+        createdAt,
+        updatedAt,
+      ] = this.bindings as [
+        string,
+        string,
+        string,
+        string,
+        number,
+        string,
+        string | null,
+        number,
+        number,
+      ];
       this.db.webhookSources.set(id, {
         id,
         organization_id: organizationId,
         kind,
         name,
+        enabled,
         secret,
         config,
         created_at: createdAt,
         updated_at: updatedAt,
+        last_used_at: null,
       });
       return { success: true, meta: { changes: 1 } };
     }
@@ -537,6 +560,54 @@ class FakeStatement {
     }
 
     // ── webhook_events ──────────────────────────────────────────
+    if (/^INSERT INTO webhook_sources/i.test(sql)) {
+      const [id, organizationId, name, enabled, secret, config, createdAt, updatedAt] =
+        this.bindings as [string, string, string, number, string, string, number, number];
+      this.db.webhookSources.set(id, {
+        id,
+        organization_id: organizationId,
+        name,
+        kind: "generic",
+        enabled,
+        secret,
+        config,
+        created_at: createdAt,
+        updated_at: updatedAt,
+        last_used_at: null,
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (/^UPDATE webhook_sources SET/i.test(sql)) {
+      const values = this.bindings.slice();
+      const id = values[values.length - (sql.includes("organization_id") ? 2 : 1)] as string;
+      const row = this.db.webhookSources.get(id);
+      if (!row) return { success: true, meta: { changes: 0 } };
+      const setClause = sql
+        .replace(/^UPDATE webhook_sources SET\s*/i, "")
+        .replace(/\s*WHERE.*$/i, "");
+      const assignments = setClause.split(",").map((c) => c.trim());
+      for (const assign of assignments) {
+        const [colRaw] = assign.split("=");
+        const col = colRaw?.trim();
+        const value = values.shift();
+        if (col === "name") row.name = value as string;
+        if (col === "enabled") row.enabled = value as number;
+        if (col === "config") row.config = value as string;
+        if (col === "updated_at") row.updated_at = value as number;
+        if (col === "last_used_at") row.last_used_at = value as number;
+      }
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (/^DELETE FROM webhook_sources/i.test(sql)) {
+      const [id, organizationId] = this.bindings as [string, string];
+      const row = this.db.webhookSources.get(id);
+      if (row && row.organization_id === organizationId) {
+        this.db.webhookSources.delete(id);
+        return { success: true, meta: { changes: 1 } };
+      }
+      return { success: true, meta: { changes: 0 } };
+    }
+
     if (/^INSERT INTO webhook_events/i.test(sql)) {
       const [
         id,
@@ -710,6 +781,16 @@ class FakeStatement {
       return (this.db.agentSessions.get(id) as unknown as T) ?? null;
     }
 
+    if (/FROM webhook_sources WHERE id = \? AND organization_id/i.test(sql)) {
+      const [id, orgId] = this.bindings as [string, string];
+      const row = this.db.webhookSources.get(id);
+      return (row && row.organization_id === orgId ? (row as unknown as T) : null);
+    }
+    if (/FROM webhook_sources WHERE id = \?/i.test(sql)) {
+      const [id] = this.bindings as [string];
+      return (this.db.webhookSources.get(id) as unknown as T) ?? null;
+    }
+
     if (/^SELECT value FROM settings/i.test(sql)) {
       const [orgId, key] = this.bindings as [string, string];
       const row = this.db.settings.get(`${orgId}:${key}`);
@@ -759,12 +840,16 @@ class FakeStatement {
       };
     }
 
-    if (/FROM webhook_sources WHERE organization_id = \?/i.test(sql)) {
+    if (/FROM webhook_sources\s+WHERE organization_id/i.test(sql)) {
       const [orgId] = this.bindings as [string];
-      const rows = [...this.db.webhookSources.values()]
+      const rows = Array.from(this.db.webhookSources.values())
         .filter((r) => r.organization_id === orgId)
         .sort((a, b) => b.created_at - a.created_at);
       return { success: true, results: rows as unknown as T[] };
+    }
+
+    if (/FROM workflow_triggers t\s+JOIN workflows w/i.test(sql)) {
+      return { success: true, results: [] as unknown as T[] };
     }
 
     if (/FROM webhook_events/i.test(sql)) {
@@ -888,6 +973,9 @@ function applyWebhookEventColumn(
   switch (col) {
     case "organization_id":
       row.organization_id = (value ?? null) as string | null;
+      break;
+    case "signature_ok":
+      row.signature_ok = value as number;
       break;
     case "deduped":
       row.deduped = value as number;
