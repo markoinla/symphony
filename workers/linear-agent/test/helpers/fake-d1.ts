@@ -499,17 +499,38 @@ class FakeStatement {
     }
     // ── webhook_sources ────────────────────────────────────────
     if (/^INSERT INTO webhook_sources/i.test(sql)) {
-      const [id, organizationId, kind, name, secret, config, createdAt, updatedAt] =
-        this.bindings as [string, string, string, string, string, string | null, number, number];
+      const [
+        id,
+        organizationId,
+        kind,
+        name,
+        enabled,
+        secret,
+        config,
+        createdAt,
+        updatedAt,
+      ] = this.bindings as [
+        string,
+        string,
+        string,
+        string,
+        number,
+        string,
+        string | null,
+        number,
+        number,
+      ];
       this.db.webhookSources.set(id, {
         id,
         organization_id: organizationId,
         kind,
         name,
+        enabled,
         secret,
         config,
         created_at: createdAt,
         updated_at: updatedAt,
+        last_used_at: null,
       });
       return { success: true, meta: { changes: 1 } };
     }

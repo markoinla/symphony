@@ -219,10 +219,12 @@ function seedGitHubTriggerDb(eventType: string, commentMatch?: string): Resolver
     organization_id: "org-1",
     kind: "github",
     name: "GitHub",
+    enabled: 1,
     secret: "github-secret",
     config: null,
     created_at: now,
     updated_at: now,
+    last_used_at: null,
   });
   db.projects.set("org-1:team-1", {
     id: "project-1",
