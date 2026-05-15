@@ -642,6 +642,7 @@ export type WebhookEvent = {
   id: string
   received_at: number
   organization_id: string | null
+  source_id: string | null
   webhook_id: string | null
   envelope_type: string
   envelope_action: string | null
@@ -662,6 +663,7 @@ export type WebhookListParams = {
   limit?: number
   envelope?: string
   dispatchedAction?: string
+  sourceId?: string
 }
 
 export async function getWebhooks(
@@ -672,6 +674,7 @@ export async function getWebhooks(
   if (params?.envelope) qs.set('envelope', params.envelope)
   if (params?.dispatchedAction)
     qs.set('dispatched_action', params.dispatchedAction)
+  if (params?.sourceId) qs.set('source_id', params.sourceId)
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
   return requestJson<{ webhooks: WebhookEvent[] }>(`/api/v1/webhooks${suffix}`)
 }
@@ -679,6 +682,7 @@ export async function getWebhooks(
 export async function getWebhook(id: string): Promise<{ webhook: WebhookEvent }> {
   return requestJson<{ webhook: WebhookEvent }>(`/api/v1/webhooks/${id}`)
 }
+
 
 // ── Settings ────────────────────────────────────────────────────────
 
@@ -767,45 +771,64 @@ export type Integrations = {
   github_app_settings_url: string | null
 }
 
+export type WebhookSourceKind = 'github' | 'generic' | 'sentry'
+
+export type WebhookSourceGenericConfig = {
+  external_id_path: string
+  signature_header: string
+  signature_algorithm: 'sha1' | 'sha256'
+}
+
 export type WebhookSource = {
   id: string
   organization_id: string
-  provider: 'sentry'
+  kind: WebhookSourceKind
   name: string
   enabled: boolean
-  project_id: string | null
-  config: Record<string, unknown> | null
+  project_id?: string | null
+  config: Record<string, unknown> & Partial<WebhookSourceGenericConfig>
   inbound_url: string
+  webhook_url: string
   secret?: string
-  last_received_at: number | null
   created_at: number
   updated_at: number
+  last_used_at: number | null
 }
 
-export type WebhookSourceCreateBody = {
-  provider?: 'sentry'
+export function listWebhookSources(): Promise<{ webhook_sources: WebhookSource[] }> {
+  return requestJson<{ webhook_sources: WebhookSource[] }>('/api/v1/webhook-sources')
+}
+
+export function createWebhookSource(input: {
+  kind: WebhookSourceKind
   name: string
   enabled?: boolean
   project_id?: string | null
-  config?: Record<string, unknown> | null
-}
-
-export function listWebhookSources(): Promise<{ sources: WebhookSource[] }> {
-  return requestJson<{ sources: WebhookSource[] }>('/api/v1/webhook-sources')
-}
-
-export function createWebhookSource(body: WebhookSourceCreateBody): Promise<{ source: WebhookSource }> {
-  return requestJson<{ source: WebhookSource }>('/api/v1/webhook-sources', {
+  config?: Record<string, unknown>
+}): Promise<{ webhook_source: WebhookSource }> {
+  return requestJson<{ webhook_source: WebhookSource }>('/api/v1/webhook-sources', {
     method: 'POST',
-    body: JSON.stringify(body),
+    body: JSON.stringify(input),
   })
 }
 
-export function updateWebhookSource(id: string, body: Partial<WebhookSourceCreateBody> & { rotate_secret?: boolean }): Promise<{ source: WebhookSource }> {
-  return requestJson<{ source: WebhookSource }>(`/api/v1/webhook-sources/${encodeURIComponent(id)}`, {
-    method: 'PUT',
-    body: JSON.stringify(body),
-  })
+export function updateWebhookSource(
+  id: string,
+  body: Partial<{
+    name: string
+    enabled: boolean
+    project_id: string | null
+    config: Record<string, unknown>
+    rotate_secret: boolean
+  }>,
+): Promise<{ webhook_source: WebhookSource }> {
+  return requestJson<{ webhook_source: WebhookSource }>(
+    `/api/v1/webhook-sources/${encodeURIComponent(id)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    },
+  )
 }
 
 export function getIntegrations(): Promise<Integrations> {

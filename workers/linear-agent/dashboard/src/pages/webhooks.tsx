@@ -177,6 +177,7 @@ function DetailGrid({ row }: { row: WebhookEvent }) {
   return (
     <dl className="grid grid-cols-1 gap-x-6 gap-y-2 py-3 text-[12px] sm:grid-cols-2">
       <DetailField label="ID" value={row.id} mono />
+      <DetailField label="Source ID" value={row.source_id ?? '—'} mono />
       <DetailField label="Webhook ID" value={row.webhook_id ?? '—'} mono />
       <DetailField label="Latency" value={`${row.latency_ms} ms`} />
       <DetailField label="Org" value={row.organization_id ?? '—'} mono />

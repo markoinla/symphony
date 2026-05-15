@@ -104,13 +104,15 @@ export function formatWorkflowTimestamp(seconds: number): string {
 
 // ── Preview request/response (POST /workflows/:id/preview) ─────────
 //
-// The Worker route accepts `{ issue_id }` and returns `{ rendered }`
-// — see workers/linear-agent/src/routes/api-v1.ts. We don't expose
-// these as Zod schemas server-side because the route shape is
-// API-layer-only, but mirroring them here keeps the hook typed.
+// The Worker route accepts an optional `{ issue_id, subject, context }`
+// and returns `{ rendered }` — see workers/linear-agent/src/routes/api-v1.ts.
+// The subject schema is intentionally loose client-side so the editor can
+// preview every kind without duplicating the full server contract.
 
 export const workflowPreviewRequestSchema = z.object({
-  issue_id: z.string().min(1),
+  issue_id: z.string().min(1).optional(),
+  subject: z.record(z.string(), z.unknown()).optional(),
+  context: z.record(z.string(), z.unknown()).optional(),
 })
 export type WorkflowPreviewRequest = z.infer<typeof workflowPreviewRequestSchema>
 
@@ -128,11 +130,18 @@ export function newTriggerDraft(): TriggerCreateBody {
     from_state: null,
     label_name: null,
     comment_match: null,
+    external_id_filter: null,
+    payload_match: null,
     team_filter: null,
     project_filter: null,
     label_filter: null,
     skip_label_filter: null,
     assignee_filter: null,
+    repo_filter: null,
+    branch_filter: null,
+    base_filter: null,
+    draft_filter: null,
+    author_filter: null,
     sentry_project_filter: null,
     level_filter: null,
     fingerprint_filter: null,

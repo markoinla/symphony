@@ -251,7 +251,7 @@ export const webhookSources = sqliteTable(
     organizationId: text("organization_id")
       .notNull()
       .references(() => organizations.id, { onDelete: "cascade" }),
-    provider: text("provider").notNull(),
+    kind: text("kind").notNull(),
     name: text("name").notNull(),
     secret: text("secret").notNull(),
     enabled: integer("enabled").notNull().default(1),
@@ -259,16 +259,13 @@ export const webhookSources = sqliteTable(
       onDelete: "set null",
     }),
     config: text("config"),
-    lastReceivedAt: integer("last_received_at", { mode: "timestamp" }),
+    lastUsedAt: integer("last_used_at", { mode: "timestamp" }),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
     updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
   },
   (table) => ({
     orgIdx: index("idx_webhook_sources_org").on(table.organizationId),
-    providerIdx: index("idx_webhook_sources_provider").on(
-      table.provider,
-      table.enabled,
-    ),
+    kindIdx: index("idx_webhook_sources_kind").on(table.kind, table.enabled),
   }),
 );
 

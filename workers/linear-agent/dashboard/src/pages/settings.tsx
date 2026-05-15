@@ -28,15 +28,15 @@ import {
   type ProxyPingResult,
   type Setting,
   changePassword,
+  createWebhookSource,
   createApiToken,
   deleteApiToken,
   deleteSetting,
-  createWebhookSource,
   getIntegrations,
   getProxyStatus,
   getSettings,
-  listApiTokens,
   listWebhookSources,
+  listApiTokens,
   proxyPing,
   revokeOAuth,
   updateWebhookSource,
@@ -219,6 +219,7 @@ export function SettingsView() {
             <LinearOAuthSection />
             <GitHubOAuthSection />
             <SentryWebhookSection />
+            <GenericWebhookSection />
             <ProxySection />
             <DomainSection />
           </div>
@@ -545,13 +546,13 @@ function GitHubOAuthSection() {
 function SentryWebhookSection() {
   const queryClient = useQueryClient()
   const sourcesQuery = useQuery({ queryKey: ['webhook-sources'], queryFn: listWebhookSources })
-  const source = sourcesQuery.data?.sources.find((s) => s.provider === 'sentry')
+  const source = sourcesQuery.data?.webhook_sources.find((s) => s.kind === 'sentry')
   const [createdSecret, setCreatedSecret] = useState<string | null>(null)
 
   const createMutation = useMutation({
-    mutationFn: () => createWebhookSource({ provider: 'sentry', name: 'Sentry', enabled: true }),
-    onSuccess: async ({ source }) => {
-      setCreatedSecret(source.secret ?? null)
+    mutationFn: () => createWebhookSource({ kind: 'sentry', name: 'Sentry', enabled: true }),
+    onSuccess: async ({ webhook_source }) => {
+      setCreatedSecret(webhook_source.secret ?? null)
       await queryClient.invalidateQueries({ queryKey: ['webhook-sources'] })
       toast.success('Sentry webhook source created. Copy the secret now.')
     },
@@ -560,8 +561,8 @@ function SentryWebhookSection() {
 
   const rotateMutation = useMutation({
     mutationFn: (id: string) => updateWebhookSource(id, { rotate_secret: true }),
-    onSuccess: async ({ source }) => {
-      setCreatedSecret(source.secret ?? null)
+    onSuccess: async ({ webhook_source }) => {
+      setCreatedSecret(webhook_source.secret ?? null)
       await queryClient.invalidateQueries({ queryKey: ['webhook-sources'] })
       toast.success('Sentry HMAC secret rotated. Copy the new secret now.')
     },
@@ -1036,6 +1037,98 @@ function ChangePasswordSection() {
             {mutation.isPending ? 'Changing...' : 'Change password'}
           </Button>
         </form>
+      </CardContent>
+    </Card>
+  )
+}
+
+function GenericWebhookSection() {
+  const queryClient = useQueryClient()
+  const sourcesQuery = useQuery({ queryKey: ['webhook-sources'], queryFn: listWebhookSources })
+  const [name, setName] = useState('Generic webhook')
+  const [externalIdPath, setExternalIdPath] = useState('$.event.id')
+  const [signatureHeader, setSignatureHeader] = useState('X-Webhook-Signature')
+  const [signatureAlgorithm, setSignatureAlgorithm] = useState<'sha256' | 'sha1'>('sha256')
+  const [created, setCreated] = useState<{ url: string; secret: string } | null>(null)
+
+  const createMutation = useMutation({
+    mutationFn: () =>
+      createWebhookSource({
+        kind: 'generic',
+        name,
+        enabled: true,
+        config: {
+          external_id_path: externalIdPath,
+          signature_header: signatureHeader,
+          signature_algorithm: signatureAlgorithm,
+        },
+      }),
+    onSuccess: async ({ webhook_source }) => {
+      await queryClient.invalidateQueries({ queryKey: ['webhook-sources'] })
+      setCreated({ url: webhook_source.webhook_url, secret: webhook_source.secret ?? '' })
+      toast.success('Generic webhook source created.')
+    },
+    onError: (err) => toast.error(formatQueryError(err)),
+  })
+
+  const sources = (sourcesQuery.data?.webhook_sources ?? []).filter((s) => s.kind === 'generic')
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Radio className="h-4 w-4 text-th-text-3" />
+          <CardTitle>Generic webhooks</CardTitle>
+          <Badge variant={sources.length > 0 ? 'running' : 'secondary'}>
+            {sources.length > 0 ? `${sources.length} source${sources.length === 1 ? '' : 's'}` : 'Not set'}
+          </Badge>
+        </div>
+        <CardDescription>
+          Create an HMAC-signed JSON webhook source for systems that do not have a first-class adapter.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {sourcesQuery.isError ? <ErrorPanel detail={formatQueryError(sourcesQuery.error)} title="Sources unavailable" /> : null}
+        {created ? (
+          <div className="space-y-2 rounded-lg border border-th-success/30 bg-th-success-muted p-3 text-sm">
+            <p className="font-medium text-th-success">Save this secret now — it is shown once.</p>
+            <code className="block break-all text-th-text-2">URL: {created.url}</code>
+            <code className="block break-all text-th-text-2">Secret: {created.secret}</code>
+          </div>
+        ) : null}
+        <div className="grid gap-3 md:grid-cols-2">
+          <Field label="Name">
+            <Input value={name} onChange={(e) => setName(e.target.value)} />
+          </Field>
+          <Field label="External ID JSONPath">
+            <Input value={externalIdPath} onChange={(e) => setExternalIdPath(e.target.value)} placeholder="$.event.id" />
+          </Field>
+          <Field label="Signature header">
+            <Input value={signatureHeader} onChange={(e) => setSignatureHeader(e.target.value)} placeholder="X-Webhook-Signature" />
+          </Field>
+          <Field label="Algorithm">
+            <Select value={signatureAlgorithm} onValueChange={(v) => setSignatureAlgorithm(v as 'sha256' | 'sha1')}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="sha256">sha256</SelectItem>
+                <SelectItem value="sha1">sha1</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+        </div>
+        <Button disabled={createMutation.isPending || !name.trim()} onClick={() => createMutation.mutate()} type="button">
+          {createMutation.isPending ? 'Creating…' : 'Create source'}
+        </Button>
+        {sources.length > 0 ? (
+          <div className="space-y-2">
+            {sources.map((source) => (
+              <div key={source.id} className="rounded-lg border border-th-border bg-th-inset p-3 text-sm">
+                <div className="font-medium text-th-text-1">{source.name}</div>
+                <code className="break-all text-xs text-th-text-3">{source.webhook_url}</code>
+              </div>
+            ))}
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   )

@@ -13,6 +13,7 @@
 import { z } from "zod";
 
 import { eventTypeSchema } from "./event";
+import { PayloadMatchSchema } from "./webhook-source";
 
 export const triggerActionSchema = z.enum([
   "start_session",
@@ -23,6 +24,27 @@ export const triggerActionSchema = z.enum([
   "transition_to",
 ]);
 export type TriggerAction = z.infer<typeof triggerActionSchema>;
+
+const triggerFilterShapes = {
+  team_filter: z.array(z.string()).nullable().optional(),
+  project_filter: z.array(z.string()).nullable().optional(),
+  label_filter: z.array(z.string()).nullable().optional(),
+  skip_label_filter: z.array(z.string()).nullable().optional(),
+  assignee_filter: z.array(z.string()).nullable().optional(),
+  repo_filter: z.array(z.string()).nullable().optional(),
+  branch_filter: z.array(z.string()).nullable().optional(),
+  base_filter: z.array(z.string()).nullable().optional(),
+  draft_filter: z.boolean().nullable().optional(),
+  author_filter: z.array(z.string()).nullable().optional(),
+  sentry_project_filter: z.array(z.string()).nullable().optional(),
+  level_filter: z
+    .array(z.enum(["fatal", "error", "warning", "info", "debug"]))
+    .nullable()
+    .optional(),
+  fingerprint_filter: z.string().nullable().optional(),
+  environment_filter: z.array(z.string()).nullable().optional(),
+  release_filter: z.array(z.string()).nullable().optional(),
+} as const;
 
 // Full trigger row — what the resolver returns and what the API
 // exposes. JSON columns are surfaced as parsed arrays / objects.
@@ -36,17 +58,10 @@ export const TriggerSchema = z.object({
   from_state: z.string().nullable().optional(),
   label_name: z.string().nullable().optional(),
   comment_match: z.string().nullable().optional(),
+  external_id_filter: z.string().nullable().optional(),
+  payload_match: PayloadMatchSchema.nullable().optional(),
 
-  team_filter: z.array(z.string()).nullable().optional(),
-  project_filter: z.array(z.string()).nullable().optional(),
-  label_filter: z.array(z.string()).nullable().optional(),
-  skip_label_filter: z.array(z.string()).nullable().optional(),
-  assignee_filter: z.array(z.string()).nullable().optional(),
-  sentry_project_filter: z.array(z.string()).nullable().optional(),
-  level_filter: z.array(z.enum(["fatal", "error", "warning", "info", "debug"])).nullable().optional(),
-  fingerprint_filter: z.string().nullable().optional(),
-  environment_filter: z.array(z.string()).nullable().optional(),
-  release_filter: z.array(z.string()).nullable().optional(),
+  ...triggerFilterShapes,
 
   action: triggerActionSchema,
   action_params: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -54,7 +69,15 @@ export const TriggerSchema = z.object({
   priority: z.number().int(),
   enabled: z.boolean(),
   expected_subject_kinds: z
-    .array(z.enum(["linear_issue", "generic", "sentry_event"]))
+    .array(
+      z.enum([
+        "linear_issue",
+        "generic",
+        "github_pr",
+        "github_issue",
+        "sentry_event",
+      ]),
+    )
     .nullable()
     .optional(),
 
@@ -74,17 +97,10 @@ const triggerFieldShapes = {
   from_state: z.string().nullable().optional(),
   label_name: z.string().nullable().optional(),
   comment_match: z.string().nullable().optional(),
+  external_id_filter: z.string().nullable().optional(),
+  payload_match: PayloadMatchSchema.nullable().optional(),
 
-  team_filter: z.array(z.string()).nullable().optional(),
-  project_filter: z.array(z.string()).nullable().optional(),
-  label_filter: z.array(z.string()).nullable().optional(),
-  skip_label_filter: z.array(z.string()).nullable().optional(),
-  assignee_filter: z.array(z.string()).nullable().optional(),
-  sentry_project_filter: z.array(z.string()).nullable().optional(),
-  level_filter: z.array(z.enum(["fatal", "error", "warning", "info", "debug"])).nullable().optional(),
-  fingerprint_filter: z.string().nullable().optional(),
-  environment_filter: z.array(z.string()).nullable().optional(),
-  release_filter: z.array(z.string()).nullable().optional(),
+  ...triggerFilterShapes,
 
   action: triggerActionSchema,
   action_params: z.record(z.string(), z.unknown()).nullable().optional(),

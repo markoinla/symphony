@@ -50,11 +50,18 @@ interface TriggerRow {
   from_state: string | null;
   label_name: string | null;
   comment_match: string | null;
+  external_id_filter: string | null;
+  payload_match: string | null;
   team_filter: string | null;
   project_filter: string | null;
   label_filter: string | null;
   skip_label_filter: string | null;
   assignee_filter: string | null;
+  repo_filter: string | null;
+  branch_filter: string | null;
+  base_filter: string | null;
+  draft_filter: number | null;
+  author_filter: string | null;
   sentry_project_filter: string | null;
   level_filter: string | null;
   fingerprint_filter: string | null;
@@ -120,11 +127,18 @@ class MockResolverDB {
       from_state: null,
       label_name: null,
       comment_match: null,
+      external_id_filter: null,
+      payload_match: null,
       team_filter: null,
       project_filter: null,
       label_filter: null,
       skip_label_filter: null,
       assignee_filter: null,
+      repo_filter: null,
+      branch_filter: null,
+      base_filter: null,
+      draft_filter: null,
+      author_filter: null,
       sentry_project_filter: null,
       level_filter: null,
       fingerprint_filter: null,
@@ -223,11 +237,18 @@ class MockStatement {
       t_from_state: t.from_state,
       t_label_name: t.label_name,
       t_comment_match: t.comment_match,
+      t_external_id_filter: t.external_id_filter,
+      t_payload_match: t.payload_match,
       t_team_filter: t.team_filter,
       t_project_filter: t.project_filter,
       t_label_filter: t.label_filter,
       t_skip_label_filter: t.skip_label_filter,
       t_assignee_filter: t.assignee_filter,
+      t_repo_filter: t.repo_filter,
+      t_branch_filter: t.branch_filter,
+      t_base_filter: t.base_filter,
+      t_draft_filter: t.draft_filter,
+      t_author_filter: t.author_filter,
       t_sentry_project_filter: t.sentry_project_filter,
       t_level_filter: t.level_filter,
       t_fingerprint_filter: t.fingerprint_filter,
@@ -668,6 +689,189 @@ describe("resolveWorkflow — sentry_event filters", () => {
     expect((await resolveWorkflow(makeEnv(db), sentryEvent()))?.trigger.id).toBe("t-1");
     expect(await resolveWorkflow(makeEnv(db), sentryEvent({ sentry_level: "info" } as Partial<EventTuple>))).toBeNull();
     expect(await resolveWorkflow(makeEnv(db), sentryEvent({ sentry_fingerprint: ["other"] } as Partial<EventTuple>))).toBeNull();
+  });
+});
+
+describe("resolveWorkflow — generic webhook filters", () => {
+  it("matches external_id_filter and payload_match JSONPath", async () => {
+    const db = new MockResolverDB();
+    db.addWorkflow({ id: "wf-1", organization_id: "org-1" });
+    db.addTrigger({
+      id: "t-1",
+      workflow_id: "wf-1",
+      event_type: "generic.webhook",
+      external_id_filter: "^deploy-",
+      payload_match: JSON.stringify({ path: "$.event.type", equals: "deploy.success" }),
+      action: "start_session",
+    });
+
+    const event: EventTuple = {
+      event_type: "generic.webhook",
+      organization_id: "org-1",
+      team_id: null,
+      project_id: null,
+      user_id: null,
+      assignee_id: null,
+      labels: [],
+      subject: {
+        kind: "generic",
+        external_id: "deploy-123",
+        payload: { event: { type: "deploy.success" } },
+      },
+      issue: null,
+      actor_id: null,
+      context: { payload: { event: { type: "deploy.success" } } },
+    };
+
+    const r = await resolveWorkflow(makeEnv(db), event);
+    expect(r?.trigger.id).toBe("t-1");
+
+    const rejected = await resolveWorkflow(makeEnv(db), {
+      ...event,
+      subject: {
+        kind: "generic",
+        external_id: "deploy-123",
+        payload: { event: { type: "deploy.failed" } },
+      },
+    });
+    expect(rejected).toBeNull();
+  });
+});
+
+describe("resolveWorkflow — github_pr scope filters", () => {
+  function githubPr(overrides: Partial<EventTuple> = {}): EventTuple {
+    return {
+      event_type: "github.pr.opened",
+      organization_id: "org-1",
+      team_id: null,
+      project_id: null,
+      user_id: null,
+      assignee_id: null,
+      labels: ["ready", "agent"],
+      issue: null,
+      actor_id: "octocat",
+      subject: {
+        kind: "github_pr",
+        repo: "acme/widgets",
+        number: 42,
+        title: "Add widget",
+        body: "Details",
+        state: "open",
+        base: "main",
+        head: "feature/widget",
+        draft: false,
+        labels: ["ready", "agent"],
+        author: "octocat",
+        reviewers: [],
+        head_sha: "abc123",
+      },
+      repo: "acme/widgets",
+      branch: "feature/widget",
+      base: "main",
+      draft: false,
+      author: "octocat",
+      ...overrides,
+    } as EventTuple;
+  }
+
+  it("matches repo, branch, base, draft, author, and label filters", async () => {
+    const db = new MockResolverDB();
+    db.addWorkflow({ id: "wf-gh", organization_id: "org-1" });
+    db.addTrigger({
+      id: "t-gh",
+      workflow_id: "wf-gh",
+      event_type: "github.pr.opened",
+      repo_filter: JSON.stringify(["acme/widgets"]),
+      branch_filter: JSON.stringify(["feature/widget"]),
+      base_filter: JSON.stringify(["main"]),
+      draft_filter: 0,
+      author_filter: JSON.stringify(["octocat"]),
+      label_filter: JSON.stringify(["ready"]),
+      action: "start_session",
+    });
+
+    const hit = await resolveWorkflow(makeEnv(db), githubPr());
+    expect(hit?.trigger.id).toBe("t-gh");
+
+    const withSubject = (patch: Record<string, unknown>) => {
+      const event = githubPr();
+      return {
+        ...event,
+        subject: { ...(event.subject as Record<string, unknown>), ...patch },
+      } as EventTuple;
+    };
+
+    expect(await resolveWorkflow(makeEnv(db), withSubject({ repo: "other/repo" }))).toBeNull();
+    expect(await resolveWorkflow(makeEnv(db), withSubject({ head: "other" }))).toBeNull();
+    expect(await resolveWorkflow(makeEnv(db), withSubject({ base: "develop" }))).toBeNull();
+    expect(await resolveWorkflow(makeEnv(db), withSubject({ draft: true }))).toBeNull();
+    expect(await resolveWorkflow(makeEnv(db), withSubject({ author: "someone" }))).toBeNull();
+    expect(await resolveWorkflow(makeEnv(db), githubPr({ labels: ["other"] }))).toBeNull();
+  });
+});
+
+describe("resolveWorkflow — github_issue scope filters", () => {
+  function githubIssue(overrides: Partial<EventTuple> = {}): EventTuple {
+    return {
+      event_type: "github.issue.commented",
+      organization_id: "org-1",
+      team_id: null,
+      project_id: null,
+      user_id: null,
+      assignee_id: "hubot",
+      labels: ["bug", "agent"],
+      issue: null,
+      actor_id: "monalisa",
+      subject: {
+        kind: "github_issue",
+        repo: "acme/widgets",
+        number: 7,
+        title: "Fix issue",
+        body: "Details",
+        state: "open",
+        labels: ["bug", "agent"],
+        author: "octocat",
+        assignees: ["hubot", "monalisa"],
+      },
+      repo: "acme/widgets",
+      author: "octocat",
+      comment: "/symphony help",
+      comment_id: "comment-1",
+      ...overrides,
+    } as EventTuple;
+  }
+
+  it("matches repo, label, author, assignee, and comment_match filters", async () => {
+    const db = new MockResolverDB();
+    db.addWorkflow({ id: "wf-gh-issue", organization_id: "org-1" });
+    db.addTrigger({
+      id: "t-gh-issue",
+      workflow_id: "wf-gh-issue",
+      event_type: "github.issue.commented",
+      repo_filter: JSON.stringify(["acme/widgets"]),
+      author_filter: JSON.stringify(["octocat"]),
+      assignee_filter: JSON.stringify(["monalisa"]),
+      label_filter: JSON.stringify(["agent"]),
+      comment_match: "^/symphony\\b",
+      action: "start_session",
+    });
+
+    const hit = await resolveWorkflow(makeEnv(db), githubIssue());
+    expect(hit?.trigger.id).toBe("t-gh-issue");
+
+    const withSubject = (patch: Record<string, unknown>) => {
+      const event = githubIssue();
+      return {
+        ...event,
+        subject: { ...(event.subject as Record<string, unknown>), ...patch },
+      } as EventTuple;
+    };
+
+    expect(await resolveWorkflow(makeEnv(db), withSubject({ repo: "other/repo" }))).toBeNull();
+    expect(await resolveWorkflow(makeEnv(db), withSubject({ author: "someone" }))).toBeNull();
+    expect(await resolveWorkflow(makeEnv(db), withSubject({ assignees: ["hubot"] }))).toBeNull();
+    expect(await resolveWorkflow(makeEnv(db), githubIssue({ labels: ["bug"] }))).toBeNull();
+    expect(await resolveWorkflow(makeEnv(db), githubIssue({ comment: "hello" }))).toBeNull();
   });
 });
 

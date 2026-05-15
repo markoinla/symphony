@@ -13,8 +13,10 @@
 // in the base build. The result set is bounded by event_type + scope,
 // so the post-filter pass is small.
 
+import { readJsonPath } from "../json-path";
 import type { EventTuple } from "../../schemas/event";
 import type { Trigger } from "../../schemas/trigger";
+import type { PayloadMatch } from "../../schemas/webhook-source";
 import type { Workflow } from "../../schemas/workflow";
 
 export interface ResolveResult {
@@ -56,6 +58,7 @@ export async function resolveWorkflow(
 
   for (const raw of rows.results ?? []) {
     if (!passesCommentMatch(raw, event)) continue;
+    if (!passesGenericFilters(raw, event)) continue;
     if (!passesScopeFilters(raw, event)) continue;
     return {
       workflow: hydrateWorkflow(raw),
@@ -76,11 +79,18 @@ const SELECT_SQL = `
     t.from_state      AS t_from_state,
     t.label_name      AS t_label_name,
     t.comment_match   AS t_comment_match,
+    t.external_id_filter AS t_external_id_filter,
+    t.payload_match   AS t_payload_match,
     t.team_filter     AS t_team_filter,
     t.project_filter  AS t_project_filter,
     t.label_filter    AS t_label_filter,
     t.skip_label_filter AS t_skip_label_filter,
     t.assignee_filter AS t_assignee_filter,
+    t.repo_filter     AS t_repo_filter,
+    t.branch_filter   AS t_branch_filter,
+    t.base_filter     AS t_base_filter,
+    t.draft_filter    AS t_draft_filter,
+    t.author_filter   AS t_author_filter,
     t.sentry_project_filter AS t_sentry_project_filter,
     t.level_filter AS t_level_filter,
     t.fingerprint_filter AS t_fingerprint_filter,
@@ -158,7 +168,7 @@ function passesCommentMatch(raw: RawJoinedRow, event: EventTuple): boolean {
   const pattern = raw.t_comment_match;
   if (pattern == null) return true;
   const body =
-    event.event_type === "comment_added"
+    event.event_type === "comment_added" || event.event_type === "github.issue.commented"
       ? (event as { comment?: string }).comment ?? ""
       : "";
   try {
@@ -166,6 +176,29 @@ function passesCommentMatch(raw: RawJoinedRow, event: EventTuple): boolean {
   } catch {
     return body.includes(pattern);
   }
+}
+
+function passesGenericFilters(raw: RawJoinedRow, event: EventTuple): boolean {
+  const subject = event.subject;
+  const isGeneric = subject?.kind === "generic";
+
+  if (raw.t_external_id_filter != null) {
+    if (!isGeneric) return false;
+    try {
+      if (!new RegExp(raw.t_external_id_filter).test(subject.external_id)) return false;
+    } catch {
+      if (!subject.external_id.includes(raw.t_external_id_filter)) return false;
+    }
+  }
+
+  const payloadMatch = parseJsonOrNull<PayloadMatch>(raw.t_payload_match);
+  if (payloadMatch) {
+    if (!isGeneric) return false;
+    const actual = readJsonPath(subject.payload, payloadMatch.path);
+    if (JSON.stringify(actual) !== JSON.stringify(payloadMatch.equals)) return false;
+  }
+
+  return true;
 }
 
 // Scope filters live in JSON arrays. We evaluate them in JS so we can
@@ -181,14 +214,9 @@ function passesScopeFilters(raw: RawJoinedRow, event: EventTuple): boolean {
     return false;
   }
   const projectFilter = parseStringArray(raw.t_project_filter);
-  if (
-    projectFilter &&
-    !(
-      (event.project_id ?? event.issue?.project_id ?? null) &&
-      projectFilter.includes((event.project_id ?? event.issue?.project_id)!)
-    )
-  ) {
-    return false;
+  if (projectFilter) {
+    const projectId = event.project_id ?? event.issue?.project_id ?? null;
+    if (!projectId || !projectFilter.includes(projectId)) return false;
   }
   const labels = (event.labels ?? []) as string[];
   const labelFilter = parseStringArray(raw.t_label_filter);
@@ -201,9 +229,33 @@ function passesScopeFilters(raw: RawJoinedRow, event: EventTuple): boolean {
   }
   const assigneeFilter = parseStringArray(raw.t_assignee_filter);
   if (assigneeFilter) {
-    const id = event.assignee_id ?? null;
-    if (!id || !assigneeFilter.includes(id)) return false;
+    const ids = eventAssignees(event);
+    if (ids.length === 0 || !assigneeFilter.some((id) => ids.includes(id))) return false;
   }
+
+  const subject = event.subject;
+  const repo =
+    subject?.kind === "github_pr" || subject?.kind === "github_issue"
+      ? subject.repo
+      : eventString(event, "repo");
+  const branch = subject?.kind === "github_pr" ? subject.head : eventString(event, "branch");
+  const base = subject?.kind === "github_pr" ? subject.base : eventString(event, "base");
+  const author =
+    subject?.kind === "github_pr" || subject?.kind === "github_issue"
+      ? subject.author
+      : eventString(event, "author");
+  const draft = subject?.kind === "github_pr" ? subject.draft : eventBoolean(event, "draft");
+
+  const repoFilter = parseStringArray(raw.t_repo_filter);
+  if (repoFilter && (!repo || !repoFilter.includes(repo))) return false;
+  const branchFilter = parseStringArray(raw.t_branch_filter);
+  if (branchFilter && (!branch || !branchFilter.includes(branch))) return false;
+  const baseFilter = parseStringArray(raw.t_base_filter);
+  if (baseFilter && (!base || !baseFilter.includes(base))) return false;
+  if (raw.t_draft_filter != null && draft !== (raw.t_draft_filter !== 0)) return false;
+  const authorFilter = parseStringArray(raw.t_author_filter);
+  if (authorFilter && (!author || !authorFilter.includes(author))) return false;
+
   if (!passesSentryFilters(raw, event)) return false;
   return true;
 }
@@ -231,6 +283,21 @@ function passesSentryFilters(raw: RawJoinedRow, event: EventTuple): boolean {
     }
   }
   return true;
+}
+
+function eventAssignees(event: EventTuple): string[] {
+  if (event.subject?.kind === "github_issue") return event.subject.assignees;
+  return event.assignee_id ? [event.assignee_id] : [];
+}
+
+function eventString(event: EventTuple, key: string): string | null {
+  const value = (event as unknown as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : null;
+}
+
+function eventBoolean(event: EventTuple, key: string): boolean | null {
+  const value = (event as unknown as Record<string, unknown>)[key];
+  return typeof value === "boolean" ? value : null;
 }
 
 function parseStringArray(s: string | null): string[] | null {
@@ -299,11 +366,18 @@ function hydrateTrigger(raw: RawJoinedRow): Trigger {
     from_state: raw.t_from_state ?? null,
     label_name: raw.t_label_name ?? null,
     comment_match: raw.t_comment_match ?? null,
+    external_id_filter: raw.t_external_id_filter ?? null,
+    payload_match: parseJsonOrNull<Trigger["payload_match"]>(raw.t_payload_match),
     team_filter: parseStringArray(raw.t_team_filter),
     project_filter: parseStringArray(raw.t_project_filter),
     label_filter: parseStringArray(raw.t_label_filter),
     skip_label_filter: parseStringArray(raw.t_skip_label_filter),
     assignee_filter: parseStringArray(raw.t_assignee_filter),
+    repo_filter: parseStringArray(raw.t_repo_filter),
+    branch_filter: parseStringArray(raw.t_branch_filter),
+    base_filter: parseStringArray(raw.t_base_filter),
+    draft_filter: raw.t_draft_filter == null ? null : raw.t_draft_filter !== 0,
+    author_filter: parseStringArray(raw.t_author_filter),
     sentry_project_filter: parseStringArray(raw.t_sentry_project_filter),
     level_filter: parseStringArray(raw.t_level_filter) as Trigger["level_filter"],
     fingerprint_filter: raw.t_fingerprint_filter ?? null,
@@ -329,11 +403,18 @@ interface RawJoinedRow {
   t_from_state: string | null;
   t_label_name: string | null;
   t_comment_match: string | null;
+  t_external_id_filter: string | null;
+  t_payload_match: string | null;
   t_team_filter: string | null;
   t_project_filter: string | null;
   t_label_filter: string | null;
   t_skip_label_filter: string | null;
   t_assignee_filter: string | null;
+  t_repo_filter: string | null;
+  t_branch_filter: string | null;
+  t_base_filter: string | null;
+  t_draft_filter: number | null;
+  t_author_filter: string | null;
   t_sentry_project_filter: string | null;
   t_level_filter: string | null;
   t_fingerprint_filter: string | null;

@@ -11,13 +11,14 @@ import type { WebhookSourceRecord } from "../src/lib/store";
 const source: WebhookSourceRecord = {
   id: "src-1",
   organization_id: "org-1",
-  provider: "sentry",
+  kind: "sentry",
   name: "Sentry",
   secret: "whsec_test",
   enabled: 1,
   project_id: "proj-1",
   config: JSON.stringify({ sentry_project: "backend" }),
-  last_received_at: null,
+  last_used_at: null,
+  config_project_slug: "backend",
   created_at: 1,
   updated_at: 1,
 };

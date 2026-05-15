@@ -203,7 +203,10 @@ in place because they don't have versions.
 ```ts
 type SubjectRef =
   | { kind: "linear_issue"; id: string; identifier?: string | null; title?: string | null; description?: string | null; state?: string | null; labels?: string[]; assignee_id?: string | null; parent_issue?: unknown; comments?: unknown[]; attachments?: unknown[] }
-  | { kind: "generic"; external_id: string; payload: Record<string, unknown> }
+  | { kind: "github_issue"; repo: string; number: number; title: string; body: string; state: "open" | "closed"; labels: string[]; author: string; assignees: string[]; id?: string; repository?: string | null }
+  | { kind: "github_pr"; repo: string; number: number; title: string; body: string; state: "open" | "closed" | "merged"; base: string; head: string; draft: boolean; labels: string[]; author: string; reviewers: string[]; head_sha: string; id?: string; branch?: string | null; base_branch?: string | null; repository?: string | null }
+  | { kind: "sentry_event"; id: string; title?: string | null; message?: string | null; culprit?: string | null; project?: string | null; level?: string | null; payload?: Record<string, unknown> }
+  | { kind: "generic"; external_id: string; title?: string | null; payload: Record<string, unknown> }
 
 POST /api/v1/triggers/:id/invoke
 Authorization: Bearer <token with triggers:invoke>
@@ -213,9 +216,17 @@ Idempotency-Key: <client key>
 ```
 
 The route queues SessionRunner and returns `202 { "session_id": "..." }`.
-`linear_issue` subjects use Linear AgentSession/timeline behavior; `generic`
-subjects run headlessly with `source: "api"` in dashboard sessions and no
-Linear API side effects.
+`linear_issue` subjects use Linear AgentSession/timeline behavior; all other
+subjects run headlessly with `source: "api"` (or the adapter source) in
+dashboard sessions and no Linear API side effects.
+
+Prompt templates should prefer the generic accessors `{{ subject.* }}` and
+`{{ context | json }}`. Use `{% if subject.kind == "..." %}` guards for
+kind-specific rendering. Migration sugar remains available: `{{ issue.* }}`
+resolves for `linear_issue` and `github_issue`, `{{ pr.* }}` for `github_pr`,
+`{{ event.* }}` for `sentry_event`, and `{{ payload }}` for `generic` subjects;
+when the subject kind does not match, sugar accessors render as empty strings
+rather than raising Liquid errors.
 
 ### 3. Projects
 
@@ -313,12 +324,33 @@ POST   /api/v1/webhook-sources           (write)
 GET    /api/v1/webhook-sources/:id       (read)
 PUT    /api/v1/webhook-sources/:id       (write)
 DELETE /api/v1/webhook-sources/:id       (write)
+POST   /webhook/source/:id               (public HMAC)
 ```
 
-Creates source-specific inbound URLs such as `/webhook/source/:id`.
-Sentry sources return the HMAC secret only on create or explicit
+Sources are typed by `kind`: `github`, `generic`, or `sentry`. All
+kinds expose an `inbound_url` of the form `/webhook/source/:id` and
+return the HMAC secret only on create or explicit
 `rotate_secret: true`; subsequent reads return connection state,
-`inbound_url`, project binding, config, and timestamps.
+config, and timestamps.
+
+Generic sources accept HMAC-signed JSON payloads and emit
+`generic.webhook` events. Source config includes
+`external_id_path`, `signature_header`, and `signature_algorithm`
+(`sha256` or `sha1`). Duplicate deliveries with the same
+`source_id + external_id` within 60s are deduped.
+
+Trigger match fields for `generic.webhook` include
+`external_id_filter` (regex) and `payload_match` (`{ path, equals }`).
+The raw payload is available to prompts as `context.payload` and
+`subject.payload`; `subject.external_id` contains the extracted id or a
+UUID fallback.
+
+Sentry sources verify the `Sentry-Hook-Signature` header and emit
+`sentry.alert.fired`, `sentry.issue.created`, or `sentry.issue.resolved`
+events with `sentry_event` subjects. Sentry sources may bind a
+`project_id` to scope downstream workflows. Trigger match fields
+include `sentry_project_filter`, `level_filter`, `fingerprint_filter`
+(regex), `environment_filter`, and `release_filter`.
 
 ### 7. Webhook events
 
