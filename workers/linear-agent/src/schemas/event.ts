@@ -147,11 +147,12 @@ export const genericSubjectSchema = z.object({
 
 export const sentryEventSubjectSchema = z.object({
   kind: z.literal("sentry_event"),
-  project: z.string(),
-  event_id: z.string(),
-  level: z.enum(["fatal", "error", "warning", "info", "debug"]),
-  fingerprint: z.array(z.string()).default([]),
-  message: z.string(),
+  // Canonical Sentry adapter fields.
+  project: z.string().optional(),
+  event_id: z.string().optional(),
+  level: z.enum(["fatal", "error", "warning", "info", "debug"]).optional(),
+  fingerprint: z.array(z.string()).optional(),
+  message: z.string().optional(),
   stacktrace: z
     .array(
       z.object({
@@ -163,7 +164,7 @@ export const sentryEventSubjectSchema = z.object({
         context_line: z.string().nullable().optional(),
       }),
     )
-    .default([]),
+    .optional(),
   breadcrumbs: z
     .array(
       z.object({
@@ -174,10 +175,16 @@ export const sentryEventSubjectSchema = z.object({
         data: z.record(z.string(), z.unknown()).nullable().optional(),
       }),
     )
-    .default([]),
-  related_issue_url: z.string(),
+    .optional(),
+  related_issue_url: z.string().optional(),
   environment: z.string().nullable().optional(),
   release: z.string().nullable().optional(),
+  // Legacy fields retained for renderer/preview compatibility — populated
+  // by SDK callers that have not migrated to the canonical shape yet.
+  id: z.string().optional(),
+  title: z.string().nullable().optional(),
+  culprit: z.string().nullable().optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const SubjectRefSchema = z.discriminatedUnion("kind", [

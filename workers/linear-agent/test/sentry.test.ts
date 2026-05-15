@@ -99,13 +99,13 @@ describe("Sentry normalizer", () => {
       release: "abc123",
       related_issue_url: "https://sentry.example/issues/123",
     });
-    expect(normalized.subject.stacktrace[0]).toMatchObject({
+    expect(normalized.subject.stacktrace?.[0]).toMatchObject({
       filename: "src/checkout.ts",
       function: "submit",
       lineno: 42,
       in_app: true,
     });
-    expect(normalized.subject.breadcrumbs[0]).toMatchObject({
+    expect(normalized.subject.breadcrumbs?.[0]).toMatchObject({
       category: "ui.click",
       message: "Clicked checkout",
       data: { button: "checkout" },

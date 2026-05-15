@@ -285,14 +285,6 @@ function parseIntOr(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-function generateWebhookSecret(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  let binary = "";
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return `whsec_${btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
-}
-
 function parseJsonRecord(raw: string | null): Record<string, unknown> | null {
   if (!raw) return null;
   try {
@@ -337,7 +329,21 @@ function previewSubjectId(subject: SubjectRef, fallback?: string): string {
   if (fallback) return fallback;
   if (subject.kind === "generic") return subject.external_id;
   if (subject.kind === "linear_issue") return subject.id;
-  return subject.external_id ?? subject.id;
+  if (subject.kind === "sentry_event") return subject.event_id ?? subject.id ?? "preview";
+  if (subject.kind === "github_pr" || subject.kind === "github_issue") {
+    return `${subject.repo}#${subject.number}`;
+  }
+  return "preview";
+}
+
+function previewSubjectTitle(subject: SubjectRef): string {
+  if (subject.kind === "linear_issue") return subject.title ?? "Preview subject";
+  if (subject.kind === "generic") return subject.title ?? "Preview subject";
+  if (subject.kind === "sentry_event") return subject.message ?? subject.title ?? "Preview subject";
+  if (subject.kind === "github_pr" || subject.kind === "github_issue") {
+    return subject.title;
+  }
+  return "Preview subject";
 }
 
 function serializeWebhookEvent(
@@ -819,7 +825,7 @@ export function buildApiV1Router() {
         : {
             id: previewId,
             identifier: previewId,
-            title: subject.title ?? "Preview subject",
+            title: previewSubjectTitle(subject),
             description: "",
             labels: [],
             comments: [],
