@@ -6,9 +6,13 @@
 // land non-Linear references at the boundary without pretending they
 // are Linear issues.
 //
-// V1 ships two subject kinds:
+// V1 ships multiple subject kinds:
 //   - linear_issue: the existing Linear issue payload, widened with a
 //     `kind` discriminator.
+//   - github_issue: GitHub issue payloads that share the `issue.*`
+//     prompt namespace with Linear issues.
+//   - github_pr: GitHub pull request payloads exposed via `pr.*`.
+//   - sentry_event: Sentry events exposed via `event.*`.
 //   - generic: an external id plus opaque JSON payload for direct API
 //     invocations.
 //
@@ -77,14 +81,62 @@ export const linearIssueSubjectSchema = z.object({
     .default([]),
 });
 
+export const githubIssueSubjectSchema = z.object({
+  kind: z.literal("github_issue"),
+  id: z.string(),
+  external_id: z.string().nullable().optional(),
+  number: z.number().int().nullable().optional(),
+  title: z.string().nullable().optional(),
+  body: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
+  state: z.string().nullable().optional(),
+  url: z.string().nullable().optional(),
+  repository: z.string().nullable().optional(),
+  labels: z.array(z.string()).default([]),
+  assignees: z.array(z.string()).default([]),
+});
+
+export const githubPrSubjectSchema = z.object({
+  kind: z.literal("github_pr"),
+  id: z.string(),
+  external_id: z.string().nullable().optional(),
+  number: z.number().int().nullable().optional(),
+  title: z.string().nullable().optional(),
+  body: z.string().nullable().optional(),
+  state: z.string().nullable().optional(),
+  url: z.string().nullable().optional(),
+  repository: z.string().nullable().optional(),
+  branch: z.string().nullable().optional(),
+  base_branch: z.string().nullable().optional(),
+  author: z.string().nullable().optional(),
+  labels: z.array(z.string()).default([]),
+});
+
+export const sentryEventSubjectSchema = z.object({
+  kind: z.literal("sentry_event"),
+  id: z.string(),
+  external_id: z.string().nullable().optional(),
+  title: z.string().nullable().optional(),
+  message: z.string().nullable().optional(),
+  culprit: z.string().nullable().optional(),
+  project: z.string().nullable().optional(),
+  url: z.string().nullable().optional(),
+  level: z.string().nullable().optional(),
+  payload: z.record(z.string(), z.unknown()).default({}),
+});
+
 export const genericSubjectSchema = z.object({
   kind: z.literal("generic"),
   external_id: z.string(),
+  title: z.string().nullable().optional(),
   payload: z.record(z.string(), z.unknown()).default({}),
 });
 
 export const SubjectRefSchema = z.discriminatedUnion("kind", [
   linearIssueSubjectSchema,
+  githubIssueSubjectSchema,
+  githubPrSubjectSchema,
+  sentryEventSubjectSchema,
   genericSubjectSchema,
 ]);
 export type SubjectRef = z.infer<typeof SubjectRefSchema>;

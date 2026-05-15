@@ -48,6 +48,7 @@ import {
   eventTupleSchema,
   SubjectRefSchema,
   type EventTuple,
+  type SubjectRef,
 } from "../schemas/event";
 import type { Trigger } from "../schemas/trigger";
 import type { Workflow } from "../schemas/workflow";
@@ -208,8 +209,12 @@ function serializeTrigger(row: TriggerRow): Record<string, unknown> {
 
 // Body schema for `/preview` — Track 1's workflow schemas don't include
 // this since it's API-layer-only.
+const PreviewSubjectSchema = SubjectRefSchema.optional();
+
 const PreviewRequestSchema = z.object({
-  issue_id: z.string().min(1),
+  issue_id: z.string().min(1).optional(),
+  subject: PreviewSubjectSchema,
+  context: z.record(z.string(), z.unknown()).optional().default({}),
 });
 
 const TriggerInvokeRequestSchema = z.object({
@@ -223,6 +228,13 @@ function parseIntOr(raw: string | undefined, fallback: number): number {
   if (!raw) return fallback;
   const n = parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function previewSubjectId(subject: SubjectRef, fallback?: string): string {
+  if (fallback) return fallback;
+  if (subject.kind === "generic") return subject.external_id;
+  if (subject.kind === "linear_issue") return subject.id;
+  return subject.external_id ?? subject.id;
 }
 
 function serializeWebhookEvent(
@@ -681,18 +693,43 @@ export function buildApiV1Router() {
     const row = await getWorkflow(c.env.DB, id, auth.orgId);
     if (!row) return respondError(c, "not_found");
 
-    // Track 1's renderPrompt takes a typed PromptContext; the issue
-    // payload here is a placeholder until /preview gets enriched with
-    // real Linear data (out of scope for this PR).
-    const rendered = await renderPrompt(row.prompt_template, {
-      issue: {
-        id: parsed.data.issue_id,
+    const subject: SubjectRef =
+      parsed.data.subject ??
+      ({
+        kind: "linear_issue" as const,
+        id: parsed.data.issue_id ?? "SYM-MOCK",
+        identifier: parsed.data.issue_id ?? "SYM-MOCK",
+        title: "Preview Linear issue",
+        description: "",
+        state: "Todo",
         labels: [],
         comments: [],
-      },
+        attachments: [],
+      } as SubjectRef);
+    const previewId = previewSubjectId(subject, parsed.data.issue_id);
+    const issue =
+      subject.kind === "linear_issue"
+        ? { ...subject, attachments: subject.attachments ?? [] }
+        : {
+            id: previewId,
+            identifier: previewId,
+            title: subject.title ?? "Preview subject",
+            description: "",
+            labels: [],
+            comments: [],
+            attachments: [],
+          };
+    const rendered = await renderPrompt(row.prompt_template, {
+      issue,
+      subject,
       attempt: 1,
-      prompt_context: "",
+      prompt_context:
+        issue.description ??
+        (Object.keys(parsed.data.context).length > 0
+          ? JSON.stringify(parsed.data.context, null, 2)
+          : ""),
       new_comments: [],
+      context: parsed.data.context,
     });
     return c.json({ rendered });
   });
