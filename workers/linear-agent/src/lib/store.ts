@@ -786,12 +786,127 @@ export class AgentSessionEventStore {
   }
 }
 
+// ── webhook_sources ─────────────────────────────────────────────────
+
+export interface WebhookSourceRecord {
+  id: string;
+  organization_id: string;
+  kind: string;
+  name: string;
+  secret: string;
+  config: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export class WebhookSourceStore {
+  constructor(private readonly db: D1Database) {}
+
+  private static readonly COLUMNS =
+    "id, organization_id, kind, name, secret, config, created_at, updated_at";
+
+  async list(orgId: string): Promise<WebhookSourceRecord[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT ${WebhookSourceStore.COLUMNS}
+         FROM webhook_sources WHERE organization_id = ?
+         ORDER BY created_at DESC`,
+      )
+      .bind(orgId)
+      .all<WebhookSourceRecord>();
+    return result.results ?? [];
+  }
+
+  async create(input: {
+    organizationId: string;
+    kind: string;
+    name: string;
+    secret: string;
+    config?: Record<string, unknown> | null;
+  }): Promise<WebhookSourceRecord | null> {
+    const id = crypto.randomUUID();
+    const now = Math.floor(Date.now() / 1000);
+    await this.db
+      .prepare(
+        `INSERT INTO webhook_sources
+           (id, organization_id, kind, name, secret, config, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .bind(
+        id,
+        input.organizationId,
+        input.kind,
+        input.name,
+        input.secret,
+        input.config ? JSON.stringify(input.config) : null,
+        now,
+        now,
+      )
+      .run();
+    return await this.getById(id, input.organizationId);
+  }
+
+  async getById(id: string, orgId?: string): Promise<WebhookSourceRecord | null> {
+    if (orgId) {
+      return await this.db
+        .prepare(
+          `SELECT ${WebhookSourceStore.COLUMNS}
+           FROM webhook_sources WHERE id = ? AND organization_id = ?`,
+        )
+        .bind(id, orgId)
+        .first<WebhookSourceRecord>();
+    }
+    return await this.db
+      .prepare(`SELECT ${WebhookSourceStore.COLUMNS} FROM webhook_sources WHERE id = ?`)
+      .bind(id)
+      .first<WebhookSourceRecord>();
+  }
+
+  async update(
+    id: string,
+    orgId: string,
+    fields: { name?: string; config?: Record<string, unknown> | null; secret?: string },
+  ): Promise<WebhookSourceRecord | null> {
+    const sets: string[] = [];
+    const values: (string | null | number)[] = [];
+    if (fields.name !== undefined) {
+      sets.push("name = ?");
+      values.push(fields.name);
+    }
+    if (fields.config !== undefined) {
+      sets.push("config = ?");
+      values.push(fields.config ? JSON.stringify(fields.config) : null);
+    }
+    if (fields.secret !== undefined) {
+      sets.push("secret = ?");
+      values.push(fields.secret);
+    }
+    if (sets.length === 0) return await this.getById(id, orgId);
+    sets.push("updated_at = ?");
+    values.push(Math.floor(Date.now() / 1000), id, orgId);
+    await this.db
+      .prepare(`UPDATE webhook_sources SET ${sets.join(", ")} WHERE id = ? AND organization_id = ?`)
+      .bind(...values)
+      .run();
+    return await this.getById(id, orgId);
+  }
+
+  async delete(id: string, orgId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare("DELETE FROM webhook_sources WHERE id = ? AND organization_id = ?")
+      .bind(id, orgId)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+}
+
 // ── webhook_events ──────────────────────────────────────────────────
 
 export interface WebhookEventRecord {
   id: string;
   received_at: number;
   organization_id: string | null;
+  source_id: string | null;
   webhook_id: string | null;
   envelope_type: string;
   envelope_action: string | null;
@@ -821,10 +936,11 @@ export interface WebhookEventListFilter {
   signatureOk?: boolean;
   deduped?: boolean;
   sinceTs?: number;
+  sourceId?: string;
 }
 
 const WEBHOOK_EVENT_COLS =
-  "id, received_at, organization_id, webhook_id, envelope_type, envelope_action, signature_ok, deduped, matched_workflow_id, matched_trigger_id, dispatched_action, agent_session_id, error, latency_ms, event_summary, raw_body";
+  "id, received_at, organization_id, source_id, webhook_id, envelope_type, envelope_action, signature_ok, deduped, matched_workflow_id, matched_trigger_id, dispatched_action, agent_session_id, error, latency_ms, event_summary, raw_body";
 
 export class WebhookEventStore {
   constructor(private readonly db: D1Database) {}
@@ -832,6 +948,7 @@ export class WebhookEventStore {
   async insert(input: {
     receivedAt: number;
     organizationId?: string | null;
+    sourceId?: string | null;
     webhookId?: string | null;
     envelopeType: string;
     envelopeAction?: string | null;
@@ -843,15 +960,16 @@ export class WebhookEventStore {
     await this.db
       .prepare(
         `INSERT INTO webhook_events
-           (id, received_at, organization_id, webhook_id, envelope_type, envelope_action,
+           (id, received_at, organization_id, source_id, webhook_id, envelope_type, envelope_action,
             signature_ok, deduped, matched_workflow_id, matched_trigger_id,
             dispatched_action, agent_session_id, error, latency_ms, event_summary, raw_body)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, 'pending', NULL, NULL, 0, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL, 'pending', NULL, NULL, 0, ?, ?)`,
       )
       .bind(
         id,
         input.receivedAt,
         input.organizationId ?? null,
+        input.sourceId ?? null,
         input.webhookId ?? null,
         input.envelopeType,
         input.envelopeAction ?? null,
@@ -955,6 +1073,10 @@ export class WebhookEventStore {
     if (filter.envelope) {
       conditions.push("envelope_type = ?");
       values.push(filter.envelope);
+    }
+    if (filter.sourceId) {
+      conditions.push("source_id = ?");
+      values.push(filter.sourceId);
     }
     if (filter.dispatched_action) {
       conditions.push("dispatched_action = ?");

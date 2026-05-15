@@ -81,6 +81,11 @@ const SELECT_SQL = `
     t.label_filter    AS t_label_filter,
     t.skip_label_filter AS t_skip_label_filter,
     t.assignee_filter AS t_assignee_filter,
+    t.repo_filter     AS t_repo_filter,
+    t.branch_filter   AS t_branch_filter,
+    t.base_filter     AS t_base_filter,
+    t.draft_filter    AS t_draft_filter,
+    t.author_filter   AS t_author_filter,
     t.action          AS t_action,
     t.action_params   AS t_action_params,
     t.priority        AS t_priority,
@@ -176,14 +181,9 @@ function passesScopeFilters(raw: RawJoinedRow, event: EventTuple): boolean {
     return false;
   }
   const projectFilter = parseStringArray(raw.t_project_filter);
-  if (
-    projectFilter &&
-    !(
-      (event.issue?.project_id ?? null) &&
-      projectFilter.includes(event.issue!.project_id!)
-    )
-  ) {
-    return false;
+  if (projectFilter) {
+    const projectId = event.project_id ?? event.issue?.project_id ?? null;
+    if (!projectId || !projectFilter.includes(projectId)) return false;
   }
   const labels = (event.labels ?? []) as string[];
   const labelFilter = parseStringArray(raw.t_label_filter);
@@ -199,7 +199,35 @@ function passesScopeFilters(raw: RawJoinedRow, event: EventTuple): boolean {
     const id = event.assignee_id ?? null;
     if (!id || !assigneeFilter.includes(id)) return false;
   }
+
+  const subject = event.subject;
+  const repo = subject?.kind === "github_pr" ? subject.repo : eventString(event, "repo");
+  const branch = subject?.kind === "github_pr" ? subject.head : eventString(event, "branch");
+  const base = subject?.kind === "github_pr" ? subject.base : eventString(event, "base");
+  const author = subject?.kind === "github_pr" ? subject.author : eventString(event, "author");
+  const draft = subject?.kind === "github_pr" ? subject.draft : eventBoolean(event, "draft");
+
+  const repoFilter = parseStringArray(raw.t_repo_filter);
+  if (repoFilter && (!repo || !repoFilter.includes(repo))) return false;
+  const branchFilter = parseStringArray(raw.t_branch_filter);
+  if (branchFilter && (!branch || !branchFilter.includes(branch))) return false;
+  const baseFilter = parseStringArray(raw.t_base_filter);
+  if (baseFilter && (!base || !baseFilter.includes(base))) return false;
+  if (raw.t_draft_filter != null && draft !== (raw.t_draft_filter !== 0)) return false;
+  const authorFilter = parseStringArray(raw.t_author_filter);
+  if (authorFilter && (!author || !authorFilter.includes(author))) return false;
+
   return true;
+}
+
+function eventString(event: EventTuple, key: string): string | null {
+  const value = (event as unknown as Record<string, unknown>)[key];
+  return typeof value === "string" ? value : null;
+}
+
+function eventBoolean(event: EventTuple, key: string): boolean | null {
+  const value = (event as unknown as Record<string, unknown>)[key];
+  return typeof value === "boolean" ? value : null;
 }
 
 function parseStringArray(s: string | null): string[] | null {
@@ -273,6 +301,11 @@ function hydrateTrigger(raw: RawJoinedRow): Trigger {
     label_filter: parseStringArray(raw.t_label_filter),
     skip_label_filter: parseStringArray(raw.t_skip_label_filter),
     assignee_filter: parseStringArray(raw.t_assignee_filter),
+    repo_filter: parseStringArray(raw.t_repo_filter),
+    branch_filter: parseStringArray(raw.t_branch_filter),
+    base_filter: parseStringArray(raw.t_base_filter),
+    draft_filter: raw.t_draft_filter == null ? null : raw.t_draft_filter !== 0,
+    author_filter: parseStringArray(raw.t_author_filter),
     action: raw.t_action as Trigger["action"],
     action_params: parseJsonOrNull<Record<string, unknown>>(raw.t_action_params),
     priority: raw.t_priority,
@@ -298,6 +331,11 @@ interface RawJoinedRow {
   t_label_filter: string | null;
   t_skip_label_filter: string | null;
   t_assignee_filter: string | null;
+  t_repo_filter: string | null;
+  t_branch_filter: string | null;
+  t_base_filter: string | null;
+  t_draft_filter: number | null;
+  t_author_filter: string | null;
   t_action: string;
   t_action_params: string | null;
   t_priority: number;

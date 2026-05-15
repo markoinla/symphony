@@ -99,6 +99,7 @@ Tables (v1 multi-tenant schema in `0002_multi_tenant.sql`):
 | `usage` | Aggregated turns/minutes per org per billing period |
 | `workflows` | Trigger-fired workflow rows (engine, model, max_turns, prompt template, tool policy). See `0002_workflows.sql`. |
 | `settings` | Org-scoped key/value settings. Backs the Agent tab on the dashboard. See `0004_settings.sql`. |
+| `webhook_sources` | Registered inbound webhook sources such as GitHub. Each row owns a copy-once HMAC secret and powers `POST /webhook/source/:id`. |
 
 ## Engine / model / max_turns resolution
 
@@ -147,6 +148,24 @@ Curated key validation (server-side):
 Other keys (e.g. `tracker.api_key`, `proxy.enabled`, `domain`) are
 accepted as-is — the Advanced tab on the dashboard exposes them
 generically.
+
+## GitHub PR trigger webhooks
+
+GitHub sources are registered through `/api/v1/webhook-sources` (write scope) or
+from the dashboard Integrations page. The create response returns a copy-once
+`secret` plus an inbound URL (`/webhook/source/:id`). Configure that URL in
+GitHub with `application/json` payloads and the HMAC secret; Symphony verifies
+`X-Hub-Signature-256` before normalizing supported `pull_request` actions into
+`github_pr` subjects:
+
+- `opened` → `github.pr.opened`
+- `closed` with `pull_request.merged === true` → `github.pr.merged`
+- `closed` otherwise → `github.pr.closed`
+- `review_requested` → `github.pr.review_requested`
+
+GitHub source adapters stay source-pure: they do not parse branch names or look
+up Linear issues automatically. Workflows that need cross-source context should
+instruct the agent to query Linear via tools.
 
 ## Development
 
