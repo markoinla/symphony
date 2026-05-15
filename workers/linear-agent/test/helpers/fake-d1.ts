@@ -729,6 +729,14 @@ class FakeStatement {
       return (this.db.githubInstalls.get(orgId) as unknown as T) ?? null;
     }
 
+    if (/FROM github_installs WHERE install_id/i.test(sql)) {
+      const [installId] = this.bindings as [number];
+      for (const row of this.db.githubInstalls.values()) {
+        if (row.install_id === installId) return row as unknown as T;
+      }
+      return null;
+    }
+
     if (/FROM webhook_sources WHERE id = \? AND organization_id/i.test(sql)) {
       const [id, orgId] = this.bindings as [string, string];
       const row = this.db.webhookSources.get(id);

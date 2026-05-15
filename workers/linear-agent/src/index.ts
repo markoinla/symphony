@@ -78,6 +78,14 @@ export interface Env {
   // dashboard Integrations tab as the "Manage" link for GitHub.
   GITHUB_APP_SETTINGS_URL?: string;
 
+  // Webhook signing secret for the Symphony GitHub App. A GitHub App
+  // has one App-level webhook URL (`POST /webhook/github`) shared by
+  // every installation, so signatures are verified against this
+  // single secret. Must match the secret set on the App's webhook
+  // config. Set with: wrangler secret put GITHUB_APP_WEBHOOK_SECRET.
+  // When unset, /webhook/github returns 503.
+  GITHUB_APP_WEBHOOK_SECRET?: string;
+
   // Master KEK (base64-encoded AES-256 key) for envelope encryption
   // of per-org credentials in the org_credentials table. Set with:
   //   wrangler secret put CREDENTIAL_KEK

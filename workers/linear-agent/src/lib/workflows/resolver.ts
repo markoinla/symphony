@@ -304,7 +304,15 @@ function parseStringArray(s: string | null): string[] | null {
   if (s == null) return null;
   try {
     const parsed = JSON.parse(s);
-    if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) {
+    // An empty array is normalized to null: a filter with no entries
+    // means "match any", not "match nothing". The membership checks in
+    // passesScopeFilters treat any non-null array as an active
+    // allowlist, so returning [] here would reject every event.
+    if (
+      Array.isArray(parsed) &&
+      parsed.length > 0 &&
+      parsed.every((x) => typeof x === "string")
+    ) {
       return parsed as string[];
     }
   } catch {

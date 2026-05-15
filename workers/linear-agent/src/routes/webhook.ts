@@ -19,6 +19,7 @@ import { readJsonPath } from "../lib/json-path";
 import { verifyHmacSignature, verifyLinearSignature } from "../lib/signature";
 import {
   AgentSessionStore,
+  GitHubInstallStore,
   LinearAgentInstallStore,
   WebhookEventStore,
   WebhookSourceStore,
@@ -121,6 +122,18 @@ export function buildWebhookRouter() {
       latencyMs: Date.now() - startedMs,
     });
     return c.json({ error: "unsupported_source_kind" }, 400);
+  });
+
+  // App-level GitHub webhook. A GitHub App has exactly one webhook URL
+  // shared by every installation across every tenant, so this route is
+  // fixed (not per-source) and resolves the tenant org from the
+  // payload's `installation.id`. The per-source `/webhook/source/:id`
+  // route stays for repo-level (non-App) GitHub webhooks.
+  app.post("/webhook/github", async (c) => {
+    const receivedAt = Math.floor(Date.now() / 1000);
+    const startedMs = Date.now();
+    const events = new WebhookEventStore(c.env.DB);
+    return await handleGitHubAppWebhook(c, events, receivedAt, startedMs);
   });
 
   app.post("/webhook", async (c) => {
@@ -881,14 +894,7 @@ async function handleGitHubSource(
   const raw = await c.req.raw.clone().text();
   const deliveryId = c.req.header("X-GitHub-Delivery") ?? null;
   const eventName = c.req.header("X-GitHub-Event") ?? "unknown";
-  const action = (() => {
-    try {
-      const parsed = JSON.parse(raw) as { action?: unknown };
-      return typeof parsed.action === "string" ? parsed.action : null;
-    } catch {
-      return null;
-    }
-  })();
+  const action = parseGitHubAction(raw);
 
   const sigOk = await verifyGitHubSignature(
     source.secret,
@@ -927,14 +933,180 @@ async function handleGitHubSource(
     return c.json({ error: "invalid_json" }, 400);
   }
 
+  return await dispatchGitHubEvent(c, {
+    events,
+    logId,
+    organizationId: source.organization_id,
+    eventName,
+    action,
+    payload: parsed,
+    deliveryId,
+    dedupeScope: `source:${source.id}`,
+    rawLength: raw.length,
+    startedMs,
+  });
+}
+
+/**
+ * App-level GitHub webhook receiver (`POST /webhook/github`).
+ *
+ * Unlike `/webhook/source/:id` — where the source row pins one tenant —
+ * a GitHub App exposes a single webhook URL shared by every
+ * installation. Signatures are verified against the one App-level
+ * `GITHUB_APP_WEBHOOK_SECRET`, and the tenant org is resolved per
+ * delivery from the payload's `installation.id` via `github_installs`.
+ */
+async function handleGitHubAppWebhook(
+  c: {
+    env: Env;
+    req: { raw: Request; header: (name: string) => string | undefined };
+    json: (b: unknown, s?: number) => Response;
+  },
+  events: WebhookEventStore,
+  receivedAt: number,
+  startedMs: number,
+): Promise<Response> {
+  const raw = await c.req.raw.clone().text();
+  const deliveryId = c.req.header("X-GitHub-Delivery") ?? null;
+  const eventName = c.req.header("X-GitHub-Event") ?? "unknown";
+  const action = parseGitHubAction(raw);
+
+  const secret = c.env.GITHUB_APP_WEBHOOK_SECRET;
+  if (!secret) {
+    const logId = await events.insert({
+      receivedAt,
+      webhookId: deliveryId,
+      envelopeType: `github.${eventName}`,
+      envelopeAction: action,
+      signatureOk: false,
+      rawBody: raw.slice(0, 65_536),
+    });
+    await events.update(logId, {
+      dispatchedAction: "error",
+      error: "github_webhook_not_configured",
+      latencyMs: Date.now() - startedMs,
+    });
+    return c.json({ error: "github_webhook_not_configured" }, 503);
+  }
+
+  const sigOk = await verifyGitHubSignature(
+    secret,
+    raw,
+    c.req.header("X-Hub-Signature-256"),
+  );
+  const logId = await events.insert({
+    receivedAt,
+    webhookId: deliveryId,
+    envelopeType: `github.${eventName}`,
+    envelopeAction: action,
+    signatureOk: sigOk,
+    rawBody: raw.slice(0, 65_536),
+  });
+
+  if (!sigOk) {
+    await events.update(logId, {
+      dispatchedAction: "error",
+      error: "invalid_signature",
+      latencyMs: Date.now() - startedMs,
+    });
+    return c.json({ error: "invalid_signature" }, 401);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    await events.update(logId, {
+      dispatchedAction: "error",
+      error: "invalid_json",
+      latencyMs: Date.now() - startedMs,
+    });
+    return c.json({ error: "invalid_json" }, 400);
+  }
+
+  // Resolve the tenant org from the installation. Events with no
+  // installation context — notably the `ping` GitHub sends when the
+  // webhook is first saved — are acknowledged without dispatch.
+  const installId = extractGitHubInstallationId(parsed);
+  if (installId == null) {
+    await events.update(logId, {
+      dispatchedAction: "ignored_envelope",
+      eventSummary: `GitHub ${eventName} (no installation)`,
+      latencyMs: Date.now() - startedMs,
+    });
+    return c.json({ ok: true, ignored: true });
+  }
+
+  const install = await new GitHubInstallStore(c.env.DB).getByInstallId(
+    installId,
+  );
+  if (!install) {
+    await events.update(logId, {
+      dispatchedAction: "no_match",
+      error: "no_install_for_github_installation",
+      eventSummary: `GitHub installation ${installId} not registered`,
+      latencyMs: Date.now() - startedMs,
+    });
+    return c.json({ ok: true, ignored: true });
+  }
+
+  return await dispatchGitHubEvent(c, {
+    events,
+    logId,
+    organizationId: install.organization_id,
+    eventName,
+    action,
+    payload: parsed,
+    deliveryId,
+    dedupeScope: "github",
+    rawLength: raw.length,
+    startedMs,
+  });
+}
+
+/**
+ * Shared tail for both GitHub webhook routes: normalize the payload to
+ * an EventTuple, dedupe the delivery, resolve a workflow trigger, and
+ * dispatch. The caller has already verified the signature and resolved
+ * the tenant `organizationId`.
+ */
+async function dispatchGitHubEvent(
+  c: { env: Env; json: (b: unknown, s?: number) => Response },
+  args: {
+    events: WebhookEventStore;
+    logId: string;
+    organizationId: string;
+    eventName: string;
+    action: string | null;
+    payload: unknown;
+    deliveryId: string | null;
+    dedupeScope: string;
+    rawLength: number;
+    startedMs: number;
+  },
+): Promise<Response> {
+  const {
+    events,
+    logId,
+    organizationId,
+    eventName,
+    action,
+    payload,
+    deliveryId,
+    dedupeScope,
+    rawLength,
+    startedMs,
+  } = args;
+
   const mapped = normalizeGitHubSourceEvent({
     eventName,
-    payload: parsed,
-    organizationId: source.organization_id,
+    payload,
+    organizationId,
     deliveryId,
   });
   if (!mapped) {
     await events.update(logId, {
+      organizationId,
       dispatchedAction: "ignored_envelope",
       eventSummary: `GitHub ${eventName} ${action ?? "unknown"} (no handler)`,
       latencyMs: Date.now() - startedMs,
@@ -942,10 +1114,11 @@ async function handleGitHubSource(
     return c.json({ ok: true, ignored: true });
   }
 
-  const dedupeKey = `webhook:source:${source.id}:${deliveryId ?? raw.length}:${mapped.event.event_type}`;
+  const dedupeKey = `webhook:${dedupeScope}:${deliveryId ?? rawLength}:${mapped.event.event_type}`;
   const seen = await c.env.LINEAR_TOKENS.get(dedupeKey);
   if (seen) {
     await events.update(logId, {
+      organizationId,
       deduped: true,
       dispatchedAction: "deduped",
       eventSummary: mapped.summary,
@@ -960,6 +1133,7 @@ async function handleGitHubSource(
   const resolved = await resolveWorkflow(c.env, mapped.event);
   if (!resolved) {
     await events.update(logId, {
+      organizationId,
       dispatchedAction: "no_match",
       eventSummary: mapped.summary,
       latencyMs: Date.now() - startedMs,
@@ -975,6 +1149,7 @@ async function handleGitHubSource(
   });
 
   await events.update(logId, {
+    organizationId,
     matchedWorkflowId: resolved.workflow.id,
     matchedTriggerId: resolved.trigger.id,
     dispatchedAction: dispatched.outcome,
@@ -992,6 +1167,23 @@ async function handleGitHubSource(
     outcome: dispatched.outcome,
     agent_session_id: dispatched.agentSessionId ?? null,
   });
+}
+
+function parseGitHubAction(raw: string): string | null {
+  try {
+    const parsed = JSON.parse(raw) as { action?: unknown };
+    return typeof parsed.action === "string" ? parsed.action : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractGitHubInstallationId(payload: unknown): number | null {
+  if (!payload || typeof payload !== "object") return null;
+  const inst = (payload as { installation?: unknown }).installation;
+  if (!inst || typeof inst !== "object") return null;
+  const id = (inst as { id?: unknown }).id;
+  return typeof id === "number" ? id : null;
 }
 
 function normalizeGitHubSourceEvent(args: {

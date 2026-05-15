@@ -84,6 +84,9 @@
   //   DISPATCH_HMAC_SECRET     — must match the dispatcher's secret of the
   //                              same name (this worker calls the dispatcher
   //                              over HTTP and signs requests itself).
+  //   GITHUB_APP_WEBHOOK_SECRET — App-level GitHub webhook signing secret;
+  //                              must match the secret on the GitHub App's
+  //                              webhook config. Verifies POST /webhook/github.
 
   "env": {
     "dev": {

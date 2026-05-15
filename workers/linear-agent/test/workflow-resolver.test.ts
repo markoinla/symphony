@@ -808,6 +808,23 @@ describe("resolveWorkflow — github_pr scope filters", () => {
     expect(await resolveWorkflow(makeEnv(db), withSubject({ author: "someone" }))).toBeNull();
     expect(await resolveWorkflow(makeEnv(db), githubPr({ labels: ["other"] }))).toBeNull();
   });
+
+  it("treats an empty-array filter as match-any (regression: branch_filter [])", async () => {
+    const db = new MockResolverDB();
+    db.addWorkflow({ id: "wf-gh-empty", organization_id: "org-1" });
+    db.addTrigger({
+      id: "t-gh-empty",
+      workflow_id: "wf-gh-empty",
+      event_type: "github.pr.opened",
+      repo_filter: JSON.stringify(["acme/widgets"]),
+      branch_filter: "[]",
+      base_filter: JSON.stringify(["main"]),
+      action: "start_session",
+    });
+
+    const hit = await resolveWorkflow(makeEnv(db), githubPr());
+    expect(hit?.trigger.id).toBe("t-gh-empty");
+  });
 });
 
 describe("resolveWorkflow — github_issue scope filters", () => {

@@ -151,11 +151,32 @@ generically.
 
 ## GitHub trigger webhooks
 
-GitHub sources are registered through `/api/v1/webhook-sources` (write scope) or
-from the dashboard Integrations page. The create response returns a copy-once
-`secret` plus an inbound URL (`/webhook/source/:id`). Configure that URL in
-GitHub with `application/json` payloads and the HMAC secret; Symphony verifies
-`X-Hub-Signature-256` before normalizing supported events.
+GitHub events reach the worker through one of two routes:
+
+**App-level webhook (`POST /webhook/github`)** — for the shared Symphony
+GitHub App. A GitHub App has a single webhook URL used by every installation
+across every tenant, so this route is fixed. Configure it on the App's webhook
+settings with `application/json` payloads and a webhook secret, then mirror
+that secret into the worker:
+
+```bash
+wrangler secret put GITHUB_APP_WEBHOOK_SECRET
+```
+
+Every delivery is signature-verified against that one secret, and the tenant
+org is resolved per delivery from the payload's `installation.id` via the
+`github_installs` table (populated by the `/github/install` flow). Deliveries
+with no installation context (e.g. the `ping` GitHub sends on save) are
+acknowledged without dispatch; deliveries from an unregistered installation
+are ignored. When `GITHUB_APP_WEBHOOK_SECRET` is unset the route returns 503.
+
+**Per-source webhook (`POST /webhook/source/:id`)** — for repo-level (non-App)
+GitHub webhooks. Sources are registered through `/api/v1/webhook-sources`
+(write scope) or the dashboard Integrations page; the create response returns
+a copy-once `secret` plus the inbound URL. Each source row pins one tenant
+org, so this route is not suitable for the shared App.
+
+Both routes verify `X-Hub-Signature-256` before normalizing supported events.
 
 Supported `pull_request` actions normalize into `github_pr` subjects:
 

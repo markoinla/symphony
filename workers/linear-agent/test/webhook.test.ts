@@ -334,6 +334,72 @@ function githubIssueCommentBody(body: string) {
   };
 }
 
+const GITHUB_APP_WEBHOOK_SECRET = "app-webhook-secret";
+
+async function signedGitHubAppRequest(
+  secret: string,
+  eventName: string,
+  body: Record<string, unknown>,
+): Promise<Request> {
+  const raw = JSON.stringify(body);
+  const sig = `sha256=${await computeLinearSignature(secret, raw)}`;
+  return new Request("https://agent.example/webhook/github", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-GitHub-Event": eventName,
+      "X-GitHub-Delivery": crypto.randomUUID(),
+      "X-Hub-Signature-256": sig,
+    },
+    body: raw,
+  });
+}
+
+function githubPrBody(
+  installationId: number,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    action: "opened",
+    repository: { full_name: "acme/widgets" },
+    pull_request: {
+      number: 42,
+      title: "Add widget",
+      body: "Details",
+      state: "open",
+      merged: false,
+      base: { ref: "main" },
+      head: { ref: "feature/widget", sha: "abc123" },
+      draft: false,
+      labels: [{ name: "agent" }],
+      user: { login: "octocat" },
+      requested_reviewers: [],
+    },
+    installation: { id: installationId },
+    sender: { login: "octocat" },
+    ...overrides,
+  };
+}
+
+function seedGitHubInstall(
+  db: ResolverFakeD1,
+  installId: number,
+  orgId: string,
+): void {
+  const now = Math.floor(Date.now() / 1000);
+  db.githubInstalls.set(orgId, {
+    id: `ghinstall-${installId}`,
+    organization_id: orgId,
+    install_id: installId,
+    account_login: "acme",
+    account_type: "Organization",
+    repo_selection: "all",
+    selected_repos: null,
+    created_at: now,
+    updated_at: now,
+  });
+}
+
 function makeExecCtx(): ExecutionContext & {
   pending: Promise<unknown>[];
   flush: () => Promise<void>;
@@ -563,6 +629,151 @@ describe("POST /webhook/source GitHub issue triggers", () => {
     expect(skipped.status).toBe(200);
     expect(await skipped.json()).toMatchObject({ matched: false });
     expect(sessionRunner.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("POST /webhook/github App-level webhook", () => {
+  it("returns 503 when GITHUB_APP_WEBHOOK_SECRET is unset", async () => {
+    const app = buildApp();
+    const kv = new FakeKV();
+    const db = seedGitHubTriggerDb("github.pr.opened");
+    seedGitHubInstall(db, 555, "org-1");
+
+    const res = await app.fetch(
+      await signedGitHubAppRequest(
+        GITHUB_APP_WEBHOOK_SECRET,
+        "pull_request",
+        githubPrBody(555),
+      ),
+      makeEnv(kv, {}, makeWorkflowStub(), db),
+      makeExecCtx(),
+    );
+
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({
+      error: "github_webhook_not_configured",
+    });
+  });
+
+  it("rejects a delivery signed with the wrong secret", async () => {
+    const app = buildApp();
+    const kv = new FakeKV();
+    const db = seedGitHubTriggerDb("github.pr.opened");
+    seedGitHubInstall(db, 555, "org-1");
+
+    const res = await app.fetch(
+      await signedGitHubAppRequest(
+        "wrong-secret",
+        "pull_request",
+        githubPrBody(555),
+      ),
+      makeEnv(
+        kv,
+        { GITHUB_APP_WEBHOOK_SECRET },
+        makeWorkflowStub(),
+        db,
+      ),
+      makeExecCtx(),
+    );
+
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: "invalid_signature" });
+  });
+
+  it("dispatches a matching PR event under the org resolved from installation.id", async () => {
+    const app = buildApp();
+    const kv = new FakeKV();
+    const sessionRunner = makeWorkflowStub();
+    const db = seedGitHubTriggerDb("github.pr.opened");
+    seedGitHubInstall(db, 555, "org-1");
+
+    const res = await app.fetch(
+      await signedGitHubAppRequest(
+        GITHUB_APP_WEBHOOK_SECRET,
+        "pull_request",
+        githubPrBody(555),
+      ),
+      makeEnv(kv, { GITHUB_APP_WEBHOOK_SECRET }, sessionRunner, db),
+      makeExecCtx(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      matched: true,
+      workflow_id: "workflow-1",
+      trigger_id: "trigger-1",
+      outcome: "start_session",
+    });
+    expect(sessionRunner.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores deliveries from an unregistered installation", async () => {
+    const app = buildApp();
+    const kv = new FakeKV();
+    const sessionRunner = makeWorkflowStub();
+    const db = seedGitHubTriggerDb("github.pr.opened");
+    seedGitHubInstall(db, 555, "org-1");
+
+    const res = await app.fetch(
+      await signedGitHubAppRequest(
+        GITHUB_APP_WEBHOOK_SECRET,
+        "pull_request",
+        githubPrBody(999),
+      ),
+      makeEnv(kv, { GITHUB_APP_WEBHOOK_SECRET }, sessionRunner, db),
+      makeExecCtx(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, ignored: true });
+    expect(sessionRunner.create).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges the ping event without dispatching", async () => {
+    const app = buildApp();
+    const kv = new FakeKV();
+    const sessionRunner = makeWorkflowStub();
+    const db = seedGitHubTriggerDb("github.pr.opened");
+    seedGitHubInstall(db, 555, "org-1");
+
+    const res = await app.fetch(
+      await signedGitHubAppRequest(GITHUB_APP_WEBHOOK_SECRET, "ping", {
+        zen: "Keep it logically awesome.",
+        hook_id: 1,
+      }),
+      makeEnv(kv, { GITHUB_APP_WEBHOOK_SECRET }, sessionRunner, db),
+      makeExecCtx(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, ignored: true });
+    expect(sessionRunner.create).not.toHaveBeenCalled();
+  });
+
+  it("does not dispatch another tenant's workflow for a PR from a different installation", async () => {
+    const app = buildApp();
+    const kv = new FakeKV();
+    const sessionRunner = makeWorkflowStub();
+    // workflow-1 / trigger-1 belong to org-1. Installation 777 is
+    // registered to org-2, so its PR must not resolve org-1's workflow.
+    const db = seedGitHubTriggerDb("github.pr.opened");
+    seedGitHubInstall(db, 555, "org-1");
+    seedGitHubInstall(db, 777, "org-2");
+
+    const res = await app.fetch(
+      await signedGitHubAppRequest(
+        GITHUB_APP_WEBHOOK_SECRET,
+        "pull_request",
+        githubPrBody(777),
+      ),
+      makeEnv(kv, { GITHUB_APP_WEBHOOK_SECRET }, sessionRunner, db),
+      makeExecCtx(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, matched: false });
+    expect(sessionRunner.create).not.toHaveBeenCalled();
   });
 });
 

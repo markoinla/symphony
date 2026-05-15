@@ -231,6 +231,19 @@ export class GitHubInstallStore {
       .first<GitHubInstallRecord>();
   }
 
+  // Reverse lookup used by the App-level GitHub webhook receiver: a
+  // GitHub App has one webhook URL shared by every installation, so
+  // the tenant org is resolved from the payload's `installation.id`.
+  async getByInstallId(installId: number): Promise<GitHubInstallRecord | null> {
+    return await this.db
+      .prepare(
+        `SELECT ${GitHubInstallStore.COLUMNS}
+         FROM github_installs WHERE install_id = ?`,
+      )
+      .bind(installId)
+      .first<GitHubInstallRecord>();
+  }
+
   async list(): Promise<GitHubInstallRecord[]> {
     const result = await this.db
       .prepare(
