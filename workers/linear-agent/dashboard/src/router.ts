@@ -55,6 +55,11 @@ export const workflowEditorRoute = createRoute({
   path: '/workflows/$id',
 })
 
+export const integrationsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/integrations',
+})
+
 export const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/settings',
@@ -84,6 +89,7 @@ export const routeTree = rootRoute.addChildren([
   projectsRoute,
   workflowsRoute,
   workflowEditorRoute,
+  integrationsRoute,
   settingsRoute,
   loginRoute,
   setupRoute,

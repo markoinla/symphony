@@ -73,10 +73,22 @@ export interface GitHubInstallRow {
   updated_at: number;
 }
 
+export interface WebhookSourceRow {
+  id: string;
+  organization_id: string;
+  kind: string;
+  name: string;
+  secret: string;
+  config: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface WebhookEventRow {
   id: string;
   received_at: number;
   organization_id: string | null;
+  source_id: string | null;
   webhook_id: string | null;
   envelope_type: string;
   envelope_action: string | null;
@@ -132,6 +144,7 @@ export class FakeD1 {
   orgCredentials = new Map<string, OrgCredentialRow>();
   githubInstalls = new Map<string, GitHubInstallRow>();
   agentSessions = new Map<string, AgentSessionRow>();
+  webhookSources = new Map<string, WebhookSourceRow>();
   webhookEvents = new Map<string, WebhookEventRow>();
   // Keyed by `${organization_id}:${key}`.
   settings = new Map<string, SettingRow>();
@@ -482,12 +495,54 @@ class FakeStatement {
       });
       return { success: true, meta: { changes: 1 } };
     }
+    // ── webhook_sources ────────────────────────────────────────
+    if (/^INSERT INTO webhook_sources/i.test(sql)) {
+      const [id, organizationId, kind, name, secret, config, createdAt, updatedAt] =
+        this.bindings as [string, string, string, string, string, string | null, number, number];
+      this.db.webhookSources.set(id, {
+        id,
+        organization_id: organizationId,
+        kind,
+        name,
+        secret,
+        config,
+        created_at: createdAt,
+        updated_at: updatedAt,
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (/^UPDATE webhook_sources SET/i.test(sql)) {
+      const values = this.bindings.slice();
+      const orgId = values.pop() as string;
+      const id = values.pop() as string;
+      const row = this.db.webhookSources.get(id);
+      if (!row || row.organization_id !== orgId) return { success: true, meta: { changes: 0 } };
+      const setClause = sql.replace(/^UPDATE webhook_sources SET\s*/i, "").replace(/\s*WHERE.*$/i, "");
+      for (const assign of setClause.split(",").map((c) => c.trim())) {
+        const [colRaw] = assign.split("=");
+        const col = colRaw?.trim();
+        const value = values.shift();
+        if (col === "name") row.name = value as string;
+        if (col === "config") row.config = (value ?? null) as string | null;
+        if (col === "secret") row.secret = value as string;
+        if (col === "updated_at") row.updated_at = value as number;
+      }
+      return { success: true, meta: { changes: 1 } };
+    }
+    if (/^DELETE FROM webhook_sources/i.test(sql)) {
+      const [id, orgId] = this.bindings as [string, string];
+      const row = this.db.webhookSources.get(id);
+      const removed = !!row && row.organization_id === orgId && this.db.webhookSources.delete(id);
+      return { success: true, meta: { changes: removed ? 1 : 0 } };
+    }
+
     // ── webhook_events ──────────────────────────────────────────
     if (/^INSERT INTO webhook_events/i.test(sql)) {
       const [
         id,
         receivedAt,
         organizationId,
+        sourceId,
         webhookId,
         envelopeType,
         envelopeAction,
@@ -497,6 +552,7 @@ class FakeStatement {
       ] = this.bindings as [
         string,
         number,
+        string | null,
         string | null,
         string | null,
         string,
@@ -509,6 +565,7 @@ class FakeStatement {
         id,
         received_at: receivedAt,
         organization_id: organizationId,
+        source_id: sourceId,
         webhook_id: webhookId,
         envelope_type: envelopeType,
         envelope_action: envelopeAction,
@@ -628,6 +685,26 @@ class FakeStatement {
       return (this.db.githubInstalls.get(orgId) as unknown as T) ?? null;
     }
 
+    if (/FROM webhook_sources WHERE id = \? AND organization_id/i.test(sql)) {
+      const [id, orgId] = this.bindings as [string, string];
+      const row = this.db.webhookSources.get(id);
+      return (row && row.organization_id === orgId ? (row as unknown as T) : null);
+    }
+    if (/FROM webhook_sources WHERE id = \?/i.test(sql)) {
+      const [id] = this.bindings as [string];
+      return (this.db.webhookSources.get(id) as unknown as T) ?? null;
+    }
+
+    if (/FROM webhook_events WHERE id = \? AND organization_id/i.test(sql)) {
+      const [id, orgId] = this.bindings as [string, string];
+      const row = this.db.webhookEvents.get(id);
+      return (row && row.organization_id === orgId ? (row as unknown as T) : null);
+    }
+    if (/FROM webhook_events WHERE id = \?/i.test(sql)) {
+      const [id] = this.bindings as [string];
+      return (this.db.webhookEvents.get(id) as unknown as T) ?? null;
+    }
+
     if (/FROM agent_sessions WHERE id/i.test(sql)) {
       const [id] = this.bindings as [string];
       return (this.db.agentSessions.get(id) as unknown as T) ?? null;
@@ -680,6 +757,22 @@ class FakeStatement {
         success: true,
         results: Array.from(this.db.githubInstalls.values()) as unknown as T[],
       };
+    }
+
+    if (/FROM webhook_sources WHERE organization_id = \?/i.test(sql)) {
+      const [orgId] = this.bindings as [string];
+      const rows = [...this.db.webhookSources.values()]
+        .filter((r) => r.organization_id === orgId)
+        .sort((a, b) => b.created_at - a.created_at);
+      return { success: true, results: rows as unknown as T[] };
+    }
+
+    if (/FROM webhook_events/i.test(sql)) {
+      const [orgId] = this.bindings as [string];
+      const rows = [...this.db.webhookEvents.values()]
+        .filter((r) => !orgId || r.organization_id === orgId)
+        .sort((a, b) => b.received_at - a.received_at);
+      return { success: true, results: rows as unknown as T[] };
     }
 
     // Drizzle-issued queries against Better Auth's `accounts`/`members`

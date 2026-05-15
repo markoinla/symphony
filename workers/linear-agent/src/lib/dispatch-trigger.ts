@@ -27,16 +27,26 @@ import {
   ProjectStore,
 } from "./store";
 
+import { renderPrompt } from "./workflows/render";
+
 // Conservative timeout floor for the dispatch path. Mirrors the
 // session-runner's `DEFAULT_TIMEOUT_MS` so a session-start-time refresh
 // uses the same safety window the runner itself does.
 const DISPATCH_RUN_TIMEOUT_MS = 10 * 60 * 1000;
-import { renderPrompt } from "./workflows/render";
 import type { Env } from "../index";
 import type { EventTuple } from "../schemas/event";
 import type { Trigger } from "../schemas/trigger";
 import type { Workflow } from "../schemas/workflow";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
+
+function repoUrlMatchesFullName(repoUrl: string, fullName: string): boolean {
+  const normalized = repoUrl
+    .replace(/^git@github\.com:/, "")
+    .replace(/^https:\/\/github\.com\//, "")
+    .replace(/\.git$/, "")
+    .replace(/\/$/, "");
+  return normalized.toLowerCase() === fullName.toLowerCase();
+}
 
 export interface DispatchResult {
   /** `start_session`, `no_handler`, or `error`. */
@@ -93,6 +103,13 @@ export async function dispatchTrigger(
       : null;
   if (!project && configuredProjectId) {
     project = await projectStore.getById(configuredProjectId, orgId);
+  }
+  if (!project && subject?.kind === "github_pr") {
+    const projects = await projectStore.listByOrg(orgId);
+    project =
+      projects.find((p) => repoUrlMatchesFullName(p.repo_url, subject.repo)) ??
+      projects[0] ??
+      null;
   }
   if (!project && subject?.kind !== "linear_issue") {
     project = (await projectStore.listByOrg(orgId))[0] ?? null;

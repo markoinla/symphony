@@ -27,6 +27,10 @@ export const eventTypeSchema = z.enum([
   "label_added",
   "label_removed",
   "assignee_changed",
+  "github.pr.opened",
+  "github.pr.merged",
+  "github.pr.closed",
+  "github.pr.review_requested",
 ]);
 export type EventType = z.infer<typeof eventTypeSchema>;
 
@@ -83,9 +87,26 @@ export const genericSubjectSchema = z.object({
   payload: z.record(z.string(), z.unknown()).default({}),
 });
 
+export const githubPrSubjectSchema = z.object({
+  kind: z.literal("github_pr"),
+  repo: z.string(),
+  number: z.number().int(),
+  title: z.string(),
+  body: z.string(),
+  state: z.enum(["open", "closed", "merged"]),
+  base: z.string(),
+  head: z.string(),
+  draft: z.boolean(),
+  labels: z.array(z.string()).default([]),
+  author: z.string(),
+  reviewers: z.array(z.string()).default([]),
+  head_sha: z.string(),
+});
+
 export const SubjectRefSchema = z.discriminatedUnion("kind", [
   linearIssueSubjectSchema,
   genericSubjectSchema,
+  githubPrSubjectSchema,
 ]);
 export type SubjectRef = z.infer<typeof SubjectRefSchema>;
 
@@ -183,6 +204,35 @@ export const assigneeChangedEventSchema = z.object({
   from_assignee_id: z.string().nullable().optional(),
 });
 
+const githubPrFields = {
+  ...scopeFields,
+  repo: z.string(),
+  branch: z.string(),
+  base: z.string(),
+  draft: z.boolean(),
+  author: z.string(),
+} as const;
+
+export const githubPrOpenedEventSchema = z.object({
+  event_type: z.literal("github.pr.opened"),
+  ...githubPrFields,
+});
+
+export const githubPrMergedEventSchema = z.object({
+  event_type: z.literal("github.pr.merged"),
+  ...githubPrFields,
+});
+
+export const githubPrClosedEventSchema = z.object({
+  event_type: z.literal("github.pr.closed"),
+  ...githubPrFields,
+});
+
+export const githubPrReviewRequestedEventSchema = z.object({
+  event_type: z.literal("github.pr.review_requested"),
+  ...githubPrFields,
+});
+
 // EventTuple — discriminated union by event_type. The resolver,
 // dispatcher, and renderer all consume this shape.
 export const EventTupleSchema = z.discriminatedUnion("event_type", [
@@ -194,6 +244,10 @@ export const EventTupleSchema = z.discriminatedUnion("event_type", [
   labelAddedEventSchema,
   labelRemovedEventSchema,
   assigneeChangedEventSchema,
+  githubPrOpenedEventSchema,
+  githubPrMergedEventSchema,
+  githubPrClosedEventSchema,
+  githubPrReviewRequestedEventSchema,
 ]);
 export type EventTuple = z.infer<typeof EventTupleSchema>;
 

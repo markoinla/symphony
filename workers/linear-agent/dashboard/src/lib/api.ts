@@ -642,6 +642,7 @@ export type WebhookEvent = {
   id: string
   received_at: number
   organization_id: string | null
+  source_id: string | null
   webhook_id: string | null
   envelope_type: string
   envelope_action: string | null
@@ -662,6 +663,7 @@ export type WebhookListParams = {
   limit?: number
   envelope?: string
   dispatchedAction?: string
+  sourceId?: string
 }
 
 export async function getWebhooks(
@@ -672,6 +674,7 @@ export async function getWebhooks(
   if (params?.envelope) qs.set('envelope', params.envelope)
   if (params?.dispatchedAction)
     qs.set('dispatched_action', params.dispatchedAction)
+  if (params?.sourceId) qs.set('source_id', params.sourceId)
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
   return requestJson<{ webhooks: WebhookEvent[] }>(`/api/v1/webhooks${suffix}`)
 }
@@ -765,6 +768,33 @@ export type Integrations = {
   openai: { configured: boolean }
   cf_workers_ai: { configured: boolean }
   github_app_settings_url: string | null
+}
+
+export type WebhookSource = {
+  id: string
+  organization_id: string
+  kind: 'github'
+  name: string
+  config: Record<string, unknown>
+  inbound_url: string
+  secret?: string
+  created_at: number
+  updated_at: number
+}
+
+export function listWebhookSources(): Promise<{ webhook_sources: WebhookSource[] }> {
+  return requestJson<{ webhook_sources: WebhookSource[] }>('/api/v1/webhook-sources')
+}
+
+export function createWebhookSource(input: {
+  kind: 'github'
+  name: string
+  config?: Record<string, unknown>
+}): Promise<{ webhook_source: WebhookSource }> {
+  return requestJson<{ webhook_source: WebhookSource }>('/api/v1/webhook-sources', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
 }
 
 export function getIntegrations(): Promise<Integrations> {
