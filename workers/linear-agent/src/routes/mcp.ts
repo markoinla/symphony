@@ -35,6 +35,7 @@ import {
   ProjectSchema,
   ProjectUpdateSchema,
 } from "../schemas/project";
+import { SubjectRefSchema } from "../schemas/event";
 import {
   TriggerCreateSchema,
   TriggerSchema,
@@ -86,7 +87,7 @@ const ERR = {
   ToolError: -32000,
 } as const;
 
-type Scope = "read" | "write" | "admin";
+type Scope = "read" | "write" | "admin" | "triggers:invoke";
 
 interface ToolAnnotations {
   title?: string;
@@ -133,11 +134,13 @@ async function callV1(
   path: string,
   body: unknown,
   ctx: DispatchCtx,
+  extraHeaders?: Record<string, string>,
 ): Promise<DispatchResult> {
   const headers: Record<string, string> = {
     Authorization: ctx.authorization,
     "Content-Type": "application/json",
     Accept: "application/json",
+    ...(extraHeaders ?? {}),
   };
   const req = new Request(`https://internal.local${path}`, {
     method,
@@ -617,6 +620,41 @@ const TOOLS: Tool[] = [
     },
     dispatch: (args, ctx) =>
       callV1("DELETE", `/api/v1/triggers/${encId(args.id)}`, undefined, ctx),
+  },
+  {
+    name: "invoke_trigger",
+    description:
+      "Invoke a workflow trigger directly via the API. Requires a trigger configured with event_type `api.invoke`. Accepts a SubjectRef (`linear_issue` or `generic`) plus optional context and returns the queued session id.",
+    scope: "triggers:invoke",
+    annotations: {
+      title: "Invoke trigger",
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
+    inputSchema: z.toJSONSchema(
+      z.object({
+        id: z.string().describe("Trigger UUID."),
+        subject: SubjectRefSchema,
+        context: z.record(z.string(), z.unknown()).optional(),
+        idempotency_key: z.string().optional(),
+      }),
+    ),
+    outputSchema: z.toJSONSchema(z.object({ session_id: z.string() })),
+    dispatch: (args, ctx) => {
+      const headers =
+        typeof args.idempotency_key === "string"
+          ? { "Idempotency-Key": args.idempotency_key }
+          : undefined;
+      return callV1(
+        "POST",
+        `/api/v1/triggers/${encId(args.id)}/invoke`,
+        { subject: args.subject, context: args.context ?? {} },
+        ctx,
+        headers,
+      );
+    },
   },
   {
     name: "projects.list",

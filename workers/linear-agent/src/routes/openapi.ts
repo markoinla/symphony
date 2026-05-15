@@ -17,6 +17,7 @@ import { z } from "zod";
 
 import type { Env } from "../index";
 import { ApiTokenCreateSchema, ApiTokenSchema } from "../schemas/api-token";
+import { SubjectRefSchema } from "../schemas/event";
 import {
   ProjectCreateSchema,
   ProjectSchema,
@@ -59,6 +60,15 @@ const IntegrationsSchema = z.object({
   github_app_settings_url: z.string().nullable(),
 });
 
+const TriggerInvokeInputSchema = z.object({
+  subject: SubjectRefSchema,
+  context: z.record(z.string(), z.unknown()).optional(),
+});
+
+const TriggerInvokeResponseSchema = z.object({
+  session_id: z.string(),
+});
+
 const WebhookEventSchema = z.object({
   id: z.string(),
   received_at: z.number().int(),
@@ -86,6 +96,9 @@ const components = {
     Trigger:              z.toJSONSchema(TriggerSchema),
     TriggerCreateInput:   z.toJSONSchema(TriggerCreateSchema),
     TriggerUpdateInput:   z.toJSONSchema(TriggerUpdateSchema),
+    SubjectRef:           z.toJSONSchema(SubjectRefSchema),
+    TriggerInvokeInput:   z.toJSONSchema(TriggerInvokeInputSchema),
+    TriggerInvokeResponse:z.toJSONSchema(TriggerInvokeResponseSchema),
     Project:              z.toJSONSchema(ProjectSchema),
     ProjectCreateInput:   z.toJSONSchema(ProjectCreateSchema),
     ProjectUpdateInput:   z.toJSONSchema(ProjectUpdateSchema),
@@ -283,6 +296,20 @@ export function buildOpenApiDocument(env: Env): Record<string, unknown> {
           responses: { "200": { description: "OK", ...jsonBody("Trigger") }, ...commonErrors },
         },
         delete: { summary: "Delete trigger", responses: { "200": { description: "OK" }, ...commonErrors } },
+      },
+      "/api/v1/triggers/{id}/invoke": {
+        parameters: [
+          { name: "id", in: "path", required: true, schema: { type: "string" } },
+          idempotencyHeader,
+        ],
+        post: {
+          summary: "Invoke an api.invoke trigger",
+          requestBody: jsonBody("TriggerInvokeInput"),
+          responses: {
+            "202": { description: "Queued", ...jsonBody("TriggerInvokeResponse") },
+            ...commonErrors,
+          },
+        },
       },
       "/api/v1/projects": {
         get: {

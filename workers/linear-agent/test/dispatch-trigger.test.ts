@@ -20,6 +20,104 @@ afterEach(() => {
 });
 
 describe("dispatchTrigger", () => {
+  it("queues generic api.invoke subjects headlessly without Linear calls", async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const db = new FakeD1();
+    db.projects.set("org-1:team-1", {
+      id: "project-1",
+      organization_id: "org-1",
+      linear_team_id: "team-1",
+      linear_team_name: "Team One",
+      repo_url: "https://github.com/acme/repo.git",
+      default_branch: "main",
+      engine: "pi",
+      model: null,
+      max_turns: 10,
+      scope: "team-scope",
+      system_prompt_override: null,
+      created_at: now,
+      updated_at: now,
+    });
+    const create = vi.fn().mockResolvedValue(undefined);
+    const workflow: Workflow = {
+      id: "workflow-1",
+      organization_id: "org-1",
+      team_id: "team-1",
+      user_id: null,
+      name: "API workflow",
+      description: null,
+      engine: "pi",
+      model: null,
+      max_turns: 2,
+      max_continuations: null,
+      allowed_tools: null,
+      disallowed_tools: null,
+      allowed_domains: null,
+      mcp_servers: null,
+      permission_mode: null,
+      additional_read_paths: null,
+      additional_write_paths: null,
+      hook_after_create: null,
+      hook_before_remove: null,
+      hook_timeout_ms: 300000,
+      prompt_template: "Use {{ subject.external_id }} {{ context.reason }}",
+      version: 1,
+      status: "published",
+      published_at: now,
+      created_at: now,
+      updated_at: now,
+    };
+    const trigger: Trigger = {
+      id: "trigger-1",
+      workflow_id: "workflow-1",
+      event_type: "api.invoke",
+      to_state: null,
+      from_state: null,
+      label_name: null,
+      comment_match: null,
+      team_filter: null,
+      project_filter: null,
+      label_filter: null,
+      skip_label_filter: null,
+      assignee_filter: null,
+      action: "start_session",
+      action_params: null,
+      priority: 0,
+      enabled: true,
+      created_at: now,
+      updated_at: now,
+    };
+    const event: EventTuple = {
+      event_type: "api.invoke",
+      organization_id: "org-1",
+      team_id: "team-1",
+      labels: [],
+      subject: { kind: "generic", external_id: "nightly", payload: {} },
+      context: { reason: "cron" },
+    };
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const result = await dispatchTrigger(makeEnv(db, create), {
+      workflow,
+      trigger,
+      event,
+      context: { reason: "cron" },
+      source: "api",
+    });
+
+    expect(result.outcome).toBe("start_session");
+    expect(result.agentSessionId).toEqual(expect.any(String));
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledWith({
+      id: result.agentSessionId,
+      params: expect.objectContaining({
+        mode: "trigger",
+        prompt: "Use nightly cron",
+        issueIdentifier: "nightly",
+      }),
+    });
+  });
+
   it("snapshots dispatcher-supported workflow policy fields onto runner params", async () => {
     const now = Math.floor(Date.now() / 1000);
     const db = new FakeD1();

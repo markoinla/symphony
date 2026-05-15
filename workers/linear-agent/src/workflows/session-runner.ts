@@ -994,18 +994,12 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       issueIdentifier,
     } = params;
     const engine = normalizeEngineName(params.engine);
-    // Point the engine at the `linear` skill on every prompt so
-    // headless runs (no synthesized webhook with promptContext) still
-    // pick it up. Idempotent — withLinearGraphqlReference is a no-op
-    // if the marker is already present in the prompt.
-    //
-    // Headless params don't carry the issue UUID today (mode currently
-    // has no caller), so only the human identifier is plumbed through.
-    // When a real trigger path needs Linear writes, extend the params
-    // type to include `issueGraphqlId` and pass it here.
-    const prompt = withLinearGraphqlReference(params.prompt, {
-      issueIdentifier,
-    });
+    // Only Linear subjects get the Linear skill reference. Generic API
+    // invocations must run headlessly with no Linear API side effects.
+    const prompt =
+      params.event.subject?.kind === "linear_issue"
+        ? withLinearGraphqlReference(params.prompt, { issueIdentifier })
+        : params.prompt;
 
     const githubAppInstallationId: number | null = await step.do(
       "trigger-load-github-install",

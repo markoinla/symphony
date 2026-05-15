@@ -1,10 +1,16 @@
 // Event schemas for the workflow trigger system (SYM-295).
 //
-// A `webhook` handler turns a Linear delivery into an `EventTuple` —
-// the normalized shape the resolver matches triggers against. Each
-// event_type carries its own subset of fields (state transitions vs.
-// label changes vs. comments) so the discriminated union below lets
-// callers destructure narrowly.
+// A `webhook` handler turns an inbound delivery into an `EventTuple` —
+// the normalized shape the resolver matches triggers against. Every
+// event carries a `subject` discriminated union so source adapters can
+// land non-Linear references at the boundary without pretending they
+// are Linear issues.
+//
+// V1 ships two subject kinds:
+//   - linear_issue: the existing Linear issue payload, widened with a
+//     `kind` discriminator.
+//   - generic: an external id plus opaque JSON payload for direct API
+//     invocations.
 //
 // The resolver also reads `organization_id`, `team_id`, `user_id`,
 // `project_id`, `labels`, and `assignee_id` from the tuple to evaluate
@@ -13,6 +19,7 @@
 import { z } from "zod";
 
 export const eventTypeSchema = z.enum([
+  "api.invoke",
   "session_started",
   "state_entered",
   "state_exited",
@@ -23,11 +30,12 @@ export const eventTypeSchema = z.enum([
 ]);
 export type EventType = z.infer<typeof eventTypeSchema>;
 
-// Issue payload carried on every event. Mirrors the subset of Linear's
-// GraphQL `Issue` that the resolver + prompt renderer reference. All
-// non-id fields are optional — webhooks sometimes omit them (e.g. an
-// Issue create event won't have a state transition).
-export const issueRefSchema = z.object({
+// Issue payload carried by Linear-originated events. Mirrors the subset
+// of Linear's GraphQL `Issue` that the resolver + prompt renderer
+// reference. All non-id fields are optional — webhooks sometimes omit
+// them (e.g. an Issue create event won't have a state transition).
+export const linearIssueSubjectSchema = z.object({
+  kind: z.literal("linear_issue"),
   id: z.string(),
   identifier: z.string().nullable().optional(),
   title: z.string().nullable().optional(),
@@ -58,6 +66,46 @@ export const issueRefSchema = z.object({
       }),
     )
     .default([]),
+  attachments: z
+    .array(
+      z.object({
+        id: z.string(),
+        title: z.string().nullable().optional(),
+        url: z.string().nullable().optional(),
+      }),
+    )
+    .default([]),
+});
+
+export const genericSubjectSchema = z.object({
+  kind: z.literal("generic"),
+  external_id: z.string(),
+  payload: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const SubjectRefSchema = z.discriminatedUnion("kind", [
+  linearIssueSubjectSchema,
+  genericSubjectSchema,
+]);
+export type SubjectRef = z.infer<typeof SubjectRefSchema>;
+
+// Backward-compatible alias for code/tests that still talk in terms of
+// an IssueRef. The schema accepts the same fields as a linear subject
+// without requiring the discriminator.
+export const issueRefSchema = linearIssueSubjectSchema.omit({
+  kind: true,
+  attachments: true,
+}).extend({
+  kind: z.literal("linear_issue").optional(),
+  attachments: z
+    .array(
+      z.object({
+        id: z.string(),
+        title: z.string().nullable().optional(),
+        url: z.string().nullable().optional(),
+      }),
+    )
+    .optional(),
 });
 export type IssueRef = z.infer<typeof issueRefSchema>;
 
@@ -70,11 +118,21 @@ const scopeFields = {
   user_id: z.string().nullable().optional(),
   assignee_id: z.string().nullable().optional(),
   labels: z.array(z.string()).default([]),
+  subject: SubjectRefSchema.optional(),
+  // Legacy compatibility during the SubjectRef transition. New code
+  // should read `subject`; Linear mappers populate both so existing
+  // renderer/resolver paths remain unchanged.
   issue: issueRefSchema.nullable().optional(),
   actor_id: z.string().nullable().optional(),
 } as const;
 
 // ── Event variants ─────────────────────────────────────────────────
+
+export const apiInvokeEventSchema = z.object({
+  event_type: z.literal("api.invoke"),
+  ...scopeFields,
+  context: z.record(z.string(), z.unknown()).default({}),
+});
 
 export const sessionStartedEventSchema = z.object({
   event_type: z.literal("session_started"),
@@ -128,6 +186,7 @@ export const assigneeChangedEventSchema = z.object({
 // EventTuple — discriminated union by event_type. The resolver,
 // dispatcher, and renderer all consume this shape.
 export const EventTupleSchema = z.discriminatedUnion("event_type", [
+  apiInvokeEventSchema,
   sessionStartedEventSchema,
   stateEnteredEventSchema,
   stateExitedEventSchema,

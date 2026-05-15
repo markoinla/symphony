@@ -117,6 +117,21 @@ export function mapIssueUpdateToEvent(
     ? `${identifier} ${fromStateName} → ${toStateName}`
     : `${identifier} → ${toStateName}`;
 
+  const issue = {
+    id: data.id,
+    identifier: data.identifier ?? null,
+    title: data.title ?? null,
+    description: data.description ?? null,
+    state: toStateName,
+    state_id: newStateId,
+    team_id: data.teamId ?? data.team?.id ?? null,
+    project_id: data.projectId ?? data.project?.id ?? null,
+    assignee_id: data.assigneeId ?? data.assignee?.id ?? null,
+    labels,
+    comments: [],
+    attachments: [],
+  };
+
   const event: EventTuple = {
     event_type: "state_entered",
     organization_id: orgId,
@@ -124,19 +139,8 @@ export function mapIssueUpdateToEvent(
     project_id: data.projectId ?? data.project?.id ?? null,
     assignee_id: data.assigneeId ?? data.assignee?.id ?? null,
     labels,
-    issue: {
-      id: data.id,
-      identifier: data.identifier ?? null,
-      title: data.title ?? null,
-      description: data.description ?? null,
-      state: toStateName,
-      state_id: newStateId,
-      team_id: data.teamId ?? data.team?.id ?? null,
-      project_id: data.projectId ?? data.project?.id ?? null,
-      assignee_id: data.assigneeId ?? data.assignee?.id ?? null,
-      labels,
-      comments: [],
-    },
+    subject: { kind: "linear_issue", ...issue },
+    issue,
     to_state: toStateName,
     from_state: fromStateName,
   };
