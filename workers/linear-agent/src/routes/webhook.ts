@@ -20,6 +20,8 @@ import {
 } from "../lib/store";
 import { resolveWorkflow } from "../lib/workflows/resolver";
 import {
+  normalizeGitHubIssueCommentEvent,
+  normalizeGitHubIssuesEvent,
   normalizeGitHubPullRequestEvent,
   verifyGitHubSignature,
 } from "../lib/github-webhook";
@@ -611,24 +613,16 @@ async function handleGitHubSource(
     return c.json({ error: "invalid_json" }, 400);
   }
 
-  if (eventName !== "pull_request") {
-    await events.update(logId, {
-      dispatchedAction: "ignored_envelope",
-      eventSummary: `GitHub ${eventName} (ignored)`,
-      latencyMs: Date.now() - startedMs,
-    });
-    return c.json({ ok: true, ignored: true });
-  }
-
-  const mapped = normalizeGitHubPullRequestEvent({
-    payload: parsed as never,
+  const mapped = normalizeGitHubSourceEvent({
+    eventName,
+    payload: parsed,
     organizationId: source.organization_id,
     deliveryId,
   });
   if (!mapped) {
     await events.update(logId, {
       dispatchedAction: "ignored_envelope",
-      eventSummary: `GitHub pull_request ${action ?? "unknown"} (no handler)`,
+      eventSummary: `GitHub ${eventName} ${action ?? "unknown"} (no handler)`,
       latencyMs: Date.now() - startedMs,
     });
     return c.json({ ok: true, ignored: true });
@@ -684,6 +678,36 @@ async function handleGitHubSource(
     outcome: dispatched.outcome,
     agent_session_id: dispatched.agentSessionId ?? null,
   });
+}
+
+function normalizeGitHubSourceEvent(args: {
+  eventName: string;
+  payload: unknown;
+  organizationId: string;
+  deliveryId: string | null;
+}) {
+  if (args.eventName === "pull_request") {
+    return normalizeGitHubPullRequestEvent({
+      payload: args.payload as never,
+      organizationId: args.organizationId,
+      deliveryId: args.deliveryId,
+    });
+  }
+  if (args.eventName === "issues") {
+    return normalizeGitHubIssuesEvent({
+      payload: args.payload as never,
+      organizationId: args.organizationId,
+      deliveryId: args.deliveryId,
+    });
+  }
+  if (args.eventName === "issue_comment") {
+    return normalizeGitHubIssueCommentEvent({
+      payload: args.payload as never,
+      organizationId: args.organizationId,
+      deliveryId: args.deliveryId,
+    });
+  }
+  return null;
 }
 
 async function handleIssueEnvelope(

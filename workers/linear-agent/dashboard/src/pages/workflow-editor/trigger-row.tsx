@@ -41,6 +41,10 @@ const eventTypeOptions: { value: EventType; label: string }[] = [
   { value: 'github.pr.merged', label: 'GitHub PR merged' },
   { value: 'github.pr.closed', label: 'GitHub PR closed' },
   { value: 'github.pr.review_requested', label: 'GitHub PR review requested' },
+  { value: 'github.issue.opened', label: 'GitHub issue opened' },
+  { value: 'github.issue.commented', label: 'GitHub issue commented' },
+  { value: 'github.issue.labeled', label: 'GitHub issue labeled' },
+  { value: 'github.issue.closed', label: 'GitHub issue closed' },
 ]
 
 const actionOptions: { value: TriggerAction; label: string }[] = [
@@ -57,7 +61,10 @@ function expectedSubjectKinds(trigger: Trigger): string {
     return trigger.expected_subject_kinds.join(', ')
   }
   if (trigger.event_type.startsWith('github.pr.')) return 'github_pr'
-  return trigger.event_type === 'api.invoke' ? 'linear_issue, generic, github_pr' : 'linear_issue'
+  if (trigger.event_type.startsWith('github.issue.')) return 'github_issue'
+  return trigger.event_type === 'api.invoke'
+    ? 'linear_issue, generic, github_pr, github_issue'
+    : 'linear_issue'
 }
 
 export function TriggerRow({
@@ -76,6 +83,8 @@ export function TriggerRow({
   onSave: () => void
 }) {
   const isGitHubPrEvent = trigger.event_type.startsWith('github.pr.')
+  const isGitHubIssueEvent = trigger.event_type.startsWith('github.issue.')
+  const isGitHubEvent = isGitHubPrEvent || isGitHubIssueEvent
 
   return (
     <div className="rounded-lg border border-th-border bg-th-surface p-4">
@@ -221,7 +230,8 @@ export function TriggerRow({
           </Field>
         )}
 
-        {trigger.event_type === 'comment_added' && (
+        {(trigger.event_type === 'comment_added' ||
+          trigger.event_type === 'github.issue.commented') && (
           <Field
             label="Comment match (regex)"
             hint="Anchored regex, e.g. ^/retry\b"
@@ -243,10 +253,11 @@ export function TriggerRow({
           </p>
         )}
 
-        {isGitHubPrEvent && (
+        {isGitHubEvent && (
           <p className="col-span-full text-xs text-th-text-4">
-            GitHub PR triggers match event kind here; use the GitHub filters
-            below for repo, head branch, base branch, draft status, author, and labels.
+            GitHub triggers match event kind here; use the GitHub filters
+            below for repo, author, labels, and{' '}
+            {isGitHubPrEvent ? 'PR branch/draft status' : 'issue assignees'}.
           </p>
         )}
       </div>
@@ -257,7 +268,7 @@ export function TriggerRow({
           Scope filters (AND)
         </p>
         <div className="grid gap-4 sm:grid-cols-2">
-          {!isGitHubPrEvent && (
+          {!isGitHubEvent && (
             <>
               <Field label="Team filter" hint="Linear team keys, e.g. ENG">
                 <ChipInput
@@ -292,7 +303,7 @@ export function TriggerRow({
               value={trigger.skip_label_filter ?? []}
             />
           </Field>
-          {!isGitHubPrEvent && (
+          {!isGitHubEvent && (
             <Field label="Assignee filter">
               <ChipInput
                 onChange={(assignee_filter) => onChange({ assignee_filter })}
@@ -301,7 +312,7 @@ export function TriggerRow({
               />
             </Field>
           )}
-          {isGitHubPrEvent && (
+          {isGitHubEvent && (
             <>
               <Field label="Repository filter" hint="owner/repo">
                 <ChipInput
@@ -310,20 +321,24 @@ export function TriggerRow({
                   value={trigger.repo_filter ?? []}
                 />
               </Field>
-              <Field label="Head branch filter" hint="PR source branch">
-                <ChipInput
-                  onChange={(branch_filter) => onChange({ branch_filter })}
-                  placeholder="Add head branch…"
-                  value={trigger.branch_filter ?? []}
-                />
-              </Field>
-              <Field label="Base branch filter" hint="PR target branch">
-                <ChipInput
-                  onChange={(base_filter) => onChange({ base_filter })}
-                  placeholder="Add base branch…"
-                  value={trigger.base_filter ?? []}
-                />
-              </Field>
+              {isGitHubPrEvent && (
+                <>
+                  <Field label="Head branch filter" hint="PR source branch">
+                    <ChipInput
+                      onChange={(branch_filter) => onChange({ branch_filter })}
+                      placeholder="Add head branch…"
+                      value={trigger.branch_filter ?? []}
+                    />
+                  </Field>
+                  <Field label="Base branch filter" hint="PR target branch">
+                    <ChipInput
+                      onChange={(base_filter) => onChange({ base_filter })}
+                      placeholder="Add base branch…"
+                      value={trigger.base_filter ?? []}
+                    />
+                  </Field>
+                </>
+              )}
               <Field label="Author filter" hint="GitHub login">
                 <ChipInput
                   onChange={(author_filter) => onChange({ author_filter })}
@@ -331,23 +346,34 @@ export function TriggerRow({
                   value={trigger.author_filter ?? []}
                 />
               </Field>
-              <Field label="Draft filter">
-                <Select
-                  value={trigger.draft_filter == null ? 'any' : trigger.draft_filter ? 'draft' : 'ready'}
-                  onValueChange={(value) =>
-                    onChange({ draft_filter: value === 'any' ? null : value === 'draft' })
-                  }
-                >
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="any">Any</SelectItem>
-                    <SelectItem value="draft">Draft only</SelectItem>
-                    <SelectItem value="ready">Ready for review only</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
+              {isGitHubIssueEvent && (
+                <Field label="Assignee filter" hint="GitHub login">
+                  <ChipInput
+                    onChange={(assignee_filter) => onChange({ assignee_filter })}
+                    placeholder="Add assignee…"
+                    value={trigger.assignee_filter ?? []}
+                  />
+                </Field>
+              )}
+              {isGitHubPrEvent && (
+                <Field label="Draft filter">
+                  <Select
+                    value={trigger.draft_filter == null ? 'any' : trigger.draft_filter ? 'draft' : 'ready'}
+                    onValueChange={(value) =>
+                      onChange({ draft_filter: value === 'any' ? null : value === 'draft' })
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="any">Any</SelectItem>
+                      <SelectItem value="draft">Draft only</SelectItem>
+                      <SelectItem value="ready">Ready for review only</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              )}
             </>
           )}
         </div>
