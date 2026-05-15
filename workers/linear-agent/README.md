@@ -311,3 +311,6 @@ sig    = "1628b1de2425d3d72af853cd72a18a7cdadda178157642d42411d70760b15b46"
 
 is asserted in all three test suites. If any signer drifts the assertion
 breaks loudly.
+
+<!-- test PR marker: 2026-05-15 -->
+
