@@ -327,18 +327,30 @@ DELETE /api/v1/webhook-sources/:id       (write)
 POST   /webhook/source/:id               (public HMAC)
 ```
 
+Sources are typed by `kind`: `github`, `generic`, or `sentry`. All
+kinds expose an `inbound_url` of the form `/webhook/source/:id` and
+return the HMAC secret only on create or explicit
+`rotate_secret: true`; subsequent reads return connection state,
+config, and timestamps.
+
 Generic sources accept HMAC-signed JSON payloads and emit
 `generic.webhook` events. Source config includes
 `external_id_path`, `signature_header`, and `signature_algorithm`
-(`sha256` or `sha1`). The created response returns the secret once.
-Duplicate deliveries with the same `source_id + external_id` within 60s
-are deduped.
+(`sha256` or `sha1`). Duplicate deliveries with the same
+`source_id + external_id` within 60s are deduped.
 
 Trigger match fields for `generic.webhook` include
 `external_id_filter` (regex) and `payload_match` (`{ path, equals }`).
 The raw payload is available to prompts as `context.payload` and
 `subject.payload`; `subject.external_id` contains the extracted id or a
 UUID fallback.
+
+Sentry sources verify the `Sentry-Hook-Signature` header and emit
+`sentry.alert.fired`, `sentry.issue.created`, or `sentry.issue.resolved`
+events with `sentry_event` subjects. Sentry sources may bind a
+`project_id` to scope downstream workflows. Trigger match fields
+include `sentry_project_filter`, `level_filter`, `fingerprint_filter`
+(regex), `environment_filter`, and `release_filter`.
 
 ### 7. Webhook events
 

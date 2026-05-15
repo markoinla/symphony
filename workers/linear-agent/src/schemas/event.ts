@@ -32,6 +32,9 @@ export const eventTypeSchema = z.enum([
   "label_added",
   "label_removed",
   "assignee_changed",
+  "sentry.alert.fired",
+  "sentry.issue.created",
+  "sentry.issue.resolved",
   "github.pr.opened",
   "github.pr.merged",
   "github.pr.closed",
@@ -135,24 +138,53 @@ export const githubPrSubjectSchema = z.object({
   base_branch: z.string().nullable().optional(),
 });
 
-export const sentryEventSubjectSchema = z.object({
-  kind: z.literal("sentry_event"),
-  id: z.string(),
-  external_id: z.string().nullable().optional(),
-  title: z.string().nullable().optional(),
-  message: z.string().nullable().optional(),
-  culprit: z.string().nullable().optional(),
-  project: z.string().nullable().optional(),
-  url: z.string().nullable().optional(),
-  level: z.string().nullable().optional(),
-  payload: z.record(z.string(), z.unknown()).default({}),
-});
-
 export const genericSubjectSchema = z.object({
   kind: z.literal("generic"),
   external_id: z.string(),
   title: z.string().nullable().optional(),
   payload: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const sentryEventSubjectSchema = z.object({
+  kind: z.literal("sentry_event"),
+  // Canonical Sentry adapter fields.
+  project: z.string().optional(),
+  event_id: z.string().optional(),
+  level: z.enum(["fatal", "error", "warning", "info", "debug"]).optional(),
+  fingerprint: z.array(z.string()).optional(),
+  message: z.string().optional(),
+  stacktrace: z
+    .array(
+      z.object({
+        filename: z.string().nullable().optional(),
+        function: z.string().nullable().optional(),
+        lineno: z.number().nullable().optional(),
+        colno: z.number().nullable().optional(),
+        in_app: z.boolean().nullable().optional(),
+        context_line: z.string().nullable().optional(),
+      }),
+    )
+    .optional(),
+  breadcrumbs: z
+    .array(
+      z.object({
+        timestamp: z.string().nullable().optional(),
+        category: z.string().nullable().optional(),
+        level: z.string().nullable().optional(),
+        message: z.string().nullable().optional(),
+        data: z.record(z.string(), z.unknown()).nullable().optional(),
+      }),
+    )
+    .optional(),
+  related_issue_url: z.string().optional(),
+  environment: z.string().nullable().optional(),
+  release: z.string().nullable().optional(),
+  // Legacy fields retained for renderer/preview compatibility — populated
+  // by SDK callers that have not migrated to the canonical shape yet.
+  id: z.string().optional(),
+  title: z.string().nullable().optional(),
+  culprit: z.string().nullable().optional(),
+  payload: z.record(z.string(), z.unknown()).optional(),
 });
 
 export const SubjectRefSchema = z.discriminatedUnion("kind", [
@@ -264,6 +296,33 @@ export const assigneeChangedEventSchema = z.object({
   from_assignee_id: z.string().nullable().optional(),
 });
 
+const sentryMatchFields = {
+  sentry_project: z.string(),
+  sentry_level: z.enum(["fatal", "error", "warning", "info", "debug"]),
+  sentry_fingerprint: z.array(z.string()).default([]),
+  sentry_environment: z.string().nullable().optional(),
+  sentry_release: z.string().nullable().optional(),
+  context: z.record(z.string(), z.unknown()).default({}),
+} as const;
+
+export const sentryAlertFiredEventSchema = z.object({
+  event_type: z.literal("sentry.alert.fired"),
+  ...scopeFields,
+  ...sentryMatchFields,
+});
+
+export const sentryIssueCreatedEventSchema = z.object({
+  event_type: z.literal("sentry.issue.created"),
+  ...scopeFields,
+  ...sentryMatchFields,
+});
+
+export const sentryIssueResolvedEventSchema = z.object({
+  event_type: z.literal("sentry.issue.resolved"),
+  ...scopeFields,
+  ...sentryMatchFields,
+});
+
 const githubPrFields = {
   ...scopeFields,
   repo: z.string(),
@@ -335,6 +394,9 @@ export const EventTupleSchema = z.discriminatedUnion("event_type", [
   labelAddedEventSchema,
   labelRemovedEventSchema,
   assigneeChangedEventSchema,
+  sentryAlertFiredEventSchema,
+  sentryIssueCreatedEventSchema,
+  sentryIssueResolvedEventSchema,
   githubPrOpenedEventSchema,
   githubPrMergedEventSchema,
   githubPrClosedEventSchema,

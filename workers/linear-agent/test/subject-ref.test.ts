@@ -24,6 +24,24 @@ describe("SubjectRefSchema", () => {
     expect(parsed.success).toBe(false);
   });
 
+  it("accepts sentry_event subjects", () => {
+    const parsed = SubjectRefSchema.safeParse({
+      kind: "sentry_event",
+      project: "backend",
+      event_id: "evt-1",
+      level: "error",
+      fingerprint: ["TypeError"],
+      message: "boom",
+      stacktrace: [{ filename: "app.ts", function: "handler", lineno: 1, colno: 2, in_app: true, context_line: "throw err" }],
+      breadcrumbs: [{ timestamp: "now", category: "http", level: "info", message: "GET /", data: { path: "/" } }],
+      related_issue_url: "https://sentry.example/issues/1",
+      environment: "production",
+      release: "abc123",
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
   it("accepts github_issue subjects with canonical issue fields", () => {
     const parsed = SubjectRefSchema.safeParse({
       kind: "github_issue",

@@ -795,17 +795,21 @@ export interface WebhookSourceRecord {
   name: string;
   enabled: number;
   secret: string;
+  project_id: string | null;
   config: string | null;
   created_at: number;
   updated_at: number;
   last_used_at: number | null;
+  // Cached, parsed view of `config.sentry_project` for the Sentry adapter.
+  // Set by hydrateWebhookSource; never persisted.
+  config_project_slug?: string | null;
 }
 
 export class WebhookSourceStore {
   constructor(private readonly db: D1Database) {}
 
   private static readonly COLUMNS =
-    "id, organization_id, kind, name, enabled, secret, config, created_at, updated_at, last_used_at";
+    "id, organization_id, kind, name, enabled, secret, project_id, config, created_at, updated_at, last_used_at";
 
   async list(orgId: string): Promise<WebhookSourceRecord[]> {
     const result = await this.db
@@ -816,7 +820,7 @@ export class WebhookSourceStore {
       )
       .bind(orgId)
       .all<WebhookSourceRecord>();
-    return result.results ?? [];
+    return (result.results ?? []).map(hydrateWebhookSource);
   }
 
   async listByOrg(orgId: string): Promise<WebhookSourceRecord[]> {
@@ -830,14 +834,15 @@ export class WebhookSourceStore {
     secret: string;
     config?: Record<string, unknown> | null;
     enabled?: boolean;
+    projectId?: string | null;
   }): Promise<WebhookSourceRecord | null> {
     const id = crypto.randomUUID();
     const now = Math.floor(Date.now() / 1000);
     await this.db
       .prepare(
         `INSERT INTO webhook_sources
-           (id, organization_id, kind, name, enabled, secret, config, created_at, updated_at, last_used_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+           (id, organization_id, kind, name, enabled, secret, project_id, config, created_at, updated_at, last_used_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
       )
       .bind(
         id,
@@ -846,6 +851,7 @@ export class WebhookSourceStore {
         input.name,
         input.enabled === false ? 0 : 1,
         input.secret,
+        input.projectId ?? null,
         input.config ? JSON.stringify(input.config) : null,
         now,
         now,
@@ -855,19 +861,22 @@ export class WebhookSourceStore {
   }
 
   async getById(id: string, orgId?: string): Promise<WebhookSourceRecord | null> {
+    let row: WebhookSourceRecord | null;
     if (orgId) {
-      return await this.db
+      row = await this.db
         .prepare(
           `SELECT ${WebhookSourceStore.COLUMNS}
            FROM webhook_sources WHERE id = ? AND organization_id = ?`,
         )
         .bind(id, orgId)
         .first<WebhookSourceRecord>();
+    } else {
+      row = await this.db
+        .prepare(`SELECT ${WebhookSourceStore.COLUMNS} FROM webhook_sources WHERE id = ?`)
+        .bind(id)
+        .first<WebhookSourceRecord>();
     }
-    return await this.db
-      .prepare(`SELECT ${WebhookSourceStore.COLUMNS} FROM webhook_sources WHERE id = ?`)
-      .bind(id)
-      .first<WebhookSourceRecord>();
+    return row ? hydrateWebhookSource(row) : null;
   }
 
   async update(
@@ -878,6 +887,7 @@ export class WebhookSourceStore {
       enabled?: boolean;
       config?: Record<string, unknown> | null;
       secret?: string;
+      projectId?: string | null;
     },
   ): Promise<WebhookSourceRecord | null> {
     const sets: string[] = [];
@@ -897,6 +907,10 @@ export class WebhookSourceStore {
     if (fields.secret !== undefined) {
       sets.push("secret = ?");
       values.push(fields.secret);
+    }
+    if (fields.projectId !== undefined) {
+      sets.push("project_id = ?");
+      values.push(fields.projectId);
     }
     if (sets.length === 0) return await this.getById(id, orgId);
     sets.push("updated_at = ?");
@@ -1176,6 +1190,17 @@ export class WebhookEventStore {
       .all<WebhookEventRecord>();
     return result.results;
   }
+}
+
+function hydrateWebhookSource(row: WebhookSourceRecord): WebhookSourceRecord {
+  let configProjectSlug: string | null = null;
+  if (row.config) {
+    try {
+      const parsed = JSON.parse(row.config) as Record<string, unknown>;
+      configProjectSlug = typeof parsed.sentry_project === "string" ? parsed.sentry_project : null;
+    } catch {}
+  }
+  return { ...row, config_project_slug: configProjectSlug };
 }
 
 // ── settings ────────────────────────────────────────────────────────

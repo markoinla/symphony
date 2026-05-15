@@ -83,6 +83,7 @@ describe("POST /webhook/source/:id", () => {
       kind: "generic",
       enabled: 1,
       secret: "source-secret",
+      project_id: null,
       config: JSON.stringify({
         external_id_path: "$.event.id",
         signature_header: "X-Webhook-Signature",

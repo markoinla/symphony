@@ -221,6 +221,7 @@ function seedGitHubTriggerDb(eventType: string, commentMatch?: string): Resolver
     name: "GitHub",
     enabled: 1,
     secret: "github-secret",
+    project_id: null,
     config: null,
     created_at: now,
     updated_at: now,

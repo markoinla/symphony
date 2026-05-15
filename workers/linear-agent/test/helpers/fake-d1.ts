@@ -80,6 +80,7 @@ export interface WebhookSourceRow {
   name: string;
   enabled: number;
   secret: string;
+  project_id: string | null;
   config: string | null;
   created_at: number;
   updated_at: number;
@@ -506,6 +507,7 @@ class FakeStatement {
         name,
         enabled,
         secret,
+        projectId,
         config,
         createdAt,
         updatedAt,
@@ -517,6 +519,7 @@ class FakeStatement {
         number,
         string,
         string | null,
+        string | null,
         number,
         number,
       ];
@@ -527,6 +530,7 @@ class FakeStatement {
         name,
         enabled,
         secret,
+        project_id: projectId,
         config,
         created_at: createdAt,
         updated_at: updatedAt,
@@ -536,65 +540,34 @@ class FakeStatement {
     }
     if (/^UPDATE webhook_sources SET/i.test(sql)) {
       const values = this.bindings.slice();
-      const orgId = values.pop() as string;
-      const id = values.pop() as string;
-      const row = this.db.webhookSources.get(id);
-      if (!row || row.organization_id !== orgId) return { success: true, meta: { changes: 0 } };
-      const setClause = sql.replace(/^UPDATE webhook_sources SET\s*/i, "").replace(/\s*WHERE.*$/i, "");
-      for (const assign of setClause.split(",").map((c) => c.trim())) {
-        const [colRaw] = assign.split("=");
-        const col = colRaw?.trim();
-        const value = values.shift();
-        if (col === "name") row.name = value as string;
-        if (col === "config") row.config = (value ?? null) as string | null;
-        if (col === "secret") row.secret = value as string;
-        if (col === "updated_at") row.updated_at = value as number;
-      }
-      return { success: true, meta: { changes: 1 } };
-    }
-    if (/^DELETE FROM webhook_sources/i.test(sql)) {
-      const [id, orgId] = this.bindings as [string, string];
-      const row = this.db.webhookSources.get(id);
-      const removed = !!row && row.organization_id === orgId && this.db.webhookSources.delete(id);
-      return { success: true, meta: { changes: removed ? 1 : 0 } };
-    }
-
-    // ── webhook_events ──────────────────────────────────────────
-    if (/^INSERT INTO webhook_sources/i.test(sql)) {
-      const [id, organizationId, name, enabled, secret, config, createdAt, updatedAt] =
-        this.bindings as [string, string, string, number, string, string, number, number];
-      this.db.webhookSources.set(id, {
-        id,
-        organization_id: organizationId,
-        name,
-        kind: "generic",
-        enabled,
-        secret,
-        config,
-        created_at: createdAt,
-        updated_at: updatedAt,
-        last_used_at: null,
-      });
-      return { success: true, meta: { changes: 1 } };
-    }
-    if (/^UPDATE webhook_sources SET/i.test(sql)) {
-      const values = this.bindings.slice();
-      const id = values[values.length - (sql.includes("organization_id") ? 2 : 1)] as string;
-      const row = this.db.webhookSources.get(id);
-      if (!row) return { success: true, meta: { changes: 0 } };
       const setClause = sql
         .replace(/^UPDATE webhook_sources SET\s*/i, "")
         .replace(/\s*WHERE.*$/i, "");
       const assignments = setClause.split(",").map((c) => c.trim());
+
+      // Trailing WHERE bindings: WHERE id = ? AND organization_id = ? (2)
+      // or WHERE id = ? (1). Detect from SQL.
+      const hasOrgWhere = /WHERE id = \? AND organization_id = \?/i.test(sql);
+      const trailingBindings = hasOrgWhere ? 2 : 1;
+      const setValues = values.slice(0, values.length - trailingBindings);
+      const whereValues = values.slice(values.length - trailingBindings);
+      const id = whereValues[0] as string;
+      const orgId = (whereValues[1] ?? null) as string | null;
+      const row = this.db.webhookSources.get(id);
+      if (!row || (orgId !== null && row.organization_id !== orgId)) {
+        return { success: true, meta: { changes: 0 } };
+      }
       for (const assign of assignments) {
         const [colRaw] = assign.split("=");
         const col = colRaw?.trim();
-        const value = values.shift();
+        const value = setValues.shift();
         if (col === "name") row.name = value as string;
         if (col === "enabled") row.enabled = value as number;
-        if (col === "config") row.config = value as string;
+        if (col === "project_id") row.project_id = (value ?? null) as string | null;
+        if (col === "config") row.config = (value ?? null) as string | null;
+        if (col === "secret") row.secret = value as string;
         if (col === "updated_at") row.updated_at = value as number;
-        if (col === "last_used_at") row.last_used_at = value as number;
+        if (col === "last_used_at") row.last_used_at = (value ?? null) as number | null;
       }
       return { success: true, meta: { changes: 1 } };
     }

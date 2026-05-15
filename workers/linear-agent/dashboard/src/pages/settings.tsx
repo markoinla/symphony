@@ -39,6 +39,7 @@ import {
   listApiTokens,
   proxyPing,
   revokeOAuth,
+  updateWebhookSource,
   upsertSetting,
 } from '../lib/api'
 import { formatQueryError, isPositiveInteger } from '../lib/helpers'
@@ -217,6 +218,7 @@ export function SettingsView() {
             <LinearApiKeySection />
             <LinearOAuthSection />
             <GitHubOAuthSection />
+            <SentryWebhookSection />
             <GenericWebhookSection />
             <ProxySection />
             <DomainSection />
@@ -536,6 +538,94 @@ function GitHubOAuthSection() {
             </div>
           </div>
         </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function SentryWebhookSection() {
+  const queryClient = useQueryClient()
+  const sourcesQuery = useQuery({ queryKey: ['webhook-sources'], queryFn: listWebhookSources })
+  const source = sourcesQuery.data?.webhook_sources.find((s) => s.kind === 'sentry')
+  const [createdSecret, setCreatedSecret] = useState<string | null>(null)
+
+  const createMutation = useMutation({
+    mutationFn: () => createWebhookSource({ kind: 'sentry', name: 'Sentry', enabled: true }),
+    onSuccess: async ({ webhook_source }) => {
+      setCreatedSecret(webhook_source.secret ?? null)
+      await queryClient.invalidateQueries({ queryKey: ['webhook-sources'] })
+      toast.success('Sentry webhook source created. Copy the secret now.')
+    },
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
+  })
+
+  const rotateMutation = useMutation({
+    mutationFn: (id: string) => updateWebhookSource(id, { rotate_secret: true }),
+    onSuccess: async ({ webhook_source }) => {
+      setCreatedSecret(webhook_source.secret ?? null)
+      await queryClient.invalidateQueries({ queryKey: ['webhook-sources'] })
+      toast.success('Sentry HMAC secret rotated. Copy the new secret now.')
+    },
+    onError: (error: unknown) => toast.error(formatQueryError(error)),
+  })
+
+  const copy = async (value: string, label: string) => {
+    await navigator.clipboard.writeText(value)
+    toast.success(`${label} copied.`)
+  }
+
+  const inboundUrl = source?.inbound_url
+  const secret = createdSecret ?? source?.secret ?? null
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Radio className="h-4 w-4 text-th-text-3" />
+          <CardTitle>Sentry</CardTitle>
+          {source ? <Badge variant={source.enabled ? 'running' : 'secondary'}>{source.enabled ? 'Connected' : 'Disabled'}</Badge> : <Badge variant="secondary">Not connected</Badge>}
+        </div>
+        <CardDescription>
+          Create an inbound URL and HMAC secret for a Sentry internal integration. Paste these values into Sentry's webhook URL and secret fields.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {!source ? (
+          <Button disabled={createMutation.isPending} onClick={() => void createMutation.mutateAsync()} type="button">
+            {createMutation.isPending ? 'Creating…' : 'Connect Sentry'}
+          </Button>
+        ) : (
+          <div className="space-y-3 rounded-lg border border-th-border bg-th-inset p-4">
+            <div>
+              <div className="text-xs font-medium uppercase tracking-wider text-th-text-4">Inbound URL</div>
+              <div className="mt-1 flex items-center gap-2">
+                <code className="min-w-0 flex-1 break-all rounded bg-th-surface px-2 py-1 text-xs text-th-text-2">{inboundUrl}</code>
+                <Button onClick={() => inboundUrl && void copy(inboundUrl, 'Inbound URL')} size="sm" type="button" variant="outline"><Copy className="h-3 w-3" />Copy</Button>
+              </div>
+            </div>
+            <div>
+              <div className="text-xs font-medium uppercase tracking-wider text-th-text-4">HMAC secret</div>
+              {secret ? (
+                <div className="mt-1 flex items-center gap-2">
+                  <code className="min-w-0 flex-1 break-all rounded bg-th-surface px-2 py-1 text-xs text-th-text-2">{secret}</code>
+                  <Button onClick={() => void copy(secret, 'HMAC secret')} size="sm" type="button" variant="outline"><Copy className="h-3 w-3" />Copy once</Button>
+                </div>
+              ) : (
+                <div className="mt-1 flex items-center justify-between gap-3 text-sm text-th-text-3">
+                  <span>The secret was shown only when created. Rotate it if you need a new copy.</span>
+                  <Button disabled={rotateMutation.isPending} onClick={() => void rotateMutation.mutateAsync(source.id)} size="sm" type="button" variant="outline">
+                    <RotateCcw className="h-3 w-3" />Rotate secret
+                  </Button>
+                </div>
+              )}
+            </div>
+            <ol className="list-decimal space-y-1 pl-4 text-xs text-th-text-3">
+              <li>In Sentry, create or edit an Internal Integration for your organization.</li>
+              <li>Enable webhooks for Issue and Event Alert events.</li>
+              <li>Paste the inbound URL and HMAC secret, then save the integration.</li>
+            </ol>
+          </div>
+        )}
       </CardContent>
     </Card>
   )

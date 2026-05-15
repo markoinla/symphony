@@ -771,7 +771,7 @@ export type Integrations = {
   github_app_settings_url: string | null
 }
 
-export type WebhookSourceKind = 'github' | 'generic'
+export type WebhookSourceKind = 'github' | 'generic' | 'sentry'
 
 export type WebhookSourceGenericConfig = {
   external_id_path: string
@@ -785,6 +785,7 @@ export type WebhookSource = {
   kind: WebhookSourceKind
   name: string
   enabled: boolean
+  project_id?: string | null
   config: Record<string, unknown> & Partial<WebhookSourceGenericConfig>
   inbound_url: string
   webhook_url: string
@@ -802,12 +803,32 @@ export function createWebhookSource(input: {
   kind: WebhookSourceKind
   name: string
   enabled?: boolean
+  project_id?: string | null
   config?: Record<string, unknown>
 }): Promise<{ webhook_source: WebhookSource }> {
   return requestJson<{ webhook_source: WebhookSource }>('/api/v1/webhook-sources', {
     method: 'POST',
     body: JSON.stringify(input),
   })
+}
+
+export function updateWebhookSource(
+  id: string,
+  body: Partial<{
+    name: string
+    enabled: boolean
+    project_id: string | null
+    config: Record<string, unknown>
+    rotate_secret: boolean
+  }>,
+): Promise<{ webhook_source: WebhookSource }> {
+  return requestJson<{ webhook_source: WebhookSource }>(
+    `/api/v1/webhook-sources/${encodeURIComponent(id)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    },
+  )
 }
 
 export function getIntegrations(): Promise<Integrations> {

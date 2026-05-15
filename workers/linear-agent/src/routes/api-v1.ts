@@ -119,6 +119,11 @@ interface TriggerRow {
   base_filter: string | null;
   draft_filter: number | null;
   author_filter: string | null;
+  sentry_project_filter: string | null;
+  level_filter: string | null;
+  fingerprint_filter: string | null;
+  environment_filter: string | null;
+  release_filter: string | null;
   action: string;
   action_params: string | null;
   priority: number;
@@ -131,7 +136,7 @@ const WORKFLOW_COLS =
   "id, organization_id, team_id, user_id, name, description, engine, model, max_turns, max_continuations, allowed_tools, disallowed_tools, allowed_domains, mcp_servers, permission_mode, additional_read_paths, additional_write_paths, hook_after_create, hook_before_remove, hook_timeout_ms, prompt_template, version, status, published_at, created_at, updated_at";
 
 const TRIGGER_COLS =
-  "id, workflow_id, event_type, to_state, from_state, label_name, comment_match, external_id_filter, payload_match, team_filter, project_filter, label_filter, skip_label_filter, assignee_filter, repo_filter, branch_filter, base_filter, draft_filter, author_filter, action, action_params, priority, enabled, created_at, updated_at";
+  "id, workflow_id, event_type, to_state, from_state, label_name, comment_match, external_id_filter, payload_match, team_filter, project_filter, label_filter, skip_label_filter, assignee_filter, repo_filter, branch_filter, base_filter, draft_filter, author_filter, sentry_project_filter, level_filter, fingerprint_filter, environment_filter, release_filter, action, action_params, priority, enabled, created_at, updated_at";
 
 function nowSec(): number {
   return Math.floor(Date.now() / 1000);
@@ -218,19 +223,26 @@ function serializeTrigger(row: TriggerRow): Record<string, unknown> {
     base_filter: asJsonArray(row.base_filter),
     draft_filter: row.draft_filter == null ? null : row.draft_filter !== 0,
     author_filter: asJsonArray(row.author_filter),
+    sentry_project_filter: asJsonArray(row.sentry_project_filter),
+    level_filter: asJsonArray(row.level_filter),
+    fingerprint_filter: row.fingerprint_filter,
+    environment_filter: asJsonArray(row.environment_filter),
+    release_filter: asJsonArray(row.release_filter),
     action: row.action,
     action_params: asJsonObject(row.action_params),
     priority: row.priority,
     enabled: row.enabled !== 0,
-    expected_subject_kinds: row.event_type.startsWith("github.pr.")
-      ? ["github_pr"]
-      : row.event_type.startsWith("github.issue.")
-        ? ["github_issue"]
-        : row.event_type === "generic.webhook"
-          ? ["generic"]
-          : row.event_type === "api.invoke"
-            ? ["linear_issue", "generic", "github_pr", "github_issue"]
-            : ["linear_issue"],
+    expected_subject_kinds: row.event_type.startsWith("sentry.")
+      ? ["sentry_event"]
+      : row.event_type.startsWith("github.pr.")
+        ? ["github_pr"]
+        : row.event_type.startsWith("github.issue.")
+          ? ["github_issue"]
+          : row.event_type === "generic.webhook"
+            ? ["generic"]
+            : row.event_type === "api.invoke"
+              ? ["linear_issue", "generic", "github_pr", "github_issue", "sentry_event"]
+              : ["linear_issue"],
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -273,14 +285,6 @@ function parseIntOr(raw: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-function generateWebhookSecret(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  let binary = "";
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return `whsec_${btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
-}
-
 function parseJsonRecord(raw: string | null): Record<string, unknown> | null {
   if (!raw) return null;
   try {
@@ -310,6 +314,7 @@ function serializeWebhookSource(
     kind: row.kind,
     name: row.name,
     enabled: row.enabled !== 0,
+    project_id: row.project_id ?? null,
     config,
     inbound_url: path,
     webhook_url: `${baseUrl}${path}`,
@@ -324,7 +329,21 @@ function previewSubjectId(subject: SubjectRef, fallback?: string): string {
   if (fallback) return fallback;
   if (subject.kind === "generic") return subject.external_id;
   if (subject.kind === "linear_issue") return subject.id;
-  return subject.external_id ?? subject.id;
+  if (subject.kind === "sentry_event") return subject.event_id ?? subject.id ?? "preview";
+  if (subject.kind === "github_pr" || subject.kind === "github_issue") {
+    return `${subject.repo}#${subject.number}`;
+  }
+  return "preview";
+}
+
+function previewSubjectTitle(subject: SubjectRef): string {
+  if (subject.kind === "linear_issue") return subject.title ?? "Preview subject";
+  if (subject.kind === "generic") return subject.title ?? "Preview subject";
+  if (subject.kind === "sentry_event") return subject.message ?? subject.title ?? "Preview subject";
+  if (subject.kind === "github_pr" || subject.kind === "github_issue") {
+    return subject.title;
+  }
+  return "Preview subject";
 }
 
 function serializeWebhookEvent(
@@ -398,16 +417,6 @@ export function buildApiV1Router() {
   app.use("/api/v1/webhook-sources/*", rwScopes);
   app.use("/api/v1/webhook-events", rwScopes);
   app.use("/api/v1/webhook-events/*", rwScopes);
-  app.use("/api/v1/webhook-sources", async (c, next) => {
-    const denied = requireScope(c, "write");
-    if (denied) return denied;
-    await next();
-  });
-  app.use("/api/v1/webhook-sources/*", async (c, next) => {
-    const denied = requireScope(c, "write");
-    if (denied) return denied;
-    await next();
-  });
   app.use("/api/v1/projects", rwScopes);
   app.use("/api/v1/projects/*", rwScopes);
   app.use("/api/v1/settings", rwScopes);
@@ -816,7 +825,7 @@ export function buildApiV1Router() {
         : {
             id: previewId,
             identifier: previewId,
-            title: subject.title ?? "Preview subject",
+            title: previewSubjectTitle(subject),
             description: "",
             labels: [],
             comments: [],
@@ -881,9 +890,10 @@ export function buildApiV1Router() {
          to_state, from_state, label_name, comment_match, external_id_filter, payload_match,
          team_filter, project_filter, label_filter, skip_label_filter, assignee_filter,
          repo_filter, branch_filter, base_filter, draft_filter, author_filter,
+         sentry_project_filter, level_filter, fingerprint_filter, environment_filter, release_filter,
          action, action_params, priority, enabled, created_at, updated_at
        ) VALUES (
-         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
        )`,
     )
       .bind(
@@ -906,6 +916,11 @@ export function buildApiV1Router() {
         jsonOrNull(t.base_filter),
         t.draft_filter == null ? null : t.draft_filter ? 1 : 0,
         jsonOrNull(t.author_filter),
+        jsonOrNull(t.sentry_project_filter),
+        jsonOrNull(t.level_filter),
+        t.fingerprint_filter ?? null,
+        jsonOrNull(t.environment_filter),
+        jsonOrNull(t.release_filter),
         t.action,
         jsonOrNull(t.action_params),
         t.priority,
@@ -1096,6 +1111,16 @@ export function buildApiV1Router() {
       set("draft_filter", t.draft_filter == null ? null : t.draft_filter ? 1 : 0);
     if (t.author_filter !== undefined)
       set("author_filter", jsonOrNull(t.author_filter));
+    if (t.sentry_project_filter !== undefined)
+      set("sentry_project_filter", jsonOrNull(t.sentry_project_filter));
+    if (t.level_filter !== undefined)
+      set("level_filter", jsonOrNull(t.level_filter));
+    if (t.fingerprint_filter !== undefined)
+      set("fingerprint_filter", t.fingerprint_filter ?? null);
+    if (t.environment_filter !== undefined)
+      set("environment_filter", jsonOrNull(t.environment_filter));
+    if (t.release_filter !== undefined)
+      set("release_filter", jsonOrNull(t.release_filter));
     if (t.action_params !== undefined)
       set("action_params", jsonOrNull(t.action_params));
 
@@ -1145,6 +1170,10 @@ export function buildApiV1Router() {
       return respondError(c, "validation_failed", undefined, parsed.error.issues);
     }
     const input = parsed.data;
+    if (input.project_id) {
+      const project = await new ProjectStore(c.env.DB).getById(input.project_id, auth.orgId);
+      if (!project) return respondError(c, "validation_failed", "Unknown project_id.");
+    }
     const normalizedConfig =
       input.kind === "generic"
         ? WebhookSourceConfigSchema.parse(input.config ?? {})
@@ -1154,6 +1183,7 @@ export function buildApiV1Router() {
       kind: input.kind,
       name: input.name,
       enabled: input.enabled,
+      projectId: input.project_id ?? null,
       secret: generateWebhookSecret(),
       config: normalizedConfig,
     });
@@ -1181,6 +1211,10 @@ export function buildApiV1Router() {
     const existing = await new WebhookSourceStore(c.env.DB).getById(c.req.param("id"), auth.orgId);
     if (!existing) return respondError(c, "not_found");
     const input = parsed.data;
+    if (input.project_id) {
+      const project = await new ProjectStore(c.env.DB).getById(input.project_id, auth.orgId);
+      if (!project) return respondError(c, "validation_failed", "Unknown project_id.");
+    }
     let nextConfig: Record<string, unknown> | null | undefined = input.config;
     if (input.config !== undefined && existing.kind === "generic") {
       const currentConfig = parseWebhookSourceConfig(existing.config);
@@ -1195,6 +1229,7 @@ export function buildApiV1Router() {
       {
         name: input.name,
         enabled: input.enabled,
+        projectId: input.project_id,
         config: nextConfig,
         secret: input.rotate_secret ? generateWebhookSecret() : undefined,
       },
@@ -1607,14 +1642,19 @@ function parseScopes(raw: string | null): string[] {
 // 32 random bytes → 43-char base64url (no padding), prefixed with
 // `tok_` so leaked tokens are easy to grep for in logs and source.
 function generateTokenPlaintext(): string {
-  const bytes = new Uint8Array(32);
+  return "tok_" + randomBase64Url(32);
+}
+
+function generateWebhookSecret(): string {
+  return "whsec_" + randomBase64Url(32);
+}
+
+function randomBase64Url(byteLength: number): string {
+  const bytes = new Uint8Array(byteLength);
   crypto.getRandomValues(bytes);
   let bin = "";
   for (const b of bytes) bin += String.fromCharCode(b);
-  return (
-    "tok_" +
-    btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")
-  );
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 // ────────────────────────────────────────────────────────────────────

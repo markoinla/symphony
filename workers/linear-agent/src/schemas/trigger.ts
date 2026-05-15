@@ -36,6 +36,14 @@ const triggerFilterShapes = {
   base_filter: z.array(z.string()).nullable().optional(),
   draft_filter: z.boolean().nullable().optional(),
   author_filter: z.array(z.string()).nullable().optional(),
+  sentry_project_filter: z.array(z.string()).nullable().optional(),
+  level_filter: z
+    .array(z.enum(["fatal", "error", "warning", "info", "debug"]))
+    .nullable()
+    .optional(),
+  fingerprint_filter: z.string().nullable().optional(),
+  environment_filter: z.array(z.string()).nullable().optional(),
+  release_filter: z.array(z.string()).nullable().optional(),
 } as const;
 
 // Full trigger row — what the resolver returns and what the API
@@ -61,7 +69,15 @@ export const TriggerSchema = z.object({
   priority: z.number().int(),
   enabled: z.boolean(),
   expected_subject_kinds: z
-    .array(z.enum(["linear_issue", "generic", "github_pr", "github_issue"]))
+    .array(
+      z.enum([
+        "linear_issue",
+        "generic",
+        "github_pr",
+        "github_issue",
+        "sentry_event",
+      ]),
+    )
     .nullable()
     .optional(),
 
