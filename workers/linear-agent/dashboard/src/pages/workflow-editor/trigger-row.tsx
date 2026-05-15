@@ -38,6 +38,14 @@ const eventTypeOptions: { value: EventType; label: string }[] = [
   { value: 'label_removed', label: 'Label removed' },
   { value: 'assignee_changed', label: 'Assignee changed' },
   { value: 'session_started', label: 'Session started' },
+  { value: 'github.pr.opened', label: 'GitHub PR opened' },
+  { value: 'github.pr.merged', label: 'GitHub PR merged' },
+  { value: 'github.pr.closed', label: 'GitHub PR closed' },
+  { value: 'github.pr.review_requested', label: 'GitHub PR review requested' },
+  { value: 'github.issue.opened', label: 'GitHub issue opened' },
+  { value: 'github.issue.commented', label: 'GitHub issue commented' },
+  { value: 'github.issue.labeled', label: 'GitHub issue labeled' },
+  { value: 'github.issue.closed', label: 'GitHub issue closed' },
 ]
 
 const actionOptions: { value: TriggerAction; label: string }[] = [
@@ -53,8 +61,11 @@ function expectedSubjectKinds(trigger: Trigger): string {
   if (trigger.expected_subject_kinds?.length) {
     return trigger.expected_subject_kinds.join(', ')
   }
-  if (trigger.event_type === 'api.invoke') return 'linear_issue, generic'
+  if (trigger.event_type.startsWith('github.pr.')) return 'github_pr'
+  if (trigger.event_type.startsWith('github.issue.')) return 'github_issue'
   if (trigger.event_type === 'generic.webhook') return 'generic'
+  if (trigger.event_type === 'api.invoke')
+    return 'linear_issue, generic, github_pr, github_issue'
   return 'linear_issue'
 }
 
@@ -73,6 +84,10 @@ export function TriggerRow({
   isSaving: boolean
   onSave: () => void
 }) {
+  const isGitHubPrEvent = trigger.event_type.startsWith('github.pr.')
+  const isGitHubIssueEvent = trigger.event_type.startsWith('github.issue.')
+  const isGitHubEvent = isGitHubPrEvent || isGitHubIssueEvent
+
   return (
     <div className="rounded-lg border border-th-border bg-th-surface p-4">
       <div className="grid gap-4 sm:grid-cols-[1fr_1fr_auto]">
@@ -91,6 +106,11 @@ export function TriggerRow({
                 comment_match: null,
                 external_id_filter: null,
                 payload_match: null,
+                repo_filter: null,
+                branch_filter: null,
+                base_filter: null,
+                draft_filter: null,
+                author_filter: null,
               })
             }
           >
@@ -214,7 +234,8 @@ export function TriggerRow({
           </Field>
         )}
 
-        {trigger.event_type === 'comment_added' && (
+        {(trigger.event_type === 'comment_added' ||
+          trigger.event_type === 'github.issue.commented') && (
           <Field
             label="Comment match (regex)"
             hint="Anchored regex, e.g. ^/retry\b"
@@ -267,6 +288,14 @@ export function TriggerRow({
             below to scope to specific users.
           </p>
         )}
+
+        {isGitHubEvent && (
+          <p className="col-span-full text-xs text-th-text-4">
+            GitHub triggers match event kind here; use the GitHub filters
+            below for repo, author, labels, and{' '}
+            {isGitHubPrEvent ? 'PR branch/draft status' : 'issue assignees'}.
+          </p>
+        )}
       </div>
 
       {/* Scope filters */}
@@ -275,20 +304,24 @@ export function TriggerRow({
           Scope filters (AND)
         </p>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Team filter" hint="Linear team keys, e.g. ENG">
-            <ChipInput
-              onChange={(team_filter) => onChange({ team_filter })}
-              placeholder="Add team…"
-              value={trigger.team_filter ?? []}
-            />
-          </Field>
-          <Field label="Project filter" hint="Linear project ids or slugs">
-            <ChipInput
-              onChange={(project_filter) => onChange({ project_filter })}
-              placeholder="Add project…"
-              value={trigger.project_filter ?? []}
-            />
-          </Field>
+          {!isGitHubEvent && (
+            <>
+              <Field label="Team filter" hint="Linear team keys, e.g. ENG">
+                <ChipInput
+                  onChange={(team_filter) => onChange({ team_filter })}
+                  placeholder="Add team…"
+                  value={trigger.team_filter ?? []}
+                />
+              </Field>
+              <Field label="Project filter" hint="Linear project ids or slugs">
+                <ChipInput
+                  onChange={(project_filter) => onChange({ project_filter })}
+                  placeholder="Add project…"
+                  value={trigger.project_filter ?? []}
+                />
+              </Field>
+            </>
+          )}
           <Field
             label="Label filter"
             hint="Only fire when these labels present"
@@ -306,13 +339,79 @@ export function TriggerRow({
               value={trigger.skip_label_filter ?? []}
             />
           </Field>
-          <Field label="Assignee filter">
-            <ChipInput
-              onChange={(assignee_filter) => onChange({ assignee_filter })}
-              placeholder="Add assignee…"
-              value={trigger.assignee_filter ?? []}
-            />
-          </Field>
+          {!isGitHubEvent && (
+            <Field label="Assignee filter">
+              <ChipInput
+                onChange={(assignee_filter) => onChange({ assignee_filter })}
+                placeholder="Add assignee…"
+                value={trigger.assignee_filter ?? []}
+              />
+            </Field>
+          )}
+          {isGitHubEvent && (
+            <>
+              <Field label="Repository filter" hint="owner/repo">
+                <ChipInput
+                  onChange={(repo_filter) => onChange({ repo_filter })}
+                  placeholder="Add repo…"
+                  value={trigger.repo_filter ?? []}
+                />
+              </Field>
+              {isGitHubPrEvent && (
+                <>
+                  <Field label="Head branch filter" hint="PR source branch">
+                    <ChipInput
+                      onChange={(branch_filter) => onChange({ branch_filter })}
+                      placeholder="Add head branch…"
+                      value={trigger.branch_filter ?? []}
+                    />
+                  </Field>
+                  <Field label="Base branch filter" hint="PR target branch">
+                    <ChipInput
+                      onChange={(base_filter) => onChange({ base_filter })}
+                      placeholder="Add base branch…"
+                      value={trigger.base_filter ?? []}
+                    />
+                  </Field>
+                </>
+              )}
+              <Field label="Author filter" hint="GitHub login">
+                <ChipInput
+                  onChange={(author_filter) => onChange({ author_filter })}
+                  placeholder="Add author…"
+                  value={trigger.author_filter ?? []}
+                />
+              </Field>
+              {isGitHubIssueEvent && (
+                <Field label="Assignee filter" hint="GitHub login">
+                  <ChipInput
+                    onChange={(assignee_filter) => onChange({ assignee_filter })}
+                    placeholder="Add assignee…"
+                    value={trigger.assignee_filter ?? []}
+                  />
+                </Field>
+              )}
+              {isGitHubPrEvent && (
+                <Field label="Draft filter">
+                  <Select
+                    value={trigger.draft_filter == null ? 'any' : trigger.draft_filter ? 'draft' : 'ready'}
+                    onValueChange={(value) =>
+                      onChange({ draft_filter: value === 'any' ? null : value === 'draft' })
+                    }
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="any">Any</SelectItem>
+                      <SelectItem value="draft">Draft only</SelectItem>
+                      <SelectItem value="ready">Ready for review only</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+              )}
+            </>
+          )}
         </div>
       </div>
 

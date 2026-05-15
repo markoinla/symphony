@@ -642,6 +642,7 @@ export type WebhookEvent = {
   id: string
   received_at: number
   organization_id: string | null
+  source_id: string | null
   webhook_id: string | null
   envelope_type: string
   envelope_action: string | null
@@ -662,6 +663,7 @@ export type WebhookListParams = {
   limit?: number
   envelope?: string
   dispatchedAction?: string
+  sourceId?: string
 }
 
 export async function getWebhooks(
@@ -672,6 +674,7 @@ export async function getWebhooks(
   if (params?.envelope) qs.set('envelope', params.envelope)
   if (params?.dispatchedAction)
     qs.set('dispatched_action', params.dispatchedAction)
+  if (params?.sourceId) qs.set('source_id', params.sourceId)
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
   return requestJson<{ webhooks: WebhookEvent[] }>(`/api/v1/webhooks${suffix}`)
 }
@@ -680,42 +683,6 @@ export async function getWebhook(id: string): Promise<{ webhook: WebhookEvent }>
   return requestJson<{ webhook: WebhookEvent }>(`/api/v1/webhooks/${id}`)
 }
 
-export type WebhookSource = {
-  id: string
-  organization_id: string
-  name: string
-  kind: 'generic'
-  enabled: boolean
-  config: {
-    external_id_path: string
-    signature_header: string
-    signature_algorithm: 'sha1' | 'sha256'
-  }
-  webhook_url: string
-  secret?: string
-  created_at: number
-  updated_at: number
-  last_used_at: number | null
-}
-
-export type WebhookSourceCreateBody = {
-  name: string
-  enabled?: boolean
-  config?: Partial<WebhookSource['config']>
-}
-
-export function getWebhookSources(): Promise<{ sources: WebhookSource[] }> {
-  return requestJson<{ sources: WebhookSource[] }>('/api/v1/webhook-sources')
-}
-
-export function createWebhookSource(
-  body: WebhookSourceCreateBody,
-): Promise<{ source: WebhookSource }> {
-  return requestJson<{ source: WebhookSource }>('/api/v1/webhook-sources', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  })
-}
 
 // ── Settings ────────────────────────────────────────────────────────
 
@@ -802,6 +769,45 @@ export type Integrations = {
   openai: { configured: boolean }
   cf_workers_ai: { configured: boolean }
   github_app_settings_url: string | null
+}
+
+export type WebhookSourceKind = 'github' | 'generic'
+
+export type WebhookSourceGenericConfig = {
+  external_id_path: string
+  signature_header: string
+  signature_algorithm: 'sha1' | 'sha256'
+}
+
+export type WebhookSource = {
+  id: string
+  organization_id: string
+  kind: WebhookSourceKind
+  name: string
+  enabled: boolean
+  config: Record<string, unknown> & Partial<WebhookSourceGenericConfig>
+  inbound_url: string
+  webhook_url: string
+  secret?: string
+  created_at: number
+  updated_at: number
+  last_used_at: number | null
+}
+
+export function listWebhookSources(): Promise<{ webhook_sources: WebhookSource[] }> {
+  return requestJson<{ webhook_sources: WebhookSource[] }>('/api/v1/webhook-sources')
+}
+
+export function createWebhookSource(input: {
+  kind: WebhookSourceKind
+  name: string
+  enabled?: boolean
+  config?: Record<string, unknown>
+}): Promise<{ webhook_source: WebhookSource }> {
+  return requestJson<{ webhook_source: WebhookSource }>('/api/v1/webhook-sources', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
 }
 
 export function getIntegrations(): Promise<Integrations> {

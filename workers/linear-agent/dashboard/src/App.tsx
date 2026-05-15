@@ -15,6 +15,7 @@ import {
   Clock,
   FolderKanban,
   Settings,
+  PlugZap,
   LogOut,
   Sun,
   Moon,
@@ -53,6 +54,7 @@ import {
   projectsRoute,
   workflowsRoute,
   workflowEditorRoute,
+  integrationsRoute,
   settingsRoute,
   loginRoute,
   setupRoute,
@@ -68,6 +70,7 @@ import { ProjectsView } from './pages/projects'
 import { WorkflowsView } from './pages/workflows'
 import { WorkflowEditorView } from './pages/workflow-editor'
 import { SettingsView } from './pages/settings'
+import { IntegrationsView } from './pages/integrations'
 import { LoginView } from './pages/login'
 import { SetupView } from './pages/setup'
 import { CreateOrganizationView } from './pages/create-organization'
@@ -113,6 +116,7 @@ webhooksRoute.update({ component: WebhooksView })
 projectsRoute.update({ component: ProjectsView })
 workflowsRoute.update({ component: WorkflowsView })
 workflowEditorRoute.update({ component: WorkflowEditorView })
+integrationsRoute.update({ component: IntegrationsView })
 settingsRoute.update({ component: SettingsView })
 loginRoute.update({ component: LoginView })
 setupRoute.update({ component: SetupView })
@@ -133,6 +137,7 @@ const navItems = [
   { to: '/webhooks' as const, label: 'Webhooks', icon: Webhook, match: (p: string) => p.startsWith('/webhooks') },
   { to: '/projects' as const, label: 'Projects', icon: FolderKanban, match: (p: string) => p.startsWith('/projects') },
   { to: '/workflows' as const, label: 'Workflows', icon: WorkflowIcon, match: (p: string) => p.startsWith('/workflows') },
+  { to: '/integrations' as const, label: 'Integrations', icon: PlugZap, match: (p: string) => p.startsWith('/integrations') },
   { to: '/settings' as const, label: 'Settings', icon: Settings, match: (p: string) => p.startsWith('/settings') },
 ]
 

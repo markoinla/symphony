@@ -25,6 +25,19 @@ export const triggerActionSchema = z.enum([
 ]);
 export type TriggerAction = z.infer<typeof triggerActionSchema>;
 
+const triggerFilterShapes = {
+  team_filter: z.array(z.string()).nullable().optional(),
+  project_filter: z.array(z.string()).nullable().optional(),
+  label_filter: z.array(z.string()).nullable().optional(),
+  skip_label_filter: z.array(z.string()).nullable().optional(),
+  assignee_filter: z.array(z.string()).nullable().optional(),
+  repo_filter: z.array(z.string()).nullable().optional(),
+  branch_filter: z.array(z.string()).nullable().optional(),
+  base_filter: z.array(z.string()).nullable().optional(),
+  draft_filter: z.boolean().nullable().optional(),
+  author_filter: z.array(z.string()).nullable().optional(),
+} as const;
+
 // Full trigger row — what the resolver returns and what the API
 // exposes. JSON columns are surfaced as parsed arrays / objects.
 export const TriggerSchema = z.object({
@@ -40,11 +53,7 @@ export const TriggerSchema = z.object({
   external_id_filter: z.string().nullable().optional(),
   payload_match: PayloadMatchSchema.nullable().optional(),
 
-  team_filter: z.array(z.string()).nullable().optional(),
-  project_filter: z.array(z.string()).nullable().optional(),
-  label_filter: z.array(z.string()).nullable().optional(),
-  skip_label_filter: z.array(z.string()).nullable().optional(),
-  assignee_filter: z.array(z.string()).nullable().optional(),
+  ...triggerFilterShapes,
 
   action: triggerActionSchema,
   action_params: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -52,7 +61,7 @@ export const TriggerSchema = z.object({
   priority: z.number().int(),
   enabled: z.boolean(),
   expected_subject_kinds: z
-    .array(z.enum(["linear_issue", "generic"]))
+    .array(z.enum(["linear_issue", "generic", "github_pr", "github_issue"]))
     .nullable()
     .optional(),
 
@@ -75,11 +84,7 @@ const triggerFieldShapes = {
   external_id_filter: z.string().nullable().optional(),
   payload_match: PayloadMatchSchema.nullable().optional(),
 
-  team_filter: z.array(z.string()).nullable().optional(),
-  project_filter: z.array(z.string()).nullable().optional(),
-  label_filter: z.array(z.string()).nullable().optional(),
-  skip_label_filter: z.array(z.string()).nullable().optional(),
-  assignee_filter: z.array(z.string()).nullable().optional(),
+  ...triggerFilterShapes,
 
   action: triggerActionSchema,
   action_params: z.record(z.string(), z.unknown()).nullable().optional(),

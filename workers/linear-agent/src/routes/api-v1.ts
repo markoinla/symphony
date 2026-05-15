@@ -56,6 +56,7 @@ import {
   eventTupleSchema,
   SubjectRefSchema,
   type EventTuple,
+  type SubjectRef,
 } from "../schemas/event";
 import type { Trigger } from "../schemas/trigger";
 import type { Workflow } from "../schemas/workflow";
@@ -113,6 +114,11 @@ interface TriggerRow {
   label_filter: string | null;
   skip_label_filter: string | null;
   assignee_filter: string | null;
+  repo_filter: string | null;
+  branch_filter: string | null;
+  base_filter: string | null;
+  draft_filter: number | null;
+  author_filter: string | null;
   action: string;
   action_params: string | null;
   priority: number;
@@ -125,7 +131,7 @@ const WORKFLOW_COLS =
   "id, organization_id, team_id, user_id, name, description, engine, model, max_turns, max_continuations, allowed_tools, disallowed_tools, allowed_domains, mcp_servers, permission_mode, additional_read_paths, additional_write_paths, hook_after_create, hook_before_remove, hook_timeout_ms, prompt_template, version, status, published_at, created_at, updated_at";
 
 const TRIGGER_COLS =
-  "id, workflow_id, event_type, to_state, from_state, label_name, comment_match, external_id_filter, payload_match, team_filter, project_filter, label_filter, skip_label_filter, assignee_filter, action, action_params, priority, enabled, created_at, updated_at";
+  "id, workflow_id, event_type, to_state, from_state, label_name, comment_match, external_id_filter, payload_match, team_filter, project_filter, label_filter, skip_label_filter, assignee_filter, repo_filter, branch_filter, base_filter, draft_filter, author_filter, action, action_params, priority, enabled, created_at, updated_at";
 
 function nowSec(): number {
   return Math.floor(Date.now() / 1000);
@@ -207,16 +213,24 @@ function serializeTrigger(row: TriggerRow): Record<string, unknown> {
     label_filter: asJsonArray(row.label_filter),
     skip_label_filter: asJsonArray(row.skip_label_filter),
     assignee_filter: asJsonArray(row.assignee_filter),
+    repo_filter: asJsonArray(row.repo_filter),
+    branch_filter: asJsonArray(row.branch_filter),
+    base_filter: asJsonArray(row.base_filter),
+    draft_filter: row.draft_filter == null ? null : row.draft_filter !== 0,
+    author_filter: asJsonArray(row.author_filter),
     action: row.action,
     action_params: asJsonObject(row.action_params),
     priority: row.priority,
     enabled: row.enabled !== 0,
-    expected_subject_kinds:
-      row.event_type === "api.invoke"
-        ? ["linear_issue", "generic"]
+    expected_subject_kinds: row.event_type.startsWith("github.pr.")
+      ? ["github_pr"]
+      : row.event_type.startsWith("github.issue.")
+        ? ["github_issue"]
         : row.event_type === "generic.webhook"
           ? ["generic"]
-          : ["linear_issue"],
+          : row.event_type === "api.invoke"
+            ? ["linear_issue", "generic", "github_pr", "github_issue"]
+            : ["linear_issue"],
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -224,8 +238,12 @@ function serializeTrigger(row: TriggerRow): Record<string, unknown> {
 
 // Body schema for `/preview` — Track 1's workflow schemas don't include
 // this since it's API-layer-only.
+const PreviewSubjectSchema = SubjectRefSchema.optional();
+
 const PreviewRequestSchema = z.object({
-  issue_id: z.string().min(1),
+  issue_id: z.string().min(1).optional(),
+  subject: PreviewSubjectSchema,
+  context: z.record(z.string(), z.unknown()).optional().default({}),
 });
 
 const TriggerInvokeRequestSchema = z.object({
@@ -235,17 +253,12 @@ const TriggerInvokeRequestSchema = z.object({
 
 const WEBHOOK_BODY_LIST_LIMIT = 8 * 1024;
 
-function randomSecret(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
-
 function publicBaseUrl(c: Context<{ Bindings: Env; Variables: AuthVariables }>): string {
   return (c.env.URL || new URL(c.req.url).origin).replace(/\/$/, "");
 }
 
-function parseWebhookSourceConfig(raw: string): WebhookSourceConfig {
+function parseWebhookSourceConfig(raw: string | null): WebhookSourceConfig {
+  if (!raw) return WebhookSourceConfigSchema.parse({});
   try {
     const parsed = WebhookSourceConfigSchema.safeParse(JSON.parse(raw));
     return parsed.success ? parsed.data : WebhookSourceConfigSchema.parse({});
@@ -254,28 +267,64 @@ function parseWebhookSourceConfig(raw: string): WebhookSourceConfig {
   }
 }
 
-function serializeWebhookSource(
-  c: Context<{ Bindings: Env; Variables: AuthVariables }>,
-  row: WebhookSourceRecord,
-): Record<string, unknown> {
-  return {
-    id: row.id,
-    organization_id: row.organization_id,
-    name: row.name,
-    kind: row.kind,
-    enabled: row.enabled !== 0,
-    config: parseWebhookSourceConfig(row.config),
-    webhook_url: `${publicBaseUrl(c)}/webhook/source/${row.id}`,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    last_used_at: row.last_used_at,
-  };
-}
-
 function parseIntOr(raw: string | undefined, fallback: number): number {
   if (!raw) return fallback;
   const n = parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function generateWebhookSecret(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return `whsec_${btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "")}`;
+}
+
+function parseJsonRecord(raw: string | null): Record<string, unknown> | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function serializeWebhookSource(
+  c: Context<{ Bindings: Env; Variables: AuthVariables }>,
+  row: WebhookSourceRecord,
+  opts: { includeSecret?: boolean } = {},
+): Record<string, unknown> {
+  const path = `/webhook/source/${row.id}`;
+  const baseUrl = publicBaseUrl(c);
+  const config =
+    row.kind === "generic"
+      ? parseWebhookSourceConfig(row.config)
+      : parseJsonRecord(row.config) ?? {};
+  return {
+    id: row.id,
+    organization_id: row.organization_id,
+    kind: row.kind,
+    name: row.name,
+    enabled: row.enabled !== 0,
+    config,
+    inbound_url: path,
+    webhook_url: `${baseUrl}${path}`,
+    ...(opts.includeSecret ? { secret: row.secret } : {}),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    last_used_at: row.last_used_at ?? null,
+  };
+}
+
+function previewSubjectId(subject: SubjectRef, fallback?: string): string {
+  if (fallback) return fallback;
+  if (subject.kind === "generic") return subject.external_id;
+  if (subject.kind === "linear_issue") return subject.id;
+  return subject.external_id ?? subject.id;
 }
 
 function serializeWebhookEvent(
@@ -290,6 +339,7 @@ function serializeWebhookEvent(
     id: row.id,
     received_at: row.received_at,
     organization_id: row.organization_id,
+    source_id: row.source_id,
     webhook_id: row.webhook_id,
     envelope_type: row.envelope_type,
     envelope_action: row.envelope_action,
@@ -348,6 +398,16 @@ export function buildApiV1Router() {
   app.use("/api/v1/webhook-sources/*", rwScopes);
   app.use("/api/v1/webhook-events", rwScopes);
   app.use("/api/v1/webhook-events/*", rwScopes);
+  app.use("/api/v1/webhook-sources", async (c, next) => {
+    const denied = requireScope(c, "write");
+    if (denied) return denied;
+    await next();
+  });
+  app.use("/api/v1/webhook-sources/*", async (c, next) => {
+    const denied = requireScope(c, "write");
+    if (denied) return denied;
+    await next();
+  });
   app.use("/api/v1/projects", rwScopes);
   app.use("/api/v1/projects/*", rwScopes);
   app.use("/api/v1/settings", rwScopes);
@@ -736,18 +796,43 @@ export function buildApiV1Router() {
     const row = await getWorkflow(c.env.DB, id, auth.orgId);
     if (!row) return respondError(c, "not_found");
 
-    // Track 1's renderPrompt takes a typed PromptContext; the issue
-    // payload here is a placeholder until /preview gets enriched with
-    // real Linear data (out of scope for this PR).
-    const rendered = await renderPrompt(row.prompt_template, {
-      issue: {
-        id: parsed.data.issue_id,
+    const subject: SubjectRef =
+      parsed.data.subject ??
+      ({
+        kind: "linear_issue" as const,
+        id: parsed.data.issue_id ?? "SYM-MOCK",
+        identifier: parsed.data.issue_id ?? "SYM-MOCK",
+        title: "Preview Linear issue",
+        description: "",
+        state: "Todo",
         labels: [],
         comments: [],
-      },
+        attachments: [],
+      } as SubjectRef);
+    const previewId = previewSubjectId(subject, parsed.data.issue_id);
+    const issue =
+      subject.kind === "linear_issue"
+        ? { ...subject, attachments: subject.attachments ?? [] }
+        : {
+            id: previewId,
+            identifier: previewId,
+            title: subject.title ?? "Preview subject",
+            description: "",
+            labels: [],
+            comments: [],
+            attachments: [],
+          };
+    const rendered = await renderPrompt(row.prompt_template, {
+      issue,
+      subject,
       attempt: 1,
-      prompt_context: "",
+      prompt_context:
+        issue.description ??
+        (Object.keys(parsed.data.context).length > 0
+          ? JSON.stringify(parsed.data.context, null, 2)
+          : ""),
       new_comments: [],
+      context: parsed.data.context,
     });
     return c.json({ rendered });
   });
@@ -795,9 +880,10 @@ export function buildApiV1Router() {
          id, workflow_id, event_type,
          to_state, from_state, label_name, comment_match, external_id_filter, payload_match,
          team_filter, project_filter, label_filter, skip_label_filter, assignee_filter,
+         repo_filter, branch_filter, base_filter, draft_filter, author_filter,
          action, action_params, priority, enabled, created_at, updated_at
        ) VALUES (
-         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
        )`,
     )
       .bind(
@@ -815,6 +901,11 @@ export function buildApiV1Router() {
         jsonOrNull(t.label_filter),
         jsonOrNull(t.skip_label_filter),
         jsonOrNull(t.assignee_filter),
+        jsonOrNull(t.repo_filter),
+        jsonOrNull(t.branch_filter),
+        jsonOrNull(t.base_filter),
+        t.draft_filter == null ? null : t.draft_filter ? 1 : 0,
+        jsonOrNull(t.author_filter),
         t.action,
         jsonOrNull(t.action_params),
         t.priority,
@@ -995,6 +1086,16 @@ export function buildApiV1Router() {
       set("skip_label_filter", jsonOrNull(t.skip_label_filter));
     if (t.assignee_filter !== undefined)
       set("assignee_filter", jsonOrNull(t.assignee_filter));
+    if (t.repo_filter !== undefined)
+      set("repo_filter", jsonOrNull(t.repo_filter));
+    if (t.branch_filter !== undefined)
+      set("branch_filter", jsonOrNull(t.branch_filter));
+    if (t.base_filter !== undefined)
+      set("base_filter", jsonOrNull(t.base_filter));
+    if (t.draft_filter !== undefined)
+      set("draft_filter", t.draft_filter == null ? null : t.draft_filter ? 1 : 0);
+    if (t.author_filter !== undefined)
+      set("author_filter", jsonOrNull(t.author_filter));
     if (t.action_params !== undefined)
       set("action_params", jsonOrNull(t.action_params));
 
@@ -1026,12 +1127,14 @@ export function buildApiV1Router() {
     return c.json({ ok: true });
   });
 
-  // ── Webhook sources — HMAC-authenticated public source configs ───
+  // ── Webhook sources ─────────────────────────────────────────────
 
   app.get("/api/v1/webhook-sources", async (c) => {
     const auth = c.get("auth");
-    const rows = await new WebhookSourceStore(c.env.DB).listByOrg(auth.orgId);
-    return c.json({ sources: rows.map((row) => serializeWebhookSource(c, row)) });
+    const sources = await new WebhookSourceStore(c.env.DB).list(auth.orgId);
+    return c.json({
+      webhook_sources: sources.map((row) => serializeWebhookSource(c, row)),
+    });
   });
 
   app.post("/api/v1/webhook-sources", async (c) => {
@@ -1041,23 +1144,31 @@ export function buildApiV1Router() {
     if (!parsed.success) {
       return respondError(c, "validation_failed", undefined, parsed.error.issues);
     }
-    const config = WebhookSourceConfigSchema.parse(parsed.data.config ?? {});
-    const secret = randomSecret();
+    const input = parsed.data;
+    const normalizedConfig =
+      input.kind === "generic"
+        ? WebhookSourceConfigSchema.parse(input.config ?? {})
+        : input.config;
     const row = await new WebhookSourceStore(c.env.DB).create({
       organizationId: auth.orgId,
-      name: parsed.data.name,
-      enabled: parsed.data.enabled,
-      secret,
-      config,
+      kind: input.kind,
+      name: input.name,
+      enabled: input.enabled,
+      secret: generateWebhookSecret(),
+      config: normalizedConfig,
     });
-    return c.json({ source: { ...serializeWebhookSource(c, row), secret } }, 201);
+    if (!row) return respondError(c, "internal_error", "Insert failed.");
+    return c.json(
+      { webhook_source: serializeWebhookSource(c, row, { includeSecret: true }) },
+      201,
+    );
   });
 
   app.get("/api/v1/webhook-sources/:id", async (c) => {
     const auth = c.get("auth");
     const row = await new WebhookSourceStore(c.env.DB).getById(c.req.param("id"), auth.orgId);
     if (!row) return respondError(c, "not_found");
-    return c.json({ source: serializeWebhookSource(c, row) });
+    return c.json({ webhook_source: serializeWebhookSource(c, row) });
   });
 
   app.put("/api/v1/webhook-sources/:id", async (c) => {
@@ -1069,23 +1180,35 @@ export function buildApiV1Router() {
     }
     const existing = await new WebhookSourceStore(c.env.DB).getById(c.req.param("id"), auth.orgId);
     if (!existing) return respondError(c, "not_found");
-    const currentConfig = parseWebhookSourceConfig(existing.config);
-    const nextConfig = parsed.data.config
-      ? WebhookSourceConfigSchema.parse({ ...currentConfig, ...parsed.data.config })
-      : undefined;
-    const row = await new WebhookSourceStore(c.env.DB).update(c.req.param("id"), auth.orgId, {
-      name: parsed.data.name,
-      enabled: parsed.data.enabled,
-      config: nextConfig,
-    });
+    const input = parsed.data;
+    let nextConfig: Record<string, unknown> | null | undefined = input.config;
+    if (input.config !== undefined && existing.kind === "generic") {
+      const currentConfig = parseWebhookSourceConfig(existing.config);
+      nextConfig = WebhookSourceConfigSchema.parse({
+        ...currentConfig,
+        ...(input.config ?? {}),
+      });
+    }
+    const row = await new WebhookSourceStore(c.env.DB).update(
+      c.req.param("id"),
+      auth.orgId,
+      {
+        name: input.name,
+        enabled: input.enabled,
+        config: nextConfig,
+        secret: input.rotate_secret ? generateWebhookSecret() : undefined,
+      },
+    );
     if (!row) return respondError(c, "not_found");
-    return c.json({ source: serializeWebhookSource(c, row) });
+    return c.json({
+      webhook_source: serializeWebhookSource(c, row, { includeSecret: input.rotate_secret }),
+    });
   });
 
   app.delete("/api/v1/webhook-sources/:id", async (c) => {
     const auth = c.get("auth");
-    const deleted = await new WebhookSourceStore(c.env.DB).delete(c.req.param("id"), auth.orgId);
-    if (!deleted) return respondError(c, "not_found");
+    const removed = await new WebhookSourceStore(c.env.DB).delete(c.req.param("id"), auth.orgId);
+    if (!removed) return respondError(c, "not_found");
     return c.json({ ok: true });
   });
 
@@ -1107,6 +1230,7 @@ export function buildApiV1Router() {
     const signatureOkRaw = c.req.query("signature_ok");
     const dedupedRaw = c.req.query("deduped");
     const sinceTsRaw = c.req.query("since_ts");
+    const sourceId = c.req.query("source_id") || undefined;
 
     const events = await new WebhookEventStore(c.env.DB).list({
       organizationId: auth.orgId,
@@ -1119,6 +1243,7 @@ export function buildApiV1Router() {
         dedupedRaw === undefined ? undefined : dedupedRaw === "true",
       sinceTs:
         sinceTsRaw === undefined ? undefined : parseInt(sinceTsRaw, 10),
+      sourceId,
       beforeId: beforeId ?? undefined,
     });
     const rows = events.map((e) => serializeWebhookEvent(e, /* truncate */ true));
@@ -1153,11 +1278,13 @@ export function buildApiV1Router() {
     const limit = Math.min(parseIntOr(c.req.query("limit"), 50), 200);
     const envelope = c.req.query("envelope") || undefined;
     const dispatchedAction = c.req.query("dispatched_action") || undefined;
+    const sourceId = c.req.query("source_id") || undefined;
     const events = await new WebhookEventStore(c.env.DB).list({
       organizationId: auth.orgId,
       limit,
       envelope,
       dispatched_action: dispatchedAction,
+      sourceId,
     });
     return c.json({
       webhooks: events.map((e) => serializeWebhookEvent(e, /* truncate */ true)),

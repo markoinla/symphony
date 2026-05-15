@@ -35,7 +35,7 @@ import {
   getIntegrations,
   getProxyStatus,
   getSettings,
-  getWebhookSources,
+  listWebhookSources,
   listApiTokens,
   proxyPing,
   revokeOAuth,
@@ -954,7 +954,7 @@ function ChangePasswordSection() {
 
 function GenericWebhookSection() {
   const queryClient = useQueryClient()
-  const sourcesQuery = useQuery({ queryKey: ['webhook-sources'], queryFn: getWebhookSources })
+  const sourcesQuery = useQuery({ queryKey: ['webhook-sources'], queryFn: listWebhookSources })
   const [name, setName] = useState('Generic webhook')
   const [externalIdPath, setExternalIdPath] = useState('$.event.id')
   const [signatureHeader, setSignatureHeader] = useState('X-Webhook-Signature')
@@ -964,6 +964,7 @@ function GenericWebhookSection() {
   const createMutation = useMutation({
     mutationFn: () =>
       createWebhookSource({
+        kind: 'generic',
         name,
         enabled: true,
         config: {
@@ -972,15 +973,15 @@ function GenericWebhookSection() {
           signature_algorithm: signatureAlgorithm,
         },
       }),
-    onSuccess: async ({ source }) => {
+    onSuccess: async ({ webhook_source }) => {
       await queryClient.invalidateQueries({ queryKey: ['webhook-sources'] })
-      setCreated({ url: source.webhook_url, secret: source.secret ?? '' })
+      setCreated({ url: webhook_source.webhook_url, secret: webhook_source.secret ?? '' })
       toast.success('Generic webhook source created.')
     },
     onError: (err) => toast.error(formatQueryError(err)),
   })
 
-  const sources = sourcesQuery.data?.sources ?? []
+  const sources = (sourcesQuery.data?.webhook_sources ?? []).filter((s) => s.kind === 'generic')
 
   return (
     <Card>

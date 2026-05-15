@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+export const webhookSourceKindSchema = z.enum(["github", "generic"]);
+export type WebhookSourceKind = z.infer<typeof webhookSourceKindSchema>;
+
 export const signatureAlgorithmSchema = z.enum(["sha1", "sha256"]);
 export type SignatureAlgorithm = z.infer<typeof signatureAlgorithmSchema>;
 
@@ -19,10 +22,10 @@ export type WebhookSourceConfig = z.infer<typeof WebhookSourceConfigSchema>;
 export const WebhookSourceSchema = z.object({
   id: z.string(),
   organization_id: z.string(),
+  kind: webhookSourceKindSchema,
   name: z.string(),
-  kind: z.literal("generic"),
   enabled: z.boolean(),
-  config: WebhookSourceConfigSchema,
+  config: z.record(z.string(), z.unknown()).nullable().optional(),
   webhook_url: z.string().optional(),
   created_at: z.number().int(),
   updated_at: z.number().int(),
@@ -31,15 +34,17 @@ export const WebhookSourceSchema = z.object({
 export type WebhookSource = z.infer<typeof WebhookSourceSchema>;
 
 export const WebhookSourceCreateSchema = z.object({
-  name: z.string().min(1),
+  kind: webhookSourceKindSchema.default("generic"),
+  name: z.string().min(1).max(120),
   enabled: z.boolean().default(true),
-  config: WebhookSourceConfigSchema.partial().default({}),
+  config: z.record(z.string(), z.unknown()).optional().default({}),
 });
 export type WebhookSourceCreateInput = z.infer<typeof WebhookSourceCreateSchema>;
 
 export const WebhookSourceUpdateSchema = z.object({
-  name: z.string().min(1).optional(),
+  name: z.string().min(1).max(120).optional(),
   enabled: z.boolean().optional(),
-  config: WebhookSourceConfigSchema.partial().optional(),
+  config: z.record(z.string(), z.unknown()).nullable().optional(),
+  rotate_secret: z.boolean().optional().default(false),
 });
 export type WebhookSourceUpdateInput = z.infer<typeof WebhookSourceUpdateSchema>;
