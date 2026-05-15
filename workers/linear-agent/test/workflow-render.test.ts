@@ -3,7 +3,7 @@
 import { describe, expect, it } from "vitest";
 
 import { renderPrompt } from "../src/lib/workflows/render";
-import type { IssueRef } from "../src/schemas/event";
+import type { IssueRef, SubjectRef } from "../src/schemas/event";
 
 function fakeIssue(overrides: Partial<IssueRef> = {}): IssueRef {
   return {
@@ -18,8 +18,14 @@ function fakeIssue(overrides: Partial<IssueRef> = {}): IssueRef {
     labels: [],
     parent_issue: null,
     comments: [],
+    attachments: [],
     ...overrides,
   };
+}
+
+function linearSubject(overrides: Partial<IssueRef> = {}): SubjectRef {
+  const issue = fakeIssue(overrides);
+  return { ...issue, attachments: issue.attachments ?? [], kind: "linear_issue" } as SubjectRef;
 }
 
 describe("renderPrompt", () => {
@@ -99,5 +105,150 @@ Comments: {{ issue.comments | size }}.`;
       },
     );
     expect(out).toBe("parent=SYM-99");
+  });
+
+  it("resolves subject and context for every SubjectRef kind", async () => {
+    const subjects: SubjectRef[] = [
+      linearSubject({ title: "Linear title" }),
+      {
+        kind: "github_issue",
+        id: "ghi-1",
+        title: "GitHub issue title",
+        body: "GitHub body",
+        state: "open",
+        labels: ["bug"],
+        assignees: ["octocat"],
+      },
+      {
+        kind: "github_pr",
+        id: "pr-1",
+        title: "PR title",
+        state: "open",
+        labels: [],
+      },
+      {
+        kind: "sentry_event",
+        id: "evt-1",
+        title: "Sentry title",
+        message: "boom",
+        payload: { issue: "SENTRY-1" },
+      },
+      {
+        kind: "generic",
+        external_id: "nightly",
+        title: "Generic title",
+        payload: { action: "run" },
+      },
+    ];
+
+    for (const subject of subjects) {
+      const out = await renderPrompt(
+        "{{ subject.kind }}|{{ subject.title }}|{{ context | json }}",
+        {
+          issue: fakeIssue(),
+          subject,
+          attempt: 1,
+          context: { nested: { ok: true }, chars: 'quote " and slash \\' },
+        },
+      );
+      expect(out).toContain(`${subject.kind}|${subject.title ?? ""}|`);
+      expect(out).toContain('"nested":{"ok":true}');
+      expect(out).toContain('"chars":"quote \\" and slash \\\\"');
+    }
+  });
+
+  it("maps issue sugar for Linear and GitHub issues with source-specific empty fallbacks", async () => {
+    const linear = await renderPrompt(
+      "{{ issue.title }}|{{ issue.description }}|{{ issue.labels | join: ',' }}|parent={{ issue.parent_issue.identifier }}|assignees={{ issue.assignees | join: ',' }}",
+      {
+        issue: fakeIssue({
+          title: "Linear",
+          description: "Linear body",
+          labels: ["one"],
+          parent_issue: { id: "p1", identifier: "SYM-9", title: "Parent" },
+        }),
+        subject: linearSubject({
+          title: "Linear",
+          description: "Linear body",
+          labels: ["one"],
+          parent_issue: { id: "p1", identifier: "SYM-9", title: "Parent" },
+        }),
+        attempt: 1,
+      },
+    );
+    expect(linear).toBe("Linear|Linear body|one|parent=SYM-9|assignees=");
+
+    const github = await renderPrompt(
+      "{{ issue.title }}|{{ issue.description }}|{{ issue.labels | join: ',' }}|parent={{ issue.parent_issue.identifier }}|assignees={{ issue.assignees | join: ',' }}",
+      {
+        issue: fakeIssue(),
+        subject: {
+          kind: "github_issue",
+          id: "ghi-1",
+          title: "GitHub",
+          body: "GitHub body",
+          state: "open",
+          labels: ["two"],
+          assignees: ["octocat"],
+        },
+        attempt: 1,
+      },
+    );
+    expect(github).toBe("GitHub|GitHub body|two|parent=|assignees=octocat");
+  });
+
+  it("returns empty strings for sugar accessors when the kind does not match", async () => {
+    const cases: Array<{ subject: SubjectRef; template: string }> = [
+      {
+        subject: { kind: "github_pr", id: "pr-1", title: "PR", labels: [] },
+        template: "issue={{ issue.title }} event={{ event.title }} payload={{ payload.action }}",
+      },
+      {
+        subject: { kind: "sentry_event", id: "evt-1", title: "Event", payload: {} },
+        template: "issue={{ issue.title }} pr={{ pr.title }} payload={{ payload.action }}",
+      },
+      {
+        subject: { kind: "generic", external_id: "gen", payload: { action: "run" } },
+        template: "issue={{ issue.title }} pr={{ pr.title }} event={{ event.title }}",
+      },
+    ];
+
+    for (const { subject, template } of cases) {
+      const out = await renderPrompt(template, {
+        issue: fakeIssue(),
+        subject,
+        attempt: 1,
+      });
+      expect(out).not.toContain("PR");
+      expect(out).not.toContain("Event");
+      expect(out).not.toContain("run");
+      expect(out).toMatch(/=$|= /);
+    }
+  });
+
+  it("resolves matching pr, event, and payload sugar values", async () => {
+    await expect(
+      renderPrompt("{{ pr.title }} on {{ pr.branch }}", {
+        issue: fakeIssue(),
+        subject: { kind: "github_pr", id: "pr-1", title: "Fix", branch: "bugfix", labels: [] },
+        attempt: 1,
+      }),
+    ).resolves.toBe("Fix on bugfix");
+
+    await expect(
+      renderPrompt("{{ event.title }} at {{ event.culprit }}", {
+        issue: fakeIssue(),
+        subject: { kind: "sentry_event", id: "evt-1", title: "Boom", culprit: "app.run", payload: {} },
+        attempt: 1,
+      }),
+    ).resolves.toBe("Boom at app.run");
+
+    await expect(
+      renderPrompt("{{ payload.action }}", {
+        issue: fakeIssue(),
+        subject: { kind: "generic", external_id: "gen", payload: { action: "run" } },
+        attempt: 1,
+      }),
+    ).resolves.toBe("run");
   });
 });

@@ -10,9 +10,11 @@
 //   - Caching disabled — Workers reuses the renderer across requests;
 //     the cache key would just retain templates we'll never re-render.
 //
-// The variable surface is fixed: `issue.*`, `attempt`, `prompt_context`,
-// `new_comments`. Anything passed in `extra` is merged in too, so
-// callers can supply event-type-specific extras (e.g. `to_state`).
+// The variable surface is fixed: generic `subject.*` / `context.*`,
+// defensive per-kind sugar (`issue.*`, `pr.*`, `event.*`, `payload`),
+// `attempt`, `prompt_context`, and `new_comments`. Anything passed in
+// `extra` is merged in too, so callers can supply event-type-specific
+// extras (e.g. `to_state`).
 
 import { Liquid } from "liquidjs";
 
@@ -36,13 +38,25 @@ const engine = new Liquid({
   cache: false,
 });
 
+engine.registerFilter("json", (value: unknown) => JSON.stringify(value ?? null));
+
 export async function renderPrompt(
   template: string,
   context: PromptContext,
 ): Promise<string> {
+  const subject: SubjectRef =
+    context.subject ??
+    ({
+      ...context.issue,
+      kind: "linear_issue",
+      attachments: context.issue.attachments ?? [],
+    } as SubjectRef);
   const scope = {
-    issue: context.issue,
-    subject: context.subject ?? context.issue,
+    issue: issueScope(subject),
+    pr: subject.kind === "github_pr" ? subject : {},
+    event: subject.kind === "sentry_event" ? subject : {},
+    payload: subject.kind === "generic" ? subject.payload : "",
+    subject,
     attempt: context.attempt,
     prompt_context: context.prompt_context ?? "",
     new_comments: context.new_comments ?? [],
@@ -50,4 +64,20 @@ export async function renderPrompt(
     ...(context.extra ?? {}),
   };
   return await engine.parseAndRender(template, scope);
+}
+
+function issueScope(subject: SubjectRef): Record<string, unknown> {
+  if (subject.kind === "linear_issue") return subject;
+
+  if (subject.kind === "github_issue") {
+    return {
+      ...subject,
+      description: subject.body ?? subject.description ?? null,
+      parent_issue: null,
+      comments: [],
+      attachments: [],
+    };
+  }
+
+  return {};
 }

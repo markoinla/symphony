@@ -6,9 +6,13 @@
 // land non-Linear references at the boundary without pretending they
 // are Linear issues.
 //
-// V1 ships two subject kinds:
+// V1 ships multiple subject kinds:
 //   - linear_issue: the existing Linear issue payload, widened with a
 //     `kind` discriminator.
+//   - github_issue: GitHub issue payloads that share the `issue.*`
+//     prompt namespace with Linear issues.
+//   - github_pr: GitHub pull request payloads exposed via `pr.*`.
+//   - sentry_event: Sentry events exposed via `event.*`.
 //   - generic: an external id plus opaque JSON payload for direct API
 //     invocations.
 //
@@ -81,32 +85,72 @@ export const linearIssueSubjectSchema = z.object({
     .default([]),
 });
 
-export const genericSubjectSchema = z.object({
-  kind: z.literal("generic"),
-  external_id: z.string(),
-  payload: z.record(z.string(), z.unknown()).default({}),
+export const githubIssueSubjectSchema = z.object({
+  kind: z.literal("github_issue"),
+  id: z.string(),
+  external_id: z.string().nullable().optional(),
+  number: z.number().int().nullable().optional(),
+  title: z.string().nullable().optional(),
+  body: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
+  state: z.string().nullable().optional(),
+  url: z.string().nullable().optional(),
+  repository: z.string().nullable().optional(),
+  labels: z.array(z.string()).default([]),
+  assignees: z.array(z.string()).default([]),
 });
 
 export const githubPrSubjectSchema = z.object({
   kind: z.literal("github_pr"),
-  repo: z.string(),
-  number: z.number().int(),
-  title: z.string(),
-  body: z.string(),
-  state: z.enum(["open", "closed", "merged"]),
-  base: z.string(),
-  head: z.string(),
-  draft: z.boolean(),
+  // Canonical SYM-365 PR SubjectRef fields.
+  repo: z.string().default(""),
+  number: z.number().int().default(0),
+  title: z.string().default(""),
+  body: z.string().default(""),
+  state: z.enum(["open", "closed", "merged"]).default("open"),
+  base: z.string().default(""),
+  head: z.string().default(""),
+  draft: z.boolean().default(false),
   labels: z.array(z.string()).default([]),
-  author: z.string(),
+  author: z.string().default(""),
   reviewers: z.array(z.string()).default([]),
-  head_sha: z.string(),
+  head_sha: z.string().default(""),
+  // Legacy generic GitHub subject fields retained for API.invoke previews and
+  // prompt rendering compatibility with the generalized SubjectRef foundation.
+  id: z.string().optional(),
+  external_id: z.string().nullable().optional(),
+  url: z.string().nullable().optional(),
+  repository: z.string().nullable().optional(),
+  branch: z.string().nullable().optional(),
+  base_branch: z.string().nullable().optional(),
+});
+
+export const sentryEventSubjectSchema = z.object({
+  kind: z.literal("sentry_event"),
+  id: z.string(),
+  external_id: z.string().nullable().optional(),
+  title: z.string().nullable().optional(),
+  message: z.string().nullable().optional(),
+  culprit: z.string().nullable().optional(),
+  project: z.string().nullable().optional(),
+  url: z.string().nullable().optional(),
+  level: z.string().nullable().optional(),
+  payload: z.record(z.string(), z.unknown()).default({}),
+});
+
+export const genericSubjectSchema = z.object({
+  kind: z.literal("generic"),
+  external_id: z.string(),
+  title: z.string().nullable().optional(),
+  payload: z.record(z.string(), z.unknown()).default({}),
 });
 
 export const SubjectRefSchema = z.discriminatedUnion("kind", [
   linearIssueSubjectSchema,
-  genericSubjectSchema,
+  githubIssueSubjectSchema,
   githubPrSubjectSchema,
+  sentryEventSubjectSchema,
+  genericSubjectSchema,
 ]);
 export type SubjectRef = z.infer<typeof SubjectRefSchema>;
 
