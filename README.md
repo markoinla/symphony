@@ -227,6 +227,10 @@ You are working on a Linear issue {{ issue.identifier }}.
 Title: {{ issue.title }} Body: {{ issue.description }}
 ```
 
+For generalized trigger workflows, prefer `{{ subject.* }}` and `{{ context | json }}`
+with `{% if subject.kind == "..." %}` guards for kind-specific sections. Legacy
+sugar accessors such as `{{ issue.* }}` remain supported for Linear templates.
+
 Notes:
 
 - If a value is missing, defaults are used.
