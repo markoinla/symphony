@@ -1026,6 +1026,160 @@ export class WebhookEventStore {
   }
 }
 
+// ── webhook_sources ────────────────────────────────────────────────
+
+export interface WebhookSourceRecord {
+  id: string;
+  organization_id: string;
+  provider: "sentry";
+  name: string;
+  secret: string;
+  enabled: number;
+  project_id: string | null;
+  config: string | null;
+  last_received_at: number | null;
+  created_at: number;
+  updated_at: number;
+  config_project_slug?: string | null;
+}
+
+const WEBHOOK_SOURCE_COLS =
+  "id, organization_id, provider, name, secret, enabled, project_id, config, last_received_at, created_at, updated_at";
+
+export class WebhookSourceStore {
+  constructor(private readonly db: D1Database) {}
+
+  async list(orgId: string): Promise<WebhookSourceRecord[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT ${WEBHOOK_SOURCE_COLS}
+         FROM webhook_sources WHERE organization_id = ?
+         ORDER BY created_at DESC, id DESC`,
+      )
+      .bind(orgId)
+      .all<WebhookSourceRecord>();
+    return result.results.map(hydrateWebhookSource);
+  }
+
+  async get(id: string): Promise<WebhookSourceRecord | null> {
+    const row = await this.db
+      .prepare(`SELECT ${WEBHOOK_SOURCE_COLS} FROM webhook_sources WHERE id = ?`)
+      .bind(id)
+      .first<WebhookSourceRecord>();
+    return row ? hydrateWebhookSource(row) : null;
+  }
+
+  async getForOrg(id: string, orgId: string): Promise<WebhookSourceRecord | null> {
+    const row = await this.db
+      .prepare(`SELECT ${WEBHOOK_SOURCE_COLS} FROM webhook_sources WHERE id = ? AND organization_id = ?`)
+      .bind(id, orgId)
+      .first<WebhookSourceRecord>();
+    return row ? hydrateWebhookSource(row) : null;
+  }
+
+  async create(input: {
+    organizationId: string;
+    provider: "sentry";
+    name: string;
+    secret: string;
+    enabled: boolean;
+    projectId?: string | null;
+    config?: Record<string, unknown> | null;
+  }): Promise<WebhookSourceRecord> {
+    const id = crypto.randomUUID();
+    const now = Math.floor(Date.now() / 1000);
+    await this.db
+      .prepare(
+        `INSERT INTO webhook_sources
+           (id, organization_id, provider, name, secret, enabled, project_id, config, last_received_at, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+      )
+      .bind(
+        id,
+        input.organizationId,
+        input.provider,
+        input.name,
+        input.secret,
+        input.enabled ? 1 : 0,
+        input.projectId ?? null,
+        input.config ? JSON.stringify(input.config) : null,
+        now,
+        now,
+      )
+      .run();
+    const row = await this.get(id);
+    if (!row) throw new Error("webhook_source_create_failed");
+    return row;
+  }
+
+  async update(
+    id: string,
+    orgId: string,
+    fields: {
+      name?: string;
+      enabled?: boolean;
+      projectId?: string | null;
+      config?: Record<string, unknown> | null;
+      secret?: string;
+      lastReceivedAt?: number;
+    },
+  ): Promise<WebhookSourceRecord | null> {
+    const sets: string[] = [];
+    const values: (string | number | null)[] = [];
+    if (fields.name !== undefined) {
+      sets.push("name = ?");
+      values.push(fields.name);
+    }
+    if (fields.enabled !== undefined) {
+      sets.push("enabled = ?");
+      values.push(fields.enabled ? 1 : 0);
+    }
+    if (fields.projectId !== undefined) {
+      sets.push("project_id = ?");
+      values.push(fields.projectId);
+    }
+    if (fields.config !== undefined) {
+      sets.push("config = ?");
+      values.push(fields.config ? JSON.stringify(fields.config) : null);
+    }
+    if (fields.secret !== undefined) {
+      sets.push("secret = ?");
+      values.push(fields.secret);
+    }
+    if (fields.lastReceivedAt !== undefined) {
+      sets.push("last_received_at = ?");
+      values.push(fields.lastReceivedAt);
+    }
+    sets.push("updated_at = ?");
+    values.push(Math.floor(Date.now() / 1000));
+    const result = await this.db
+      .prepare(`UPDATE webhook_sources SET ${sets.join(", ")} WHERE id = ? AND organization_id = ?`)
+      .bind(...values, id, orgId)
+      .run();
+    if ((result.meta?.changes ?? 0) === 0) return null;
+    return await this.getForOrg(id, orgId);
+  }
+
+  async delete(id: string, orgId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare("DELETE FROM webhook_sources WHERE id = ? AND organization_id = ?")
+      .bind(id, orgId)
+      .run();
+    return (result.meta?.changes ?? 0) > 0;
+  }
+}
+
+function hydrateWebhookSource(row: WebhookSourceRecord): WebhookSourceRecord {
+  let configProjectSlug: string | null = null;
+  if (row.config) {
+    try {
+      const parsed = JSON.parse(row.config) as Record<string, unknown>;
+      configProjectSlug = typeof parsed.sentry_project === "string" ? parsed.sentry_project : null;
+    } catch {}
+  }
+  return { ...row, config_project_slug: configProjectSlug };
+}
+
 // ── settings ────────────────────────────────────────────────────────
 
 export interface SettingRecord {

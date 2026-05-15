@@ -220,6 +220,11 @@ export const workflowTriggers = sqliteTable(
     labelFilter: text("label_filter"),
     skipLabelFilter: text("skip_label_filter"),
     assigneeFilter: text("assignee_filter"),
+    sentryProjectFilter: text("sentry_project_filter"),
+    levelFilter: text("level_filter"),
+    fingerprintFilter: text("fingerprint_filter"),
+    environmentFilter: text("environment_filter"),
+    releaseFilter: text("release_filter"),
 
     action: text("action").notNull(),
     actionParams: text("action_params"),
@@ -236,6 +241,34 @@ export const workflowTriggers = sqliteTable(
       table.enabled,
     ),
     workflowIdx: index("idx_workflow_triggers_workflow").on(table.workflowId),
+  }),
+);
+
+export const webhookSources = sqliteTable(
+  "webhook_sources",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organizations.id, { onDelete: "cascade" }),
+    provider: text("provider").notNull(),
+    name: text("name").notNull(),
+    secret: text("secret").notNull(),
+    enabled: integer("enabled").notNull().default(1),
+    projectId: text("project_id").references(() => projects.id, {
+      onDelete: "set null",
+    }),
+    config: text("config"),
+    lastReceivedAt: integer("last_received_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  },
+  (table) => ({
+    orgIdx: index("idx_webhook_sources_org").on(table.organizationId),
+    providerIdx: index("idx_webhook_sources_provider").on(
+      table.provider,
+      table.enabled,
+    ),
   }),
 );
 

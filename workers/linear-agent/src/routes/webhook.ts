@@ -10,11 +10,17 @@ import {
   mapIssueUpdateToEvent,
   type IssueWebhookEnvelope,
 } from "../lib/event-mapper-inbound";
+import {
+  buildSentryEventTuple,
+  normalizeSentryWebhook,
+  verifySentrySignature,
+} from "../lib/sentry";
 import { verifyLinearSignature } from "../lib/signature";
 import {
   AgentSessionStore,
   LinearAgentInstallStore,
   WebhookEventStore,
+  WebhookSourceStore,
 } from "../lib/store";
 import { resolveWorkflow } from "../lib/workflows/resolver";
 import { ensureDefaultWorkflow } from "../lib/workflows/seed";
@@ -57,6 +63,141 @@ const WEBHOOK_DEDUPE_TTL_S = 60 * 60;
 
 export function buildWebhookRouter() {
   const app = new Hono<{ Bindings: Env }>();
+
+  app.post("/webhook/source/:id", async (c) => {
+    const receivedAt = Math.floor(Date.now() / 1000);
+    const startedMs = Date.now();
+    const events = new WebhookEventStore(c.env.DB);
+    let logId: string | null = null;
+    try {
+      const sourceId = c.req.param("id");
+      const sourceStore = new WebhookSourceStore(c.env.DB);
+      const source = await sourceStore.get(sourceId);
+      const raw = await c.req.raw.clone().text();
+      if (!source || source.provider !== "sentry" || source.enabled === 0) {
+        logId = await events.insert({
+          receivedAt,
+          envelopeType: "sentry.unknown",
+          signatureOk: false,
+          rawBody: raw.slice(0, 65_536),
+        });
+        await events.update(logId, {
+          dispatchedAction: "error",
+          error: source ? "webhook_source_disabled" : "webhook_source_not_found",
+          latencyMs: Date.now() - startedMs,
+        });
+        return c.json({ error: "webhook_source_not_found" }, 404);
+      }
+
+      const signatureOk = await verifySentrySignature(
+        source.secret,
+        raw,
+        c.req.header("Sentry-Hook-Signature"),
+      );
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        logId = await events.insert({
+          receivedAt,
+          organizationId: source.organization_id,
+          envelopeType: "sentry.unknown",
+          signatureOk,
+          rawBody: raw.slice(0, 65_536),
+        });
+        await events.update(logId, {
+          dispatchedAction: "error",
+          error: "invalid_json",
+          latencyMs: Date.now() - startedMs,
+        });
+        return c.json({ error: "invalid_json" }, 400);
+      }
+
+      let normalized;
+      try {
+        normalized = normalizeSentryWebhook(parsed, source);
+      } catch (e) {
+        logId = await events.insert({
+          receivedAt,
+          organizationId: source.organization_id,
+          envelopeType: "sentry.unknown",
+          signatureOk,
+          rawBody: raw.slice(0, 65_536),
+        });
+        await events.update(logId, {
+          dispatchedAction: "error",
+          error: e instanceof Error ? e.message : String(e),
+          latencyMs: Date.now() - startedMs,
+        });
+        return c.json({ error: "invalid_payload" }, 400);
+      }
+
+      logId = await events.insert({
+        receivedAt,
+        organizationId: source.organization_id,
+        webhookId: normalized.webhookId,
+        envelopeType: normalized.eventType,
+        envelopeAction: typeof (parsed as Record<string, unknown>).action === "string"
+          ? ((parsed as Record<string, unknown>).action as string)
+          : null,
+        signatureOk,
+        rawBody: raw.slice(0, 65_536),
+        eventSummary: normalized.summary,
+      });
+
+      if (!signatureOk) {
+        await events.update(logId, {
+          dispatchedAction: "error",
+          error: "invalid_signature",
+          latencyMs: Date.now() - startedMs,
+        });
+        return c.json({ error: "invalid_signature" }, 401);
+      }
+
+      const dedupeKey = `webhook-source:${source.id}:${normalized.webhookId}:${normalized.eventType}`;
+      const seen = await c.env.LINEAR_TOKENS.get(dedupeKey);
+      if (seen) {
+        await events.update(logId, { deduped: true, dispatchedAction: "deduped", latencyMs: Date.now() - startedMs });
+        return c.json({ ok: true, deduped: true });
+      }
+      await c.env.LINEAR_TOKENS.put(dedupeKey, "1", { expirationTtl: WEBHOOK_DEDUPE_TTL_S });
+      await sourceStore.update(source.id, source.organization_id, { lastReceivedAt: receivedAt });
+
+      const event = buildSentryEventTuple({ orgId: source.organization_id, source, normalized });
+      const resolved = await resolveWorkflow(c.env, event);
+      if (!resolved) {
+        await events.update(logId, {
+          dispatchedAction: "no_match",
+          latencyMs: Date.now() - startedMs,
+        });
+        return c.json({ ok: true, matched: false });
+      }
+
+      const result = await dispatchTrigger(c.env, {
+        workflow: resolved.workflow,
+        trigger: resolved.trigger,
+        event,
+        context: normalized.context,
+        source: "webhook",
+      });
+      await events.update(logId, {
+        matchedWorkflowId: resolved.workflow.id,
+        matchedTriggerId: resolved.trigger.id,
+        dispatchedAction: result.outcome,
+        agentSessionId: result.agentSessionId ?? null,
+        error: result.error ?? null,
+        latencyMs: Date.now() - startedMs,
+      });
+      if (result.outcome === "error") return c.json({ error: result.error ?? "dispatch_failed" }, 500);
+      return c.json({ ok: true, matched: true, session_id: result.agentSessionId ?? null });
+    } catch (e) {
+      const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+      if (logId) {
+        try { await events.update(logId, { dispatchedAction: "error", error: msg, latencyMs: Date.now() - startedMs }); } catch {}
+      }
+      return c.json({ error: "webhook_handler_error", message: msg }, 500);
+    }
+  });
 
   app.post("/webhook", async (c) => {
     const receivedAt = Math.floor(Date.now() / 1000);

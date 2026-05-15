@@ -81,6 +81,11 @@ const SELECT_SQL = `
     t.label_filter    AS t_label_filter,
     t.skip_label_filter AS t_skip_label_filter,
     t.assignee_filter AS t_assignee_filter,
+    t.sentry_project_filter AS t_sentry_project_filter,
+    t.level_filter AS t_level_filter,
+    t.fingerprint_filter AS t_fingerprint_filter,
+    t.environment_filter AS t_environment_filter,
+    t.release_filter AS t_release_filter,
     t.action          AS t_action,
     t.action_params   AS t_action_params,
     t.priority        AS t_priority,
@@ -179,8 +184,8 @@ function passesScopeFilters(raw: RawJoinedRow, event: EventTuple): boolean {
   if (
     projectFilter &&
     !(
-      (event.issue?.project_id ?? null) &&
-      projectFilter.includes(event.issue!.project_id!)
+      (event.project_id ?? event.issue?.project_id ?? null) &&
+      projectFilter.includes((event.project_id ?? event.issue?.project_id)!)
     )
   ) {
     return false;
@@ -198,6 +203,32 @@ function passesScopeFilters(raw: RawJoinedRow, event: EventTuple): boolean {
   if (assigneeFilter) {
     const id = event.assignee_id ?? null;
     if (!id || !assigneeFilter.includes(id)) return false;
+  }
+  if (!passesSentryFilters(raw, event)) return false;
+  return true;
+}
+
+function passesSentryFilters(raw: RawJoinedRow, event: EventTuple): boolean {
+  if (!event.event_type.startsWith("sentry.")) return true;
+  const rec = event as unknown as Record<string, unknown>;
+  const projectFilter = parseStringArray(raw.t_sentry_project_filter);
+  if (projectFilter && !projectFilter.includes(String(rec.sentry_project ?? ""))) return false;
+  const levelFilter = parseStringArray(raw.t_level_filter);
+  if (levelFilter && !levelFilter.includes(String(rec.sentry_level ?? ""))) return false;
+  const envFilter = parseStringArray(raw.t_environment_filter);
+  if (envFilter && !envFilter.includes(String(rec.sentry_environment ?? ""))) return false;
+  const releaseFilter = parseStringArray(raw.t_release_filter);
+  if (releaseFilter && !releaseFilter.includes(String(rec.sentry_release ?? ""))) return false;
+  if (raw.t_fingerprint_filter) {
+    const fingerprints = Array.isArray(rec.sentry_fingerprint)
+      ? rec.sentry_fingerprint.map(String)
+      : [];
+    const haystack = fingerprints.join("\n");
+    try {
+      if (!new RegExp(raw.t_fingerprint_filter).test(haystack)) return false;
+    } catch {
+      if (!haystack.includes(raw.t_fingerprint_filter)) return false;
+    }
   }
   return true;
 }
@@ -273,6 +304,11 @@ function hydrateTrigger(raw: RawJoinedRow): Trigger {
     label_filter: parseStringArray(raw.t_label_filter),
     skip_label_filter: parseStringArray(raw.t_skip_label_filter),
     assignee_filter: parseStringArray(raw.t_assignee_filter),
+    sentry_project_filter: parseStringArray(raw.t_sentry_project_filter),
+    level_filter: parseStringArray(raw.t_level_filter) as Trigger["level_filter"],
+    fingerprint_filter: raw.t_fingerprint_filter ?? null,
+    environment_filter: parseStringArray(raw.t_environment_filter),
+    release_filter: parseStringArray(raw.t_release_filter),
     action: raw.t_action as Trigger["action"],
     action_params: parseJsonOrNull<Record<string, unknown>>(raw.t_action_params),
     priority: raw.t_priority,
@@ -298,6 +334,11 @@ interface RawJoinedRow {
   t_label_filter: string | null;
   t_skip_label_filter: string | null;
   t_assignee_filter: string | null;
+  t_sentry_project_filter: string | null;
+  t_level_filter: string | null;
+  t_fingerprint_filter: string | null;
+  t_environment_filter: string | null;
+  t_release_filter: string | null;
   t_action: string;
   t_action_params: string | null;
   t_priority: number;

@@ -767,6 +767,47 @@ export type Integrations = {
   github_app_settings_url: string | null
 }
 
+export type WebhookSource = {
+  id: string
+  organization_id: string
+  provider: 'sentry'
+  name: string
+  enabled: boolean
+  project_id: string | null
+  config: Record<string, unknown> | null
+  inbound_url: string
+  secret?: string
+  last_received_at: number | null
+  created_at: number
+  updated_at: number
+}
+
+export type WebhookSourceCreateBody = {
+  provider?: 'sentry'
+  name: string
+  enabled?: boolean
+  project_id?: string | null
+  config?: Record<string, unknown> | null
+}
+
+export function listWebhookSources(): Promise<{ sources: WebhookSource[] }> {
+  return requestJson<{ sources: WebhookSource[] }>('/api/v1/webhook-sources')
+}
+
+export function createWebhookSource(body: WebhookSourceCreateBody): Promise<{ source: WebhookSource }> {
+  return requestJson<{ source: WebhookSource }>('/api/v1/webhook-sources', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export function updateWebhookSource(id: string, body: Partial<WebhookSourceCreateBody> & { rotate_secret?: boolean }): Promise<{ source: WebhookSource }> {
+  return requestJson<{ source: WebhookSource }>(`/api/v1/webhook-sources/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  })
+}
+
 export function getIntegrations(): Promise<Integrations> {
   return requestJson<Integrations>('/dashboard/api/integrations')
 }

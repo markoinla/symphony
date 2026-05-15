@@ -305,7 +305,22 @@ because it's pure key paste — but defer to a second pass:
 PUT    /api/v1/integrations/credentials  (admin)   [deferred]
 ```
 
-### 6. Webhook events
+### 6. Webhook sources
+
+```
+GET    /api/v1/webhook-sources           (read)
+POST   /api/v1/webhook-sources           (write)
+GET    /api/v1/webhook-sources/:id       (read)
+PUT    /api/v1/webhook-sources/:id       (write)
+DELETE /api/v1/webhook-sources/:id       (write)
+```
+
+Creates source-specific inbound URLs such as `/webhook/source/:id`.
+Sentry sources return the HMAC secret only on create or explicit
+`rotate_secret: true`; subsequent reads return connection state,
+`inbound_url`, project binding, config, and timestamps.
+
+### 7. Webhook events
 
 ```
 GET    /api/v1/webhook-events            (read)
@@ -326,7 +341,7 @@ not *webhook configurations*).
 - List response truncates `raw_body` at 8KB (today). Detail endpoint
   returns full body.
 
-### 7. API tokens
+### 8. API tokens
 
 See [Auth → Token lifecycle](#token-lifecycle).
 

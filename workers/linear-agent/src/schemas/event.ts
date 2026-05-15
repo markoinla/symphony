@@ -27,6 +27,9 @@ export const eventTypeSchema = z.enum([
   "label_added",
   "label_removed",
   "assignee_changed",
+  "sentry.alert.fired",
+  "sentry.issue.created",
+  "sentry.issue.resolved",
 ]);
 export type EventType = z.infer<typeof eventTypeSchema>;
 
@@ -83,9 +86,45 @@ export const genericSubjectSchema = z.object({
   payload: z.record(z.string(), z.unknown()).default({}),
 });
 
+export const sentryEventSubjectSchema = z.object({
+  kind: z.literal("sentry_event"),
+  project: z.string(),
+  event_id: z.string(),
+  level: z.enum(["fatal", "error", "warning", "info", "debug"]),
+  fingerprint: z.array(z.string()).default([]),
+  message: z.string(),
+  stacktrace: z
+    .array(
+      z.object({
+        filename: z.string().nullable().optional(),
+        function: z.string().nullable().optional(),
+        lineno: z.number().nullable().optional(),
+        colno: z.number().nullable().optional(),
+        in_app: z.boolean().nullable().optional(),
+        context_line: z.string().nullable().optional(),
+      }),
+    )
+    .default([]),
+  breadcrumbs: z
+    .array(
+      z.object({
+        timestamp: z.string().nullable().optional(),
+        category: z.string().nullable().optional(),
+        level: z.string().nullable().optional(),
+        message: z.string().nullable().optional(),
+        data: z.record(z.string(), z.unknown()).nullable().optional(),
+      }),
+    )
+    .default([]),
+  related_issue_url: z.string(),
+  environment: z.string().nullable().optional(),
+  release: z.string().nullable().optional(),
+});
+
 export const SubjectRefSchema = z.discriminatedUnion("kind", [
   linearIssueSubjectSchema,
   genericSubjectSchema,
+  sentryEventSubjectSchema,
 ]);
 export type SubjectRef = z.infer<typeof SubjectRefSchema>;
 
@@ -183,6 +222,33 @@ export const assigneeChangedEventSchema = z.object({
   from_assignee_id: z.string().nullable().optional(),
 });
 
+const sentryMatchFields = {
+  sentry_project: z.string(),
+  sentry_level: z.enum(["fatal", "error", "warning", "info", "debug"]),
+  sentry_fingerprint: z.array(z.string()).default([]),
+  sentry_environment: z.string().nullable().optional(),
+  sentry_release: z.string().nullable().optional(),
+  context: z.record(z.string(), z.unknown()).default({}),
+} as const;
+
+export const sentryAlertFiredEventSchema = z.object({
+  event_type: z.literal("sentry.alert.fired"),
+  ...scopeFields,
+  ...sentryMatchFields,
+});
+
+export const sentryIssueCreatedEventSchema = z.object({
+  event_type: z.literal("sentry.issue.created"),
+  ...scopeFields,
+  ...sentryMatchFields,
+});
+
+export const sentryIssueResolvedEventSchema = z.object({
+  event_type: z.literal("sentry.issue.resolved"),
+  ...scopeFields,
+  ...sentryMatchFields,
+});
+
 // EventTuple — discriminated union by event_type. The resolver,
 // dispatcher, and renderer all consume this shape.
 export const EventTupleSchema = z.discriminatedUnion("event_type", [
@@ -194,6 +260,9 @@ export const EventTupleSchema = z.discriminatedUnion("event_type", [
   labelAddedEventSchema,
   labelRemovedEventSchema,
   assigneeChangedEventSchema,
+  sentryAlertFiredEventSchema,
+  sentryIssueCreatedEventSchema,
+  sentryIssueResolvedEventSchema,
 ]);
 export type EventTuple = z.infer<typeof EventTupleSchema>;
 

@@ -37,6 +37,9 @@ const eventTypeOptions: { value: EventType; label: string }[] = [
   { value: 'label_removed', label: 'Label removed' },
   { value: 'assignee_changed', label: 'Assignee changed' },
   { value: 'session_started', label: 'Session started' },
+  { value: 'sentry.alert.fired', label: 'Sentry alert fired' },
+  { value: 'sentry.issue.created', label: 'Sentry issue created' },
+  { value: 'sentry.issue.resolved', label: 'Sentry issue resolved' },
 ]
 
 const actionOptions: { value: TriggerAction; label: string }[] = [
@@ -52,7 +55,8 @@ function expectedSubjectKinds(trigger: Trigger): string {
   if (trigger.expected_subject_kinds?.length) {
     return trigger.expected_subject_kinds.join(', ')
   }
-  return trigger.event_type === 'api.invoke' ? 'linear_issue, generic' : 'linear_issue'
+  if (trigger.event_type.startsWith('sentry.')) return 'sentry_event'
+  return trigger.event_type === 'api.invoke' ? 'linear_issue, generic, sentry_event' : 'linear_issue'
 }
 
 export function TriggerRow({
@@ -86,6 +90,11 @@ export function TriggerRow({
                 to_state: null,
                 label_name: null,
                 comment_match: null,
+                sentry_project_filter: null,
+                level_filter: null,
+                fingerprint_filter: null,
+                environment_filter: null,
+                release_filter: null,
               })
             }
           >
@@ -222,6 +231,46 @@ export function TriggerRow({
               value={trigger.comment_match ?? ''}
             />
           </Field>
+        )}
+
+        {trigger.event_type.startsWith('sentry.') && (
+          <>
+            <Field label="Sentry project" hint="Project slugs">
+              <ChipInput
+                onChange={(sentry_project_filter) => onChange({ sentry_project_filter })}
+                placeholder="backend"
+                value={trigger.sentry_project_filter ?? []}
+              />
+            </Field>
+            <Field label="Level filter" hint="fatal, error, warning, info, debug">
+              <ChipInput
+                onChange={(level_filter) => onChange({ level_filter: level_filter as Trigger['level_filter'] })}
+                placeholder="error"
+                value={trigger.level_filter ?? []}
+              />
+            </Field>
+            <Field label="Fingerprint regex">
+              <Input
+                onChange={(event) => onChange({ fingerprint_filter: event.target.value || null })}
+                placeholder="TypeError|checkout"
+                value={trigger.fingerprint_filter ?? ''}
+              />
+            </Field>
+            <Field label="Environment filter">
+              <ChipInput
+                onChange={(environment_filter) => onChange({ environment_filter })}
+                placeholder="production"
+                value={trigger.environment_filter ?? []}
+              />
+            </Field>
+            <Field label="Release filter">
+              <ChipInput
+                onChange={(release_filter) => onChange({ release_filter })}
+                placeholder="abc123"
+                value={trigger.release_filter ?? []}
+              />
+            </Field>
+          </>
         )}
 
         {trigger.event_type === 'assignee_changed' && (

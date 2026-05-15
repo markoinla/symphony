@@ -42,6 +42,11 @@ export const TriggerSchema = z.object({
   label_filter: z.array(z.string()).nullable().optional(),
   skip_label_filter: z.array(z.string()).nullable().optional(),
   assignee_filter: z.array(z.string()).nullable().optional(),
+  sentry_project_filter: z.array(z.string()).nullable().optional(),
+  level_filter: z.array(z.enum(["fatal", "error", "warning", "info", "debug"])).nullable().optional(),
+  fingerprint_filter: z.string().nullable().optional(),
+  environment_filter: z.array(z.string()).nullable().optional(),
+  release_filter: z.array(z.string()).nullable().optional(),
 
   action: triggerActionSchema,
   action_params: z.record(z.string(), z.unknown()).nullable().optional(),
@@ -49,7 +54,7 @@ export const TriggerSchema = z.object({
   priority: z.number().int(),
   enabled: z.boolean(),
   expected_subject_kinds: z
-    .array(z.enum(["linear_issue", "generic"]))
+    .array(z.enum(["linear_issue", "generic", "sentry_event"]))
     .nullable()
     .optional(),
 
@@ -75,6 +80,11 @@ const triggerFieldShapes = {
   label_filter: z.array(z.string()).nullable().optional(),
   skip_label_filter: z.array(z.string()).nullable().optional(),
   assignee_filter: z.array(z.string()).nullable().optional(),
+  sentry_project_filter: z.array(z.string()).nullable().optional(),
+  level_filter: z.array(z.enum(["fatal", "error", "warning", "info", "debug"])).nullable().optional(),
+  fingerprint_filter: z.string().nullable().optional(),
+  environment_filter: z.array(z.string()).nullable().optional(),
+  release_filter: z.array(z.string()).nullable().optional(),
 
   action: triggerActionSchema,
   action_params: z.record(z.string(), z.unknown()).nullable().optional(),

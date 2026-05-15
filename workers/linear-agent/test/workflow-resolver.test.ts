@@ -55,6 +55,11 @@ interface TriggerRow {
   label_filter: string | null;
   skip_label_filter: string | null;
   assignee_filter: string | null;
+  sentry_project_filter: string | null;
+  level_filter: string | null;
+  fingerprint_filter: string | null;
+  environment_filter: string | null;
+  release_filter: string | null;
   action: string;
   action_params: string | null;
   priority: number;
@@ -120,6 +125,11 @@ class MockResolverDB {
       label_filter: null,
       skip_label_filter: null,
       assignee_filter: null,
+      sentry_project_filter: null,
+      level_filter: null,
+      fingerprint_filter: null,
+      environment_filter: null,
+      release_filter: null,
       action_params: null,
       priority: 0,
       enabled: 1,
@@ -218,6 +228,11 @@ class MockStatement {
       t_label_filter: t.label_filter,
       t_skip_label_filter: t.skip_label_filter,
       t_assignee_filter: t.assignee_filter,
+      t_sentry_project_filter: t.sentry_project_filter,
+      t_level_filter: t.level_filter,
+      t_fingerprint_filter: t.fingerprint_filter,
+      t_environment_filter: t.environment_filter,
+      t_release_filter: t.release_filter,
       t_action: t.action,
       t_action_params: t.action_params,
       t_priority: t.priority,
@@ -598,6 +613,61 @@ describe("resolveWorkflow — scope filters", () => {
     };
     const r = await resolveWorkflow(makeEnv(db), right);
     expect(r?.trigger.id).toBe("t-1");
+  });
+});
+
+describe("resolveWorkflow — sentry_event filters", () => {
+  function sentryEvent(overrides: Partial<EventTuple> = {}): EventTuple {
+    return {
+      event_type: "sentry.alert.fired",
+      organization_id: "org-1",
+      team_id: null,
+      project_id: "proj-1",
+      user_id: null,
+      assignee_id: null,
+      labels: [],
+      subject: {
+        kind: "sentry_event",
+        project: "backend",
+        event_id: "evt-1",
+        level: "error",
+        fingerprint: ["TypeError", "checkout"],
+        message: "boom",
+        stacktrace: [],
+        breadcrumbs: [],
+        related_issue_url: "https://sentry.example/issues/1",
+        environment: "production",
+        release: "abc123",
+      },
+      issue: null,
+      sentry_project: "backend",
+      sentry_level: "error",
+      sentry_fingerprint: ["TypeError", "checkout"],
+      sentry_environment: "production",
+      sentry_release: "abc123",
+      context: {},
+      ...overrides,
+    } as EventTuple;
+  }
+
+  it("matches level/project/environment/release/fingerprint filters", async () => {
+    const db = new MockResolverDB();
+    db.addWorkflow({ id: "wf-1", organization_id: "org-1" });
+    db.addTrigger({
+      id: "t-1",
+      workflow_id: "wf-1",
+      event_type: "sentry.alert.fired",
+      sentry_project_filter: JSON.stringify(["backend"]),
+      level_filter: JSON.stringify(["error"]),
+      fingerprint_filter: "checkout",
+      environment_filter: JSON.stringify(["production"]),
+      release_filter: JSON.stringify(["abc123"]),
+      action: "start_session",
+    });
+
+    expect((await resolveWorkflow(makeEnv(db), sentryEvent()))?.trigger.id).toBe("t-1");
+    expect(await resolveWorkflow(makeEnv(db), sentryEvent({ sentry_level: "info" } as Partial<EventTuple>))).toBeNull();
+    expect(await resolveWorkflow(makeEnv(db), sentryEvent({ sentry_fingerprint: ["other"] } as Partial<EventTuple>))).toBeNull();
   });
 });
 
