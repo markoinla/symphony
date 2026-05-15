@@ -24,6 +24,22 @@ describe("SubjectRefSchema", () => {
     expect(parsed.success).toBe(false);
   });
 
+  it("accepts github_issue subjects with canonical issue fields", () => {
+    const parsed = SubjectRefSchema.safeParse({
+      kind: "github_issue",
+      repo: "acme/widgets",
+      number: 12,
+      title: "Bug report",
+      body: "broken",
+      state: "open",
+      labels: ["bug"],
+      author: "octocat",
+      assignees: ["hubot"],
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
   it("accepts api.invoke events with generic subjects and context", () => {
     const parsed = EventTupleSchema.safeParse({
       event_type: "api.invoke",

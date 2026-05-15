@@ -688,6 +688,71 @@ describe("resolveWorkflow — github_pr scope filters", () => {
   });
 });
 
+describe("resolveWorkflow — github_issue scope filters", () => {
+  function githubIssue(overrides: Partial<EventTuple> = {}): EventTuple {
+    return {
+      event_type: "github.issue.commented",
+      organization_id: "org-1",
+      team_id: null,
+      project_id: null,
+      user_id: null,
+      assignee_id: "hubot",
+      labels: ["bug", "agent"],
+      issue: null,
+      actor_id: "monalisa",
+      subject: {
+        kind: "github_issue",
+        repo: "acme/widgets",
+        number: 7,
+        title: "Fix issue",
+        body: "Details",
+        state: "open",
+        labels: ["bug", "agent"],
+        author: "octocat",
+        assignees: ["hubot", "monalisa"],
+      },
+      repo: "acme/widgets",
+      author: "octocat",
+      comment: "/symphony help",
+      comment_id: "comment-1",
+      ...overrides,
+    } as EventTuple;
+  }
+
+  it("matches repo, label, author, assignee, and comment_match filters", async () => {
+    const db = new MockResolverDB();
+    db.addWorkflow({ id: "wf-gh-issue", organization_id: "org-1" });
+    db.addTrigger({
+      id: "t-gh-issue",
+      workflow_id: "wf-gh-issue",
+      event_type: "github.issue.commented",
+      repo_filter: JSON.stringify(["acme/widgets"]),
+      author_filter: JSON.stringify(["octocat"]),
+      assignee_filter: JSON.stringify(["monalisa"]),
+      label_filter: JSON.stringify(["agent"]),
+      comment_match: "^/symphony\\b",
+      action: "start_session",
+    });
+
+    const hit = await resolveWorkflow(makeEnv(db), githubIssue());
+    expect(hit?.trigger.id).toBe("t-gh-issue");
+
+    const withSubject = (patch: Record<string, unknown>) => {
+      const event = githubIssue();
+      return {
+        ...event,
+        subject: { ...(event.subject as Record<string, unknown>), ...patch },
+      } as EventTuple;
+    };
+
+    expect(await resolveWorkflow(makeEnv(db), withSubject({ repo: "other/repo" }))).toBeNull();
+    expect(await resolveWorkflow(makeEnv(db), withSubject({ author: "someone" }))).toBeNull();
+    expect(await resolveWorkflow(makeEnv(db), withSubject({ assignees: ["hubot"] }))).toBeNull();
+    expect(await resolveWorkflow(makeEnv(db), githubIssue({ labels: ["bug"] }))).toBeNull();
+    expect(await resolveWorkflow(makeEnv(db), githubIssue({ comment: "hello" }))).toBeNull();
+  });
+});
+
 describe("resolveWorkflow — workflow status / trigger.enabled gating", () => {
   it("draft workflows are not considered", async () => {
     const db = new MockResolverDB();

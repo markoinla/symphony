@@ -104,7 +104,7 @@ export async function dispatchTrigger(
   if (!project && configuredProjectId) {
     project = await projectStore.getById(configuredProjectId, orgId);
   }
-  if (!project && subject?.kind === "github_pr") {
+  if (!project && (subject?.kind === "github_pr" || subject?.kind === "github_issue")) {
     const projects = await projectStore.listByOrg(orgId);
     project =
       projects.find((p) => repoUrlMatchesFullName(p.repo_url, subject.repo)) ??
@@ -177,7 +177,11 @@ export async function dispatchTrigger(
       linearIssueId: null,
       linearIssueIdentifier: null,
       linearIssueTitle:
-        subject?.kind === "generic" ? subject.external_id : workflow.name,
+        subject?.kind === "generic"
+          ? subject.external_id
+          : subject?.kind === "github_issue"
+            ? subject.title
+            : workflow.name,
       status: "running",
       triggeredBy: args.source ?? "api",
       team: project.linear_team_name || project.linear_team_id,
@@ -211,7 +215,11 @@ export async function dispatchTrigger(
           maxTurns: workflow.max_turns,
           scope,
           issueIdentifier:
-            subject?.kind === "generic" ? subject.external_id : sessionId,
+            subject?.kind === "generic"
+              ? subject.external_id
+              : subject?.kind === "github_issue"
+                ? `${subject.repo}#${subject.number}`
+                : sessionId,
         },
       });
     } catch (e) {

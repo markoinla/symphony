@@ -23,6 +23,108 @@ class FakeKV {
   }
 }
 
+type ResolverRow = Record<string, string | number | null>;
+
+class ResolverFakeD1 extends FakeD1 {
+  workflows = new Map<string, ResolverRow>();
+  triggers: ResolverRow[] = [];
+
+  override prepare(sql: string): any {
+    if (/FROM workflow_triggers t\s+JOIN workflows w/i.test(sql.replace(/\s+/g, " "))) {
+      return new ResolverStatement(this);
+    }
+    return super.prepare(sql);
+  }
+}
+
+class ResolverStatement {
+  private bindings: unknown[] = [];
+
+  constructor(private db: ResolverFakeD1) {}
+
+  bind(...values: unknown[]) {
+    this.bindings = values;
+    return this;
+  }
+
+  async all<T>(): Promise<{ success: true; results: T[] }> {
+    const [eventType, orgId, teamId, userId, toState, fromState, labelName] =
+      this.bindings as [string, string | null, string | null, string | null, string | null, string | null, string | null];
+    const rows = this.db.triggers
+      .map((t) => ({ t, w: this.db.workflows.get(String(t.workflow_id)) }))
+      .filter(({ t, w }) => {
+        if (!w) return false;
+        const scope =
+          (w.organization_id != null && w.organization_id === orgId) ||
+          (w.team_id != null && w.team_id === teamId) ||
+          (w.user_id != null && w.user_id === userId);
+        return (
+          t.enabled === 1 &&
+          w.status === "published" &&
+          t.event_type === eventType &&
+          scope &&
+          (t.to_state == null || t.to_state === toState) &&
+          (t.from_state == null || t.from_state === fromState) &&
+          (t.label_name == null || t.label_name === labelName)
+        );
+      })
+      .map(({ t, w }) => ({
+        t_id: t.id,
+        t_workflow_id: t.workflow_id,
+        t_event_type: t.event_type,
+        t_to_state: t.to_state,
+        t_from_state: t.from_state,
+        t_label_name: t.label_name,
+        t_comment_match: t.comment_match,
+        t_team_filter: t.team_filter,
+        t_project_filter: t.project_filter,
+        t_label_filter: t.label_filter,
+        t_skip_label_filter: t.skip_label_filter,
+        t_assignee_filter: t.assignee_filter,
+        t_repo_filter: t.repo_filter,
+        t_branch_filter: t.branch_filter,
+        t_base_filter: t.base_filter,
+        t_draft_filter: t.draft_filter,
+        t_author_filter: t.author_filter,
+        t_action: t.action,
+        t_action_params: t.action_params,
+        t_priority: t.priority,
+        t_enabled: t.enabled,
+        t_created_at: t.created_at,
+        t_updated_at: t.updated_at,
+        w_id: w!.id,
+        w_organization_id: w!.organization_id,
+        w_team_id: w!.team_id,
+        w_user_id: w!.user_id,
+        w_name: w!.name,
+        w_description: w!.description,
+        w_engine: w!.engine,
+        w_model: w!.model,
+        w_max_turns: w!.max_turns,
+        w_max_continuations: w!.max_continuations,
+        w_allowed_tools: w!.allowed_tools,
+        w_disallowed_tools: w!.disallowed_tools,
+        w_allowed_domains: w!.allowed_domains,
+        w_mcp_servers: w!.mcp_servers,
+        w_permission_mode: w!.permission_mode,
+        w_additional_read_paths: w!.additional_read_paths,
+        w_additional_write_paths: w!.additional_write_paths,
+        w_hook_after_create: w!.hook_after_create,
+        w_hook_before_remove: w!.hook_before_remove,
+        w_hook_timeout_ms: w!.hook_timeout_ms,
+        w_prompt_template: w!.prompt_template,
+        w_version: w!.version,
+        w_status: w!.status,
+        w_published_at: w!.published_at,
+        w_created_at: w!.created_at,
+        w_updated_at: w!.updated_at,
+        scope_tier: w!.user_id != null ? 2 : w!.team_id != null ? 1 : 0,
+      }));
+    rows.sort((a, b) => Number(b.t_priority) - Number(a.t_priority));
+    return { success: true, results: rows as T[] };
+  }
+}
+
 interface WorkflowInstanceStub {
   status: ReturnType<typeof vi.fn>;
   sendEvent: ReturnType<typeof vi.fn>;
@@ -87,6 +189,146 @@ async function signedWebhookRequest(
     },
     body: raw,
   });
+}
+
+async function signedGitHubSourceRequest(
+  sourceId: string,
+  secret: string,
+  eventName: string,
+  body: Record<string, unknown>,
+): Promise<Request> {
+  const raw = JSON.stringify(body);
+  const sig = `sha256=${await computeLinearSignature(secret, raw)}`;
+  return new Request(`https://agent.example/webhook/source/${sourceId}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-GitHub-Event": eventName,
+      "X-GitHub-Delivery": crypto.randomUUID(),
+      "X-Hub-Signature-256": sig,
+    },
+    body: raw,
+  });
+}
+
+function seedGitHubTriggerDb(eventType: string, commentMatch?: string): ResolverFakeD1 {
+  const now = Math.floor(Date.now() / 1000);
+  const db = new ResolverFakeD1();
+  db.webhookSources.set("source-gh", {
+    id: "source-gh",
+    organization_id: "org-1",
+    kind: "github",
+    name: "GitHub",
+    secret: "github-secret",
+    config: null,
+    created_at: now,
+    updated_at: now,
+  });
+  db.projects.set("org-1:team-1", {
+    id: "project-1",
+    organization_id: "org-1",
+    linear_team_id: "team-1",
+    linear_team_name: "Team One",
+    repo_url: "https://github.com/acme/widgets.git",
+    default_branch: "main",
+    engine: "pi",
+    model: null,
+    max_turns: 10,
+    scope: "default",
+    system_prompt_override: null,
+    created_at: now,
+    updated_at: now,
+  });
+  db.workflows.set("workflow-1", {
+    id: "workflow-1",
+    organization_id: "org-1",
+    team_id: null,
+    user_id: null,
+    name: "GitHub issue workflow",
+    description: null,
+    engine: "pi",
+    model: null,
+    max_turns: 1,
+    max_continuations: null,
+    allowed_tools: null,
+    disallowed_tools: null,
+    allowed_domains: null,
+    mcp_servers: null,
+    permission_mode: null,
+    additional_read_paths: null,
+    additional_write_paths: null,
+    hook_after_create: null,
+    hook_before_remove: null,
+    hook_timeout_ms: 300000,
+    prompt_template: "Issue {{ issue.title }} {{ issue.body }} {{ issue.state }}",
+    version: 1,
+    status: "published",
+    published_at: now,
+    created_at: now,
+    updated_at: now,
+  });
+  db.triggers.push({
+    id: "trigger-1",
+    workflow_id: "workflow-1",
+    event_type: eventType,
+    to_state: null,
+    from_state: null,
+    label_name: null,
+    comment_match: commentMatch ?? null,
+    team_filter: null,
+    project_filter: null,
+    label_filter: JSON.stringify(["agent"]),
+    skip_label_filter: null,
+    assignee_filter: null,
+    repo_filter: JSON.stringify(["acme/widgets"]),
+    branch_filter: null,
+    base_filter: null,
+    draft_filter: null,
+    author_filter: JSON.stringify(["octocat"]),
+    action: "start_session",
+    action_params: null,
+    priority: 0,
+    enabled: 1,
+    created_at: now,
+    updated_at: now,
+  });
+  return db;
+}
+
+function githubIssueBody(overrides: Record<string, unknown> = {}) {
+  return {
+    action: "opened",
+    repository: { full_name: "acme/widgets" },
+    issue: {
+      number: 7,
+      title: "Fix issue",
+      body: "Issue details",
+      state: "open",
+      labels: [{ name: "agent" }],
+      user: { login: "octocat" },
+      assignees: [],
+    },
+    sender: { login: "octocat" },
+    ...overrides,
+  };
+}
+
+function githubIssueCommentBody(body: string) {
+  return {
+    action: "created",
+    repository: { full_name: "acme/widgets" },
+    issue: {
+      number: 7,
+      title: "Fix issue",
+      body: "Issue details",
+      state: "open",
+      labels: [{ name: "agent" }],
+      user: { login: "octocat" },
+      assignees: [],
+    },
+    comment: { id: 123, body },
+    sender: { login: "monalisa" },
+  };
 }
 
 function makeExecCtx(): ExecutionContext & {
@@ -245,6 +487,79 @@ describe("POST /webhook routing", () => {
       action: "completed",
     });
     expect(ctx.pending).toHaveLength(0);
+  });
+});
+
+describe("POST /webhook/source GitHub issue triggers", () => {
+  it("runs SessionRunner for a matching HMAC-signed issues.opened webhook", async () => {
+    const app = buildApp();
+    const kv = new FakeKV();
+    const sessionRunner = makeWorkflowStub();
+    const db = seedGitHubTriggerDb("github.issue.opened");
+
+    const res = await app.fetch(
+      await signedGitHubSourceRequest(
+        "source-gh",
+        "github-secret",
+        "issues",
+        githubIssueBody(),
+      ),
+      makeEnv(kv, {}, sessionRunner, db),
+      makeExecCtx(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      matched: true,
+      workflow_id: "workflow-1",
+      trigger_id: "trigger-1",
+      outcome: "start_session",
+    });
+    expect(sessionRunner.create).toHaveBeenCalledWith({
+      id: expect.any(String),
+      params: expect.objectContaining({
+        mode: "trigger",
+        issueIdentifier: "acme/widgets#7",
+        prompt: "Issue Fix issue Issue details open",
+      }),
+    });
+  });
+
+  it("fires issue_comment.created only when comment_match matches", async () => {
+    const app = buildApp();
+    const kv = new FakeKV();
+    const sessionRunner = makeWorkflowStub();
+    const db = seedGitHubTriggerDb("github.issue.commented", "^/symphony\\b");
+    const env = makeEnv(kv, {}, sessionRunner, db);
+
+    const matched = await app.fetch(
+      await signedGitHubSourceRequest(
+        "source-gh",
+        "github-secret",
+        "issue_comment",
+        githubIssueCommentBody("/symphony help"),
+      ),
+      env,
+      makeExecCtx(),
+    );
+    expect(matched.status).toBe(200);
+    expect(await matched.json()).toMatchObject({ matched: true });
+    expect(sessionRunner.create).toHaveBeenCalledTimes(1);
+
+    const skipped = await app.fetch(
+      await signedGitHubSourceRequest(
+        "source-gh",
+        "github-secret",
+        "issue_comment",
+        githubIssueCommentBody("hello"),
+      ),
+      env,
+      makeExecCtx(),
+    );
+    expect(skipped.status).toBe(200);
+    expect(await skipped.json()).toMatchObject({ matched: false });
+    expect(sessionRunner.create).toHaveBeenCalledTimes(1);
   });
 });
 

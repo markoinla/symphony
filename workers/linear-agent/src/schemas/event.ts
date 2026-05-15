@@ -35,6 +35,10 @@ export const eventTypeSchema = z.enum([
   "github.pr.merged",
   "github.pr.closed",
   "github.pr.review_requested",
+  "github.issue.opened",
+  "github.issue.commented",
+  "github.issue.labeled",
+  "github.issue.closed",
 ]);
 export type EventType = z.infer<typeof eventTypeSchema>;
 
@@ -87,17 +91,22 @@ export const linearIssueSubjectSchema = z.object({
 
 export const githubIssueSubjectSchema = z.object({
   kind: z.literal("github_issue"),
-  id: z.string(),
+  // Canonical SYM-366 issue SubjectRef fields.
+  repo: z.string().default(""),
+  number: z.number().int().default(0),
+  title: z.string().default(""),
+  body: z.string().default(""),
+  state: z.enum(["open", "closed"]).default("open"),
+  labels: z.array(z.string()).default([]),
+  author: z.string().default(""),
+  assignees: z.array(z.string()).default([]),
+  // Legacy generic GitHub subject fields retained for API.invoke previews and
+  // prompt rendering compatibility with the generalized SubjectRef foundation.
+  id: z.string().optional(),
   external_id: z.string().nullable().optional(),
-  number: z.number().int().nullable().optional(),
-  title: z.string().nullable().optional(),
-  body: z.string().nullable().optional(),
   description: z.string().nullable().optional(),
-  state: z.string().nullable().optional(),
   url: z.string().nullable().optional(),
   repository: z.string().nullable().optional(),
-  labels: z.array(z.string()).default([]),
-  assignees: z.array(z.string()).default([]),
 });
 
 export const githubPrSubjectSchema = z.object({
@@ -277,6 +286,36 @@ export const githubPrReviewRequestedEventSchema = z.object({
   ...githubPrFields,
 });
 
+const githubIssueFields = {
+  ...scopeFields,
+  repo: z.string(),
+  author: z.string(),
+} as const;
+
+export const githubIssueOpenedEventSchema = z.object({
+  event_type: z.literal("github.issue.opened"),
+  ...githubIssueFields,
+});
+
+export const githubIssueCommentedEventSchema = z.object({
+  event_type: z.literal("github.issue.commented"),
+  ...githubIssueFields,
+  comment: z.string(),
+  comment_id: z.string().nullable().optional(),
+});
+
+export const githubIssueLabeledEventSchema = z.object({
+  event_type: z.literal("github.issue.labeled"),
+  ...githubIssueFields,
+  label_name: z.string(),
+  label_id: z.string().nullable().optional(),
+});
+
+export const githubIssueClosedEventSchema = z.object({
+  event_type: z.literal("github.issue.closed"),
+  ...githubIssueFields,
+});
+
 // EventTuple — discriminated union by event_type. The resolver,
 // dispatcher, and renderer all consume this shape.
 export const EventTupleSchema = z.discriminatedUnion("event_type", [
@@ -292,6 +331,10 @@ export const EventTupleSchema = z.discriminatedUnion("event_type", [
   githubPrMergedEventSchema,
   githubPrClosedEventSchema,
   githubPrReviewRequestedEventSchema,
+  githubIssueOpenedEventSchema,
+  githubIssueCommentedEventSchema,
+  githubIssueLabeledEventSchema,
+  githubIssueClosedEventSchema,
 ]);
 export type EventTuple = z.infer<typeof EventTupleSchema>;
 

@@ -158,7 +158,7 @@ function passesCommentMatch(raw: RawJoinedRow, event: EventTuple): boolean {
   const pattern = raw.t_comment_match;
   if (pattern == null) return true;
   const body =
-    event.event_type === "comment_added"
+    event.event_type === "comment_added" || event.event_type === "github.issue.commented"
       ? (event as { comment?: string }).comment ?? ""
       : "";
   try {
@@ -196,15 +196,21 @@ function passesScopeFilters(raw: RawJoinedRow, event: EventTuple): boolean {
   }
   const assigneeFilter = parseStringArray(raw.t_assignee_filter);
   if (assigneeFilter) {
-    const id = event.assignee_id ?? null;
-    if (!id || !assigneeFilter.includes(id)) return false;
+    const ids = eventAssignees(event);
+    if (ids.length === 0 || !assigneeFilter.some((id) => ids.includes(id))) return false;
   }
 
   const subject = event.subject;
-  const repo = subject?.kind === "github_pr" ? subject.repo : eventString(event, "repo");
+  const repo =
+    subject?.kind === "github_pr" || subject?.kind === "github_issue"
+      ? subject.repo
+      : eventString(event, "repo");
   const branch = subject?.kind === "github_pr" ? subject.head : eventString(event, "branch");
   const base = subject?.kind === "github_pr" ? subject.base : eventString(event, "base");
-  const author = subject?.kind === "github_pr" ? subject.author : eventString(event, "author");
+  const author =
+    subject?.kind === "github_pr" || subject?.kind === "github_issue"
+      ? subject.author
+      : eventString(event, "author");
   const draft = subject?.kind === "github_pr" ? subject.draft : eventBoolean(event, "draft");
 
   const repoFilter = parseStringArray(raw.t_repo_filter);
@@ -218,6 +224,11 @@ function passesScopeFilters(raw: RawJoinedRow, event: EventTuple): boolean {
   if (authorFilter && (!author || !authorFilter.includes(author))) return false;
 
   return true;
+}
+
+function eventAssignees(event: EventTuple): string[] {
+  if (event.subject?.kind === "github_issue") return event.subject.assignees;
+  return event.assignee_id ? [event.assignee_id] : [];
 }
 
 function eventString(event: EventTuple, key: string): string | null {

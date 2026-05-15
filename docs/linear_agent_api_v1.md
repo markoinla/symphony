@@ -203,8 +203,8 @@ in place because they don't have versions.
 ```ts
 type SubjectRef =
   | { kind: "linear_issue"; id: string; identifier?: string | null; title?: string | null; description?: string | null; state?: string | null; labels?: string[]; assignee_id?: string | null; parent_issue?: unknown; comments?: unknown[]; attachments?: unknown[] }
-  | { kind: "github_issue"; id: string; number?: number | null; title?: string | null; body?: string | null; state?: string | null; labels?: string[]; assignees?: string[]; repository?: string | null }
-  | { kind: "github_pr"; id: string; number?: number | null; title?: string | null; body?: string | null; state?: string | null; branch?: string | null; base_branch?: string | null; repository?: string | null }
+  | { kind: "github_issue"; repo: string; number: number; title: string; body: string; state: "open" | "closed"; labels: string[]; author: string; assignees: string[]; id?: string; repository?: string | null }
+  | { kind: "github_pr"; repo: string; number: number; title: string; body: string; state: "open" | "closed" | "merged"; base: string; head: string; draft: boolean; labels: string[]; author: string; reviewers: string[]; head_sha: string; id?: string; branch?: string | null; base_branch?: string | null; repository?: string | null }
   | { kind: "sentry_event"; id: string; title?: string | null; message?: string | null; culprit?: string | null; project?: string | null; level?: string | null; payload?: Record<string, unknown> }
   | { kind: "generic"; external_id: string; title?: string | null; payload: Record<string, unknown> }
 

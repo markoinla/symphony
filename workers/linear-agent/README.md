@@ -149,19 +149,27 @@ Other keys (e.g. `tracker.api_key`, `proxy.enabled`, `domain`) are
 accepted as-is — the Advanced tab on the dashboard exposes them
 generically.
 
-## GitHub PR trigger webhooks
+## GitHub trigger webhooks
 
 GitHub sources are registered through `/api/v1/webhook-sources` (write scope) or
 from the dashboard Integrations page. The create response returns a copy-once
 `secret` plus an inbound URL (`/webhook/source/:id`). Configure that URL in
 GitHub with `application/json` payloads and the HMAC secret; Symphony verifies
-`X-Hub-Signature-256` before normalizing supported `pull_request` actions into
-`github_pr` subjects:
+`X-Hub-Signature-256` before normalizing supported events.
+
+Supported `pull_request` actions normalize into `github_pr` subjects:
 
 - `opened` → `github.pr.opened`
 - `closed` with `pull_request.merged === true` → `github.pr.merged`
 - `closed` otherwise → `github.pr.closed`
 - `review_requested` → `github.pr.review_requested`
+
+Supported issue events normalize into `github_issue` subjects:
+
+- `issues.opened` → `github.issue.opened`
+- `issues.labeled` → `github.issue.labeled`
+- `issues.closed` → `github.issue.closed`
+- `issue_comment.created` → `github.issue.commented`
 
 GitHub source adapters stay source-pure: they do not parse branch names or look
 up Linear issues automatically. Workflows that need cross-source context should
