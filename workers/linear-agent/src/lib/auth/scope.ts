@@ -11,6 +11,7 @@
 //   read   — all GETs
 //   write  — mutations on workflows/triggers/projects/settings
 //   admin  — token CRUD, integrations writes, destructive admin
+//   triggers:invoke — direct API trigger invocation
 //
 // Full spec: docs/linear_agent_api_v1.md ("Auth → Scope matrix").
 
@@ -20,7 +21,7 @@ import { respondError } from "../responses";
 import type { AuthContext, AuthVariables } from "./context";
 import type { Env } from "../../index";
 
-export type Scope = "read" | "write" | "admin";
+export type Scope = "read" | "write" | "admin" | "triggers:invoke";
 
 export function hasScope(auth: AuthContext, scope: Scope): boolean {
   return auth.scopes.includes(scope) || auth.scopes.includes("*");

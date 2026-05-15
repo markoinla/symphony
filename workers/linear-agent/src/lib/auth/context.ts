@@ -47,7 +47,7 @@ export async function resolveAuth(
       // still honored by hasScope() for backward compatibility with
       // any internal caller that still emits it, but new code uses
       // the explicit set.
-      scopes: ["read", "write", "admin"],
+      scopes: ["read", "write", "admin", "triggers:invoke"],
       orgId: user.organizationId,
     };
   }

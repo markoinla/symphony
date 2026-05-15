@@ -100,7 +100,7 @@ helper through and adjust tests.
 ### Two credential surfaces
 
 1. **Session cookie** (Better Auth). Dashboard SPA. Resolved to
-   `actor.kind='user'`, `scopes=['read','write','admin']`.
+   `actor.kind='user'`, `scopes=['read','write','admin','triggers:invoke']`.
 2. **Bearer token** (`Authorization: Bearer <tok>`). MCP, CI, scripts.
    Resolved to `actor.kind='token'`, scopes from the token row.
 
@@ -114,6 +114,7 @@ Both produce the same `AuthContext`. Handlers downstream call
 | `read`  | All `GET` routes                                            |
 | `write` | Mutations on workflows, triggers, projects, settings        |
 | `admin` | Token CRUD; integrations writes; future destructive admin   |
+| `triggers:invoke` | Direct API trigger invocation via `POST /api/v1/triggers/:id/invoke` |
 
 Scope checks happen in the route, not the middleware — the middleware
 only proves an `AuthContext`. A handler may also enforce per-resource
@@ -129,7 +130,7 @@ DELETE /api/v1/api-tokens/:id      (admin) revoke
 
 Issuance:
 
-- `POST /api/v1/api-tokens` body: `{ name, scopes: ['read'|'write'|'admin'][] }`
+- `POST /api/v1/api-tokens` body: `{ name, scopes: ['read'|'write'|'admin'|'triggers:invoke'][] }`
 - Server generates `tok_<base64url(32 bytes)>`, hashes (SHA-256), inserts
   into `api_tokens` (table already exists, see migration 0002_workflows.sql).
 - Response: `{ token: { id, name, scopes, created_at, plaintext } }`.
@@ -187,6 +188,7 @@ sandbox dispatcher for trigger-fired sessions. Non-empty `allowed_domains`,
 GET    /api/v1/workflows/:id/triggers    (read)
 POST   /api/v1/workflows/:id/triggers    (write) Idempotency-Key
 GET    /api/v1/triggers/:id              (read)
+POST   /api/v1/triggers/:id/invoke       (triggers:invoke) Idempotency-Key
 PUT    /api/v1/triggers/:id              (write)
 DELETE /api/v1/triggers/:id              (write)
 ```
@@ -196,7 +198,24 @@ error envelope). No state-machine gate on triggers — they're editable
 in place because they don't have versions.
 
 **Schemas:** `TriggerCreateSchema`, `TriggerUpdateSchema` in
-`src/schemas/trigger.ts`.
+`src/schemas/trigger.ts`. Direct invocation accepts:
+
+```ts
+type SubjectRef =
+  | { kind: "linear_issue"; id: string; identifier?: string | null; title?: string | null; description?: string | null; state?: string | null; labels?: string[]; assignee_id?: string | null; parent_issue?: unknown; comments?: unknown[]; attachments?: unknown[] }
+  | { kind: "generic"; external_id: string; payload: Record<string, unknown> }
+
+POST /api/v1/triggers/:id/invoke
+Authorization: Bearer <token with triggers:invoke>
+Idempotency-Key: <client key>
+
+{ "subject": SubjectRef, "context"?: Record<string, unknown> }
+```
+
+The route queues SessionRunner and returns `202 { "session_id": "..." }`.
+`linear_issue` subjects use Linear AgentSession/timeline behavior; `generic`
+subjects run headlessly with `source: "api"` in dashboard sessions and no
+Linear API side effects.
 
 ### 3. Projects
 

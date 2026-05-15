@@ -4,12 +4,17 @@
 // The server stores only the SHA-256 hash; plaintext is returned once
 // on the create response and never again.
 //
-// Scope set is closed — exactly the coarse triplet from
-// docs/linear_agent_api_v1.md ("Auth → Scope matrix").
+// Scope set is closed — coarse management scopes plus narrow direct
+// invocation scopes from docs/linear_agent_api_v1.md ("Auth → Scope matrix").
 
 import { z } from "zod";
 
-export const apiTokenScopeSchema = z.enum(["read", "write", "admin"]);
+export const apiTokenScopeSchema = z.enum([
+  "read",
+  "write",
+  "admin",
+  "triggers:invoke",
+]);
 export type ApiTokenScope = z.infer<typeof apiTokenScopeSchema>;
 
 export const ApiTokenCreateSchema = z.object({

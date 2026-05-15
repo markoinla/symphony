@@ -29,6 +29,7 @@ import type {
 } from '@/lib/api/workflow-types'
 
 const eventTypeOptions: { value: EventType; label: string }[] = [
+  { value: 'api.invoke', label: 'API invoke' },
   { value: 'state_entered', label: 'State entered' },
   { value: 'state_exited', label: 'State exited' },
   { value: 'comment_added', label: 'Comment added' },
@@ -46,6 +47,13 @@ const actionOptions: { value: TriggerAction; label: string }[] = [
   { value: 'post_comment', label: 'Post comment' },
   { value: 'transition_to', label: 'Transition to' },
 ]
+
+function expectedSubjectKinds(trigger: Trigger): string {
+  if (trigger.expected_subject_kinds?.length) {
+    return trigger.expected_subject_kinds.join(', ')
+  }
+  return trigger.event_type === 'api.invoke' ? 'linear_issue, generic' : 'linear_issue'
+}
 
 export function TriggerRow({
   trigger,
@@ -157,6 +165,10 @@ export function TriggerRow({
           match columns: to_state, from_state, label_name, comment_match.
           Assignee transitions match via scope filters only. */}
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <p className="col-span-full text-xs text-th-text-4">
+          Expected subject kinds: {expectedSubjectKinds(trigger)}
+        </p>
+
         {(trigger.event_type === 'state_entered' ||
           trigger.event_type === 'state_exited') && (
           <>

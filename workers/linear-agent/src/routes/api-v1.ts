@@ -20,6 +20,7 @@ import { requireAuth } from "../lib/auth/context";
 import { hashToken } from "../lib/auth/bearer";
 import { requireScope, requireScopeForMethod } from "../lib/auth/scope";
 import { respondError } from "../lib/responses";
+import { dispatchTrigger } from "../lib/dispatch-trigger";
 import { resolveWorkflow } from "../lib/workflows/resolver";
 import { renderPrompt } from "../lib/workflows/render";
 import { CredentialStore } from "../lib/credentials";
@@ -43,7 +44,13 @@ import {
   TriggerCreateSchema,
   TriggerUpdateSchema,
 } from "../schemas/trigger";
-import { eventTupleSchema } from "../schemas/event";
+import {
+  eventTupleSchema,
+  SubjectRefSchema,
+  type EventTuple,
+} from "../schemas/event";
+import type { Trigger } from "../schemas/trigger";
+import type { Workflow } from "../schemas/workflow";
 import {
   unsupportedRuntimePolicyIssues,
   WorkflowCreateSchema,
@@ -192,6 +199,8 @@ function serializeTrigger(row: TriggerRow): Record<string, unknown> {
     action_params: asJsonObject(row.action_params),
     priority: row.priority,
     enabled: row.enabled !== 0,
+    expected_subject_kinds:
+      row.event_type === "api.invoke" ? ["linear_issue", "generic"] : ["linear_issue"],
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -201,6 +210,11 @@ function serializeTrigger(row: TriggerRow): Record<string, unknown> {
 // this since it's API-layer-only.
 const PreviewRequestSchema = z.object({
   issue_id: z.string().min(1),
+});
+
+const TriggerInvokeRequestSchema = z.object({
+  subject: SubjectRefSchema,
+  context: z.record(z.string(), z.unknown()).optional().default({}),
 });
 
 const WEBHOOK_BODY_LIST_LIMIT = 8 * 1024;
@@ -263,7 +277,18 @@ export function buildApiV1Router() {
   });
   app.use("/api/v1/workflows", rwScopes);
   app.use("/api/v1/workflows/*", rwScopes);
-  app.use("/api/v1/triggers/*", rwScopes);
+  app.use("/api/v1/triggers/*", async (c, next) => {
+    if (
+      c.req.method === "POST" &&
+      c.req.path.match(/^\/api\/v1\/triggers\/[^/]+\/invoke$/)
+    ) {
+      const denied = requireScope(c, "triggers:invoke");
+      if (denied) return denied;
+      await next();
+      return;
+    }
+    return rwScopes(c, next);
+  });
   app.use("/api/v1/webhooks", rwScopes);
   app.use("/api/v1/webhooks/*", rwScopes);
   app.use("/api/v1/webhook-events", rwScopes);
@@ -746,6 +771,118 @@ export function buildApiV1Router() {
     if (!row) return respondError(c, "internal_error", "Insert failed.");
     return c.json({ trigger: serializeTrigger(row) }, 201);
   });
+
+  app.post("/api/v1/triggers/:id/invoke", async (c) =>
+    withIdempotency(c, `POST /api/v1/triggers/${c.req.param("id")}/invoke`, async () => {
+      const auth = c.get("auth");
+      const triggerId = c.req.param("id");
+      const started = Date.now();
+      const raw = await c.req.json().catch(() => null);
+      const rawBody = raw === null ? null : JSON.stringify(raw);
+      const audit = new WebhookEventStore(c.env.DB);
+      const auditId = await audit.insert({
+        receivedAt: nowSec(),
+        organizationId: auth.orgId,
+        webhookId: c.req.header("Idempotency-Key") ?? null,
+        envelopeType: "api.invoke",
+        envelopeAction: "trigger.invoke",
+        signatureOk: true,
+        rawBody,
+        eventSummary: `${auth.actor.kind}:${auth.actor.id} invoked ${triggerId}`,
+      });
+
+      const parsed = TriggerInvokeRequestSchema.safeParse(raw);
+      if (!parsed.success) {
+        await audit.update(auditId, {
+          dispatchedAction: "validation_failed",
+          error: "validation_failed",
+          latencyMs: Date.now() - started,
+        });
+        return respondError(
+          c,
+          "validation_failed",
+          undefined,
+          parsed.error.issues,
+        );
+      }
+
+      const joined = await getTriggerAndWorkflow(c.env.DB, triggerId, auth.orgId);
+      if (!joined) {
+        await audit.update(auditId, {
+          dispatchedAction: "not_found",
+          error: "not_found",
+          latencyMs: Date.now() - started,
+        });
+        return respondError(c, "not_found");
+      }
+      const { trigger, workflow } = joined;
+      if (!trigger.enabled) {
+        await audit.update(auditId, {
+          dispatchedAction: "not_found",
+          error: "disabled_trigger",
+          latencyMs: Date.now() - started,
+        });
+        return respondError(c, "not_found");
+      }
+      if (trigger.event_type !== "api.invoke") {
+        await audit.update(auditId, {
+          matchedWorkflowId: workflow.id,
+          matchedTriggerId: trigger.id,
+          dispatchedAction: "validation_failed",
+          error: "wrong_event_type",
+          latencyMs: Date.now() - started,
+        });
+        return respondError(
+          c,
+          "validation_failed",
+          "Only triggers with event_type `api.invoke` can be invoked directly.",
+        );
+      }
+
+      const { subject, context } = parsed.data;
+      const event: EventTuple = {
+        event_type: "api.invoke",
+        organization_id: auth.orgId,
+        team_id:
+          subject.kind === "linear_issue"
+            ? (subject.team_id ?? workflow.team_id ?? null)
+            : (workflow.team_id ?? null),
+        project_id: subject.kind === "linear_issue" ? subject.project_id ?? null : null,
+        user_id: workflow.user_id ?? null,
+        assignee_id: subject.kind === "linear_issue" ? subject.assignee_id ?? null : null,
+        labels: subject.kind === "linear_issue" ? subject.labels : [],
+        subject,
+        issue: subject.kind === "linear_issue" ? subject : null,
+        actor_id: auth.actor.id,
+        context,
+      };
+
+      const result = await dispatchTrigger(c.env, {
+        workflow,
+        trigger,
+        event,
+        context,
+        source: "api",
+      });
+
+      await audit.update(auditId, {
+        matchedWorkflowId: workflow.id,
+        matchedTriggerId: trigger.id,
+        dispatchedAction: result.outcome,
+        agentSessionId: result.agentSessionId ?? null,
+        error: result.error ?? null,
+        latencyMs: Date.now() - started,
+      });
+
+      if (result.outcome === "error") {
+        return respondError(c, "internal_error", result.error ?? "dispatch_failed");
+      }
+      if (result.outcome === "no_handler") {
+        return respondError(c, "validation_failed", result.error ?? "no_handler");
+      }
+      return c.json({ session_id: result.agentSessionId }, 202);
+    }),
+  );
 
   app.get("/api/v1/triggers/:id", async (c) => {
     const auth = c.get("auth");
@@ -1294,6 +1431,75 @@ async function getTrigger(
     .prepare(`SELECT ${TRIGGER_COLS} FROM workflow_triggers WHERE id = ?`)
     .bind(id)
     .first<TriggerRow>();
+}
+
+function hydrateWorkflowFromRow(row: WorkflowRow): Workflow {
+  return {
+    id: row.id,
+    organization_id: row.organization_id,
+    team_id: row.team_id,
+    user_id: row.user_id,
+    name: row.name,
+    description: row.description,
+    engine: row.engine,
+    model: row.model,
+    max_turns: row.max_turns,
+    max_continuations: row.max_continuations,
+    allowed_tools: asJsonArray(row.allowed_tools) as string[] | null,
+    disallowed_tools: asJsonArray(row.disallowed_tools) as string[] | null,
+    allowed_domains: asJsonArray(row.allowed_domains) as string[] | null,
+    mcp_servers: asJsonArray(row.mcp_servers) as Workflow["mcp_servers"],
+    permission_mode: row.permission_mode,
+    additional_read_paths: asJsonArray(row.additional_read_paths) as string[] | null,
+    additional_write_paths: asJsonArray(row.additional_write_paths) as string[] | null,
+    hook_after_create: row.hook_after_create,
+    hook_before_remove: row.hook_before_remove,
+    hook_timeout_ms: row.hook_timeout_ms,
+    prompt_template: row.prompt_template,
+    version: row.version,
+    status: row.status as Workflow["status"],
+    published_at: row.published_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function hydrateTriggerFromRow(row: TriggerRow): Trigger {
+  return {
+    id: row.id,
+    workflow_id: row.workflow_id,
+    event_type: row.event_type as Trigger["event_type"],
+    to_state: row.to_state,
+    from_state: row.from_state,
+    label_name: row.label_name,
+    comment_match: row.comment_match,
+    team_filter: asJsonArray(row.team_filter) as string[] | null,
+    project_filter: asJsonArray(row.project_filter) as string[] | null,
+    label_filter: asJsonArray(row.label_filter) as string[] | null,
+    skip_label_filter: asJsonArray(row.skip_label_filter) as string[] | null,
+    assignee_filter: asJsonArray(row.assignee_filter) as string[] | null,
+    action: row.action as Trigger["action"],
+    action_params: asJsonObject(row.action_params),
+    priority: row.priority,
+    enabled: row.enabled !== 0,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+async function getTriggerAndWorkflow(
+  db: D1Database,
+  triggerId: string,
+  orgId: string,
+): Promise<{ trigger: Trigger; workflow: Workflow } | null> {
+  const triggerRow = await getTriggerWithOrg(db, triggerId, orgId);
+  if (!triggerRow) return null;
+  const workflowRow = await getWorkflow(db, triggerRow.workflow_id, orgId);
+  if (!workflowRow) return null;
+  return {
+    trigger: hydrateTriggerFromRow(triggerRow),
+    workflow: hydrateWorkflowFromRow(workflowRow),
+  };
 }
 
 // Trigger ↔ org enforcement: a caller can only operate on triggers

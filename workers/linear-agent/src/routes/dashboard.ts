@@ -13,6 +13,7 @@ function normalizeEpochSeconds(value: number | null): string | null {
 }
 
 function sessionSummaryRow(s: AgentSessionRecord) {
+  const config = parseConfigSnapshot(s.config_snapshot);
   return {
     id: s.id,
     linear_issue_id: s.linear_issue_id,
@@ -22,9 +23,30 @@ function sessionSummaryRow(s: AgentSessionRecord) {
     started_at: normalizeEpochSeconds(s.started_at),
     completed_at: normalizeEpochSeconds(s.completed_at),
     triggered_by: s.triggered_by,
+    source: config.source ?? s.triggered_by,
+    workflow_name: config.workflow_name ?? s.triggered_by,
     team: s.team,
     repo: s.repo,
   };
+}
+
+function parseConfigSnapshot(raw: string | null): {
+  source?: string;
+  workflow_name?: string;
+} {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return {
+      source: typeof parsed.source === "string" ? parsed.source : undefined,
+      workflow_name:
+        typeof parsed.workflow_name === "string"
+          ? parsed.workflow_name
+          : undefined,
+    };
+  } catch {
+    return {};
+  }
 }
 
 export function buildDashboardRouter() {

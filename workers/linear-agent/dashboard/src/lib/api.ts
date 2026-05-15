@@ -387,6 +387,8 @@ type WorkerSessionRow = {
   started_at: string | null
   completed_at: string | null
   triggered_by: string | null
+  source?: string | null
+  workflow_name?: string | null
   team: string | null
   repo: string | null
 }
@@ -434,7 +436,7 @@ export async function getSessions(params?: {
       worker_host: null,
       error: null,
       error_category: null,
-      workflow_name: s.triggered_by,
+      workflow_name: s.workflow_name ?? s.triggered_by ?? (s.source === 'api' ? 'API invocation' : null),
       github_branch: null,
       github_repo: s.repo,
       project_name: s.team,

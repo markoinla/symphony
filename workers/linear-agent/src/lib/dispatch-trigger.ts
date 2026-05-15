@@ -1,13 +1,15 @@
 /**
  * Dispatch the action a resolved (workflow, trigger) pair calls for.
  *
- * The implementation mints a Linear AgentSession on the source issue
- * and then queues the existing `mode: "agent_session"` SessionRunner
- * flow with a synthesized webhook envelope. This way trigger-initiated
- * runs render in Linear's issue timeline exactly the same way as
- * @-mention sessions — the agent posts thoughts/responses/errors to
- * Linear, attaches the PR, transitions the issue to Human Review on
- * success, etc.
+ * For Linear subjects, the implementation mints a Linear AgentSession
+ * on the source issue and then queues the existing `mode:
+ * "agent_session"` SessionRunner flow with a synthesized webhook
+ * envelope. This way Linear trigger-initiated runs render in Linear's
+ * issue timeline exactly the same way as @-mention sessions.
+ *
+ * For non-Linear subjects, dispatch queues SessionRunner's headless
+ * `mode: "trigger"` path. No Linear AgentSession is minted and no
+ * Linear streaming activities are posted.
  *
  * Today only `action = "start_session"` is implemented. Other action
  * kinds return `{ outcome: "no_handler" }` and the caller records
@@ -19,14 +21,17 @@ import {
   refreshInstallToken,
   refreshInstallTokenIfNeeded,
 } from "./install-token";
-import { LinearAgentInstallStore } from "./store";
+import {
+  AgentSessionStore,
+  LinearAgentInstallStore,
+  ProjectStore,
+} from "./store";
 
 // Conservative timeout floor for the dispatch path. Mirrors the
 // session-runner's `DEFAULT_TIMEOUT_MS` so a session-start-time refresh
 // uses the same safety window the runner itself does.
 const DISPATCH_RUN_TIMEOUT_MS = 10 * 60 * 1000;
 import { renderPrompt } from "./workflows/render";
-import { ProjectStore } from "./store";
 import type { Env } from "../index";
 import type { EventTuple } from "../schemas/event";
 import type { Trigger } from "../schemas/trigger";
@@ -52,7 +57,9 @@ export async function dispatchTrigger(
      * `agentSessionCreateOnIssue` mutation. The webhook handler
      * computes this once during tenant resolution and passes it in.
      */
-    linearOrganizationId: string;
+    linearOrganizationId?: string;
+    context?: Record<string, unknown>;
+    source?: "webhook" | "api";
   },
 ): Promise<DispatchResult> {
   const { workflow, trigger, event, linearOrganizationId } = args;
@@ -66,20 +73,35 @@ export async function dispatchTrigger(
     return { outcome: "error", error: "missing_org_id" };
   }
 
-  const teamId = event.team_id ?? event.issue?.team_id ?? null;
-  if (!teamId) {
-    return { outcome: "error", error: "missing_team_id" };
+  const subject = event.subject;
+  const issue =
+    subject?.kind === "linear_issue"
+      ? subject
+      : event.issue
+        ? { kind: "linear_issue" as const, ...event.issue }
+        : null;
+  const teamId = event.team_id ?? issue?.team_id ?? workflow.team_id ?? null;
+  const projectStore = new ProjectStore(env.DB);
+  let project = teamId ? await projectStore.getByTeamId(orgId, teamId) : null;
+  const actionParams =
+    trigger.action_params && typeof trigger.action_params === "object"
+      ? trigger.action_params
+      : null;
+  const configuredProjectId =
+    actionParams && typeof actionParams.project_id === "string"
+      ? actionParams.project_id
+      : null;
+  if (!project && configuredProjectId) {
+    project = await projectStore.getById(configuredProjectId, orgId);
   }
-
-  const project = await new ProjectStore(env.DB).getByTeamId(orgId, teamId);
+  if (!project && subject?.kind !== "linear_issue") {
+    project = (await projectStore.listByOrg(orgId))[0] ?? null;
+  }
   if (!project?.repo_url) {
-    return { outcome: "error", error: "no_project_for_team" };
+    return { outcome: "error", error: "no_project_for_trigger" };
   }
 
-  const issue = event.issue;
-  if (!issue) {
-    return { outcome: "error", error: "missing_issue" };
-  }
+  const isLinearSubject = !!issue && (subject?.kind === "linear_issue" || !subject);
 
   // Render the workflow's Liquid prompt template once on the dispatch
   // side. The rendered string flows into the synthesized webhook as
@@ -88,13 +110,30 @@ export async function dispatchTrigger(
   let prompt: string;
   try {
     prompt = await renderPrompt(workflow.prompt_template, {
-      issue,
+      issue:
+        issue ??
+        {
+          id:
+            subject?.kind === "generic"
+              ? subject.external_id
+              : `trigger-${trigger.id}`,
+          identifier:
+            subject?.kind === "generic" ? subject.external_id : trigger.id,
+          title: workflow.name,
+          description: "",
+          labels: [],
+          comments: [],
+        },
+      subject,
       attempt: 1,
-      // `prompt_context` is what the template renders for the "Issue
-      // body:" section. Without this the template's `{{ prompt_context }}`
-      // placeholder evaluates to an empty string and pi is left
-      // hallucinating the issue body from the title alone.
-      prompt_context: issue.description ?? "",
+      // `prompt_context` is what legacy templates render for the
+      // "Issue body:" section. For direct generic invocations, expose
+      // the caller context there too so existing prompts receive useful
+      // input even before they adopt `{{ context | json }}`.
+      prompt_context:
+        issue?.description ??
+        (args.context ? JSON.stringify(args.context, null, 2) : ""),
+      context: args.context ?? {},
       extra: {
         to_state:
           event.event_type === "state_entered" ? event.to_state : null,
@@ -110,6 +149,70 @@ export async function dispatchTrigger(
       outcome: "error",
       error: `render_failed: ${e instanceof Error ? e.message : String(e)}`,
     };
+  }
+
+  if (!isLinearSubject) {
+    const sessionId = crypto.randomUUID();
+    await new AgentSessionStore(env.DB).create({
+      id: sessionId,
+      organizationId: orgId,
+      projectId: project.id,
+      linearIssueId: null,
+      linearIssueIdentifier: null,
+      linearIssueTitle:
+        subject?.kind === "generic" ? subject.external_id : workflow.name,
+      status: "running",
+      triggeredBy: args.source ?? "api",
+      team: project.linear_team_name || project.linear_team_id,
+      repo: project.repo_url,
+      prompt,
+      configSnapshot: {
+        workflow_id: workflow.id,
+        workflow_name: workflow.name,
+        trigger_id: trigger.id,
+        source: args.source ?? "api",
+        subject,
+        context: args.context ?? {},
+      },
+    });
+
+    const scope = project.scope ?? env.DEFAULT_SCOPE ?? "default";
+    try {
+      await env.SESSION_RUNNER.create({
+        id: sessionId,
+        params: {
+          mode: "trigger",
+          sessionId,
+          organizationId: orgId,
+          workflow,
+          trigger,
+          event,
+          repoUrl: project.repo_url,
+          prompt,
+          engine: workflow.engine,
+          model: workflow.model,
+          maxTurns: workflow.max_turns,
+          scope,
+          issueIdentifier:
+            subject?.kind === "generic" ? subject.external_id : sessionId,
+        },
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (/instance.*exists|already/i.test(msg)) {
+        return { outcome: "start_session", agentSessionId: sessionId };
+      }
+      return { outcome: "error", error: `runner_create_failed: ${msg}` };
+    }
+
+    return { outcome: "start_session", agentSessionId: sessionId };
+  }
+
+  if (!issue) {
+    return { outcome: "error", error: "missing_issue" };
+  }
+  if (!linearOrganizationId) {
+    return { outcome: "error", error: "missing_linear_organization_id" };
   }
 
   // Resolve a fresh install access token. Linear tokens expire ~24h —
@@ -177,7 +280,7 @@ export async function dispatchTrigger(
         id: issue.id,
         identifier: issue.identifier ?? issue.id,
         title: issue.title ?? "",
-        teamId: issue.team_id ?? teamId,
+        teamId: issue.team_id ?? teamId ?? undefined,
       },
       promptContext: prompt,
     },

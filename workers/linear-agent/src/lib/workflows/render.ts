@@ -16,13 +16,15 @@
 
 import { Liquid } from "liquidjs";
 
-import type { IssueRef } from "../../schemas/event";
+import type { IssueRef, SubjectRef } from "../../schemas/event";
 
 export interface PromptContext {
   issue: IssueRef;
+  subject?: SubjectRef;
   attempt: number;
   prompt_context?: string | null;
   new_comments?: Array<{ id: string; body: string; author_id?: string | null }>;
+  context?: Record<string, unknown>;
   // Free-form extras merged into the Liquid scope. Event-specific
   // fields like `to_state` or `label_name` are passed here.
   extra?: Record<string, unknown>;
@@ -40,9 +42,11 @@ export async function renderPrompt(
 ): Promise<string> {
   const scope = {
     issue: context.issue,
+    subject: context.subject ?? context.issue,
     attempt: context.attempt,
     prompt_context: context.prompt_context ?? "",
     new_comments: context.new_comments ?? [],
+    context: context.context ?? {},
     ...(context.extra ?? {}),
   };
   return await engine.parseAndRender(template, scope);

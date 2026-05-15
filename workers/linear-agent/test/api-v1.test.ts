@@ -1670,6 +1670,29 @@ describe("scope enforcement", () => {
     expect(body.error).toBe("forbidden");
   });
 
+  it("token without triggers:invoke cannot invoke a trigger", async () => {
+    asAnonymous();
+    const db = new ApiD1();
+    await seedToken(db, "tok-write", ["write"]);
+
+    const res = await buildApp().fetch(
+      new Request("https://agent.example/api/v1/triggers/missing/invoke", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer tok-write",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          subject: { kind: "generic", external_id: "nightly", payload: {} },
+        }),
+      }),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+
+    expect(res.status).toBe(403);
+  });
+
   it("write-scoped token cannot mint a new api-token (admin required)", async () => {
     asAnonymous();
     const db = new ApiD1();

@@ -48,6 +48,10 @@ export const TriggerSchema = z.object({
 
   priority: z.number().int(),
   enabled: z.boolean(),
+  expected_subject_kinds: z
+    .array(z.enum(["linear_issue", "generic"]))
+    .nullable()
+    .optional(),
 
   created_at: z.number().int(),
   updated_at: z.number().int(),
