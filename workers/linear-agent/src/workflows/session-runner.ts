@@ -44,6 +44,7 @@ import {
   DispatcherClient,
   DispatcherError,
   deriveBranchFromIssueIdentifier,
+  dispatchBranchForSubject,
   type NormalizedEvent,
   type RunCredentials,
 } from "../lib/dispatcher";
@@ -1001,16 +1002,10 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         ? withLinearGraphqlReference(params.prompt, { issueIdentifier })
         : params.prompt;
 
-    // A GitHub PR already has a real head branch — check that out so the
-    // agent works on the PR's actual diff and pushes follow-up commits
-    // back to the same PR. Other subject kinds (github_issue, generic,
-    // sentry) have no pre-existing branch, so derive a stable per-issue
-    // working branch from the identifier as before.
-    const triggerSubject = params.event.subject;
-    const dispatchBranch =
-      triggerSubject?.kind === "github_pr" && triggerSubject.head
-        ? triggerSubject.head
-        : deriveBranchFromIssueIdentifier(issueIdentifier);
+    const dispatchBranch = dispatchBranchForSubject(
+      params.event.subject,
+      issueIdentifier,
+    );
 
     const githubAppInstallationId: number | null = await step.do(
       "trigger-load-github-install",

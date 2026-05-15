@@ -5,7 +5,14 @@ import {
   DispatcherError,
   computeSignature,
   deriveBranchFromIssueIdentifier,
+  dispatchBranchForSubject,
 } from "../src/lib/dispatcher";
+import {
+  genericSubjectSchema,
+  githubIssueSubjectSchema,
+  githubPrSubjectSchema,
+  linearIssueSubjectSchema,
+} from "../src/schemas/event";
 
 /**
  * The pinned vector below is the same one the Elixir client and the
@@ -43,6 +50,60 @@ describe("deriveBranchFromIssueIdentifier", () => {
   it("returns null when identifier produces nothing usable", () => {
     expect(deriveBranchFromIssueIdentifier("")).toBeNull();
     expect(deriveBranchFromIssueIdentifier("---")).toBeNull();
+  });
+});
+
+describe("dispatchBranchForSubject", () => {
+  it("checks out the PR head branch for github_pr subjects", () => {
+    const subject = githubPrSubjectSchema.parse({
+      kind: "github_pr",
+      repo: "markoinla/symphony",
+      number: 234,
+      head: "test/linear-agent-workflow-pr",
+      base: "main",
+    });
+    expect(dispatchBranchForSubject(subject, "markoinla/symphony#234")).toBe(
+      "test/linear-agent-workflow-pr",
+    );
+  });
+
+  it("derives a branch when a github_pr has no head ref", () => {
+    const subject = githubPrSubjectSchema.parse({
+      kind: "github_pr",
+      repo: "markoinla/symphony",
+      number: 234,
+    });
+    // head defaults to "" — fall back to the identifier-derived branch.
+    expect(dispatchBranchForSubject(subject, "markoinla/symphony#234")).toBe(
+      "symphony/markoinla-symphony-234",
+    );
+  });
+
+  it("derives a per-issue branch for non-PR subjects", () => {
+    const linear = linearIssueSubjectSchema.parse({
+      kind: "linear_issue",
+      id: "issue-uuid",
+    });
+    expect(dispatchBranchForSubject(linear, "SYM-162")).toBe("symphony/sym-162");
+
+    const ghIssue = githubIssueSubjectSchema.parse({
+      kind: "github_issue",
+      repo: "markoinla/symphony",
+      number: 9,
+    });
+    expect(dispatchBranchForSubject(ghIssue, "markoinla/symphony#9")).toBe(
+      "symphony/markoinla-symphony-9",
+    );
+
+    const generic = genericSubjectSchema.parse({
+      kind: "generic",
+      external_id: "evt-1",
+    });
+    expect(dispatchBranchForSubject(generic, "evt-1")).toBe("symphony/evt-1");
+  });
+
+  it("derives from the identifier when there is no subject", () => {
+    expect(dispatchBranchForSubject(undefined, "SYM-7")).toBe("symphony/sym-7");
   });
 });
 
