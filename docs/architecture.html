@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Symphony — linear-agent + sandbox-sdk Architecture</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14181d;
+    --panel-2: #1a1f26;
+    --border: #262c36;
+    --text: #d6dde6;
+    --muted: #8a93a0;
+    --accent: #7aa2ff;
+    --accent-2: #f5a623;
+    --accent-3: #5dd39e;
+    --accent-4: #ff7a7a;
+    --code-bg: #0e1116;
+    --shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 24px rgba(0,0,0,0.35);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #fbfbfd;
+      --panel: #ffffff;
+      --panel-2: #f4f6fa;
+      --border: #e1e5ec;
+      --text: #1c2127;
+      --muted: #5a6573;
+      --accent: #2350c7;
+      --accent-2: #b46a00;
+      --accent-3: #1f8a5d;
+      --accent-4: #c0392b;
+      --code-bg: #f4f6fa;
+      --shadow: 0 1px 0 rgba(0,0,0,0.02) inset, 0 6px 18px rgba(15,30,55,0.06);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code, pre, .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.86em; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; overflow: auto; }
+  header {
+    padding: 32px 24px 16px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, var(--panel) 0%, var(--bg) 100%);
+  }
+  header .wrap { max-width: 1200px; margin: 0 auto; }
+  header h1 { margin: 0 0 8px 0; font-size: 24px; letter-spacing: -0.01em; }
+  header .sub { color: var(--muted); font-size: 14px; }
+  header .meta { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; font-size: 12px; color: var(--muted); }
+  header .pill { background: var(--panel-2); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; }
+  main { max-width: 1200px; margin: 0 auto; padding: 24px; display: grid; gap: 24px; }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px 22px; box-shadow: var(--shadow); }
+  section h2 { margin: 0 0 6px 0; font-size: 18px; letter-spacing: -0.01em; }
+  section h2 .id { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 8px; }
+  section h3 { margin: 22px 0 8px 0; font-size: 14px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  section p, section li { font-size: 14px; }
+  .grid { display: grid; gap: 12px; }
+  .grid.cols-2 { grid-template-columns: 1fr 1fr; }
+  .grid.cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  @media (max-width: 900px) { .grid.cols-2, .grid.cols-3 { grid-template-columns: 1fr; } }
+  .card { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .card h4 { margin: 0 0 6px 0; font-size: 14px; }
+  .card .desc { color: var(--muted); font-size: 13px; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 6px; background: var(--panel-2); border: 1px solid var(--border); font-size: 11px; color: var(--muted); margin-right: 6px; }
+  .tag.method-get { color: var(--accent-3); border-color: rgba(93,211,158,0.35); }
+  .tag.method-post { color: var(--accent); border-color: rgba(122,162,255,0.35); }
+  .tag.method-put { color: var(--accent-2); border-color: rgba(245,166,35,0.35); }
+  .tag.method-delete { color: var(--accent-4); border-color: rgba(255,122,122,0.35); }
+  .tag.auth { color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table th, table td { border-bottom: 1px solid var(--border); padding: 8px 10px; text-align: left; vertical-align: top; }
+  table th { color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+  table tr:last-child td { border-bottom: 0; }
+  ul.tight { margin: 6px 0; padding-left: 18px; }
+  ul.tight li { margin: 3px 0; }
+  ol.flow { padding-left: 22px; }
+  ol.flow li { margin: 6px 0; }
+  .diagram { width: 100%; height: auto; background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  details { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 14px; }
+  details + details { margin-top: 8px; }
+  details summary { cursor: pointer; padding: 6px 0; font-weight: 500; }
+  .toc { position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--border); padding: 10px 24px; display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; z-index: 5; }
+  .toc a { color: var(--muted); }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; margin-top: 6px; }
+  .legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+  kbd { background: var(--code-bg); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; padding: 1px 6px; font-family: ui-monospace, Menlo, monospace; font-size: 0.85em; }
+  .nowrap { white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <h1>Symphony — linear-agent + sandbox-sdk Architecture</h1>
+    <div class="sub">Cloudflare-native Linear agent. A Hono Worker terminates Linear webhooks, drives long runs through a Cloudflare Workflow, and HMAC-signs the sibling <span class="mono">sandbox-dispatcher</span> Worker — which runs <span class="mono">pi</span>/<span class="mono">claude</span>/<span class="mono">codex</span> inside Cloudflare Sandbox containers built on the <span class="mono">@cloudflare/sandbox</span> SDK.</div>
+    <div class="meta">
+      <span class="pill">scope: workers/linear-agent/</span>
+      <span class="pill">scope: .claude/skills/sandbox-sdk/</span>
+      <span class="pill">generated: 2026-05-14</span>
+      <span class="pill"><a href="architecture.json">architecture.json</a></span>
+    </div>
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#topology">Topology</a>
+  <a href="#linear-agent">linear-agent Worker</a>
+  <a href="#routes">Routes</a>
+  <a href="#workflow">SessionRunner Workflow</a>
+  <a href="#schema">D1 Schema</a>
+  <a href="#dashboard">Dashboard SPA</a>
+  <a href="#engine-chain">Engine Resolution</a>
+  <a href="#flows">Request Flows</a>
+  <a href="#sandbox-skill">sandbox-sdk Skill</a>
+  <a href="#patterns">Key Patterns</a>
+</nav>
+
+<main>
+
+  <!-- =================== TOPOLOGY DIAGRAM =================== -->
+  <section id="topology">
+    <h2>Topology</h2>
+    <p>Linear delivers webhooks to the <span class="mono">linear-agent</span> Worker. The Worker drives a Cloudflare Workflow (<span class="mono">SessionRunner</span>) that streams agent runs from the <span class="mono">sandbox-dispatcher</span> Worker over HMAC-signed SSE. Sandboxes run on the <span class="mono">@cloudflare/sandbox</span> SDK (covered by the <span class="mono">.claude/skills/sandbox-sdk/</span> skill).</p>
+
+    <svg class="diagram" viewBox="0 0 1100 540" role="img" aria-label="Architecture topology diagram">
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+        </marker>
+        <style>
+          .b { fill: var(--panel-2); stroke: var(--border); stroke-width: 1.2; }
+          .ba { fill: rgba(122,162,255,0.08); stroke: var(--accent); stroke-width: 1.4; }
+          .bb { fill: rgba(93,211,158,0.08); stroke: var(--accent-3); stroke-width: 1.4; }
+          .bc { fill: rgba(245,166,35,0.08); stroke: var(--accent-2); stroke-width: 1.4; }
+          .lbl { font: 600 13px -apple-system, system-ui, sans-serif; fill: var(--text); }
+          .sub { font: 400 11px -apple-system, system-ui, sans-serif; fill: var(--muted); }
+          .ln { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+          .ln.bold { stroke: var(--accent); stroke-width: 1.6; }
+          .ln.hot { stroke: var(--accent-2); stroke-width: 1.6; }
+          .e { font: 500 11px ui-monospace, Menlo, monospace; fill: var(--muted); }
+        </style>
+      </defs>
+
+      <!-- Linear -->
+      <rect class="b" x="20" y="50" width="170" height="110" rx="10"/>
+      <text class="lbl" x="105" y="80" text-anchor="middle">Linear</text>
+      <text class="sub" x="105" y="100" text-anchor="middle">OAuth · GraphQL</text>
+      <text class="sub" x="105" y="116" text-anchor="middle">Webhooks · AgentActivity</text>
+      <text class="sub" x="105" y="138" text-anchor="middle">SLA: 5s ack · 10s first activity</text>
+
+      <!-- User browser -->
+      <rect class="b" x="20" y="200" width="170" height="80" rx="10"/>
+      <text class="lbl" x="105" y="230" text-anchor="middle">Browser (Dashboard)</text>
+      <text class="sub" x="105" y="250" text-anchor="middle">React 19 SPA</text>
+      <text class="sub" x="105" y="266" text-anchor="middle">/dashboard/*</text>
+
+      <!-- MCP client -->
+      <rect class="b" x="20" y="320" width="170" height="80" rx="10"/>
+      <text class="lbl" x="105" y="350" text-anchor="middle">MCP Client</text>
+      <text class="sub" x="105" y="370" text-anchor="middle">Streamable HTTP</text>
+      <text class="sub" x="105" y="386" text-anchor="middle">bearer token</text>
+
+      <!-- linear-agent Worker -->
+      <rect class="ba" x="260" y="30" width="380" height="380" rx="14"/>
+      <text class="lbl" x="450" y="58" text-anchor="middle">linear-agent · Cloudflare Worker (Hono)</text>
+
+      <rect class="b" x="278" y="76" width="170" height="44" rx="8"/>
+      <text class="sub" x="363" y="94" text-anchor="middle">/webhook</text>
+      <text class="e" x="363" y="110" text-anchor="middle">routes/webhook.ts</text>
+
+      <rect class="b" x="458" y="76" width="170" height="44" rx="8"/>
+      <text class="sub" x="543" y="94" text-anchor="middle">/api/v1/* · /mcp · /api/auth/*</text>
+      <text class="e" x="543" y="110" text-anchor="middle">routes/api-v1.ts · mcp.ts · auth.ts</text>
+
+      <rect class="b" x="278" y="130" width="170" height="44" rx="8"/>
+      <text class="sub" x="363" y="148" text-anchor="middle">/dashboard/* (SPA + API)</text>
+      <text class="e" x="363" y="164" text-anchor="middle">routes/dashboard.ts</text>
+
+      <rect class="b" x="458" y="130" width="170" height="44" rx="8"/>
+      <text class="sub" x="543" y="148" text-anchor="middle">/oauth · /github/install · /admin</text>
+      <text class="e" x="543" y="164" text-anchor="middle">routes/oauth.ts · github.ts · admin.ts</text>
+
+      <!-- Workflow -->
+      <rect class="bb" x="278" y="200" width="350" height="100" rx="10"/>
+      <text class="lbl" x="453" y="222" text-anchor="middle">SessionRunner — Cloudflare Workflow</text>
+      <text class="sub" x="453" y="244" text-anchor="middle">load-token → thought → resolve-inputs →</text>
+      <text class="sub" x="453" y="262" text-anchor="middle">turn-N loop (SSE) → terminal-activity → record-end</text>
+      <text class="sub" x="453" y="282" text-anchor="middle">waitForEvent('linear.prompted', 25m) between batches</text>
+
+      <!-- Cron -->
+      <rect class="b" x="278" y="318" width="170" height="78" rx="10"/>
+      <text class="lbl" x="363" y="340" text-anchor="middle">Cron */5 * * * *</text>
+      <text class="sub" x="363" y="358" text-anchor="middle">reconcileZombieSessions</text>
+      <text class="e" x="363" y="376" text-anchor="middle">lib/reconciler.ts</text>
+
+      <!-- Storage -->
+      <rect class="b" x="458" y="318" width="170" height="78" rx="10"/>
+      <text class="lbl" x="543" y="340" text-anchor="middle">D1 · KV</text>
+      <text class="sub" x="543" y="358" text-anchor="middle">multi-tenant store</text>
+      <text class="e" x="543" y="376" text-anchor="middle">+ dedupe markers</text>
+
+      <!-- sandbox-dispatcher -->
+      <rect class="bc" x="700" y="120" width="220" height="100" rx="12"/>
+      <text class="lbl" x="810" y="146" text-anchor="middle">sandbox-dispatcher</text>
+      <text class="sub" x="810" y="166" text-anchor="middle">sibling Worker</text>
+      <text class="sub" x="810" y="184" text-anchor="middle">POST /run (SSE) · /run/stop</text>
+      <text class="e" x="810" y="204" text-anchor="middle">X-Symphony-Signature (HMAC)</text>
+
+      <!-- Sandbox containers -->
+      <rect class="b" x="700" y="248" width="220" height="120" rx="12"/>
+      <text class="lbl" x="810" y="274" text-anchor="middle">Cloudflare Sandbox DOs</text>
+      <text class="sub" x="810" y="294" text-anchor="middle">@cloudflare/sandbox</text>
+      <text class="sub" x="810" y="312" text-anchor="middle">pi · claude · codex</text>
+      <text class="sub" x="810" y="330" text-anchor="middle">baseline = /home/symphony</text>
+      <text class="e" x="810" y="352" text-anchor="middle">.claude/skills/sandbox-sdk/</text>
+
+      <!-- GitHub -->
+      <rect class="b" x="950" y="120" width="130" height="100" rx="10"/>
+      <text class="lbl" x="1015" y="148" text-anchor="middle">GitHub</text>
+      <text class="sub" x="1015" y="168" text-anchor="middle">App API · OAuth</text>
+      <text class="sub" x="1015" y="186" text-anchor="middle">PR + repo metadata</text>
+
+      <!-- Linear @ side note -->
+      <rect class="b" x="950" y="248" width="130" height="100" rx="10"/>
+      <text class="lbl" x="1015" y="276" text-anchor="middle">Linear API</text>
+      <text class="sub" x="1015" y="296" text-anchor="middle">from sandbox</text>
+      <text class="sub" x="1015" y="314" text-anchor="middle">LINEAR_API_TOKEN env</text>
+
+      <!-- Arrows -->
+      <path class="ln bold" d="M190 105 H 260" marker-end="url(#arrow)"/>
+      <text class="e" x="208" y="98">webhook</text>
+
+      <path class="ln" d="M190 240 H 260" marker-end="url(#arrow)"/>
+      <text class="e" x="208" y="232">cookie</text>
+
+      <path class="ln" d="M190 360 H 260" marker-end="url(#arrow)"/>
+      <text class="e" x="208" y="352">bearer</text>
+
+      <!-- Workflow → dispatcher -->
+      <path class="ln hot" d="M628 250 H 700" marker-end="url(#arrow)"/>
+      <text class="e" x="638" y="244">SSE /run</text>
+
+      <!-- dispatcher → sandbox -->
+      <path class="ln" d="M810 220 V 248" marker-end="url(#arrow)"/>
+      <text class="e" x="820" y="240">spawn</text>
+
+      <!-- linear-agent → linear (callbacks) -->
+      <path class="ln" d="M278 90 Q 220 90 220 100 V 160" marker-end="url(#arrow)"/>
+      <text class="e" x="200" y="148">activities</text>
+
+      <!-- linear-agent → github -->
+      <path class="ln" d="M628 152 Q 920 152 950 152" marker-end="url(#arrow)"/>
+      <text class="e" x="800" y="146">install token</text>
+
+      <!-- sandbox → linear -->
+      <path class="ln" d="M920 308 H 950" marker-end="url(#arrow)"/>
+      <text class="e" x="924" y="302">GraphQL</text>
+    </svg>
+
+    <div class="legend">
+      <span><span class="dot" style="background: var(--accent)"></span>linear-agent Worker</span>
+      <span><span class="dot" style="background: var(--accent-3)"></span>Cloudflare Workflow</span>
+      <span><span class="dot" style="background: var(--accent-2)"></span>sandbox-dispatcher / HMAC channel</span>
+      <span><span class="dot" style="background: var(--muted)"></span>External / shared</span>
+    </div>
+  </section>
+
+  <!-- =================== LINEAR AGENT OVERVIEW =================== -->
+  <section id="linear-agent">
+    <h2>linear-agent Worker <span class="id">workers/linear-agent/</span></h2>
+    <p>A Hono app behind a single Cloudflare Worker. Owns Linear OAuth, the D1 multi-tenant store, the dashboard SPA, REST + MCP APIs, and a Workflow that drives long-running engine sessions. Single entrypoint at <span class="mono">src/index.ts</span> wires every router and re-exports <span class="mono">SessionRunner</span> so wrangler's class resolution finds it.</p>
+
+    <div class="grid cols-3">
+      <div class="card">
+        <h4>Runtime</h4>
+        <div class="desc">Hono · TypeScript · nodejs_compat · compatibility_date 2025-05-12. Static SPA assets served via <span class="mono">ASSETS</span> binding (<span class="mono">./dashboard/dist</span>).</div>
+      </div>
+      <div class="card">
+        <h4>Bindings</h4>
+        <div class="desc"><span class="mono">DB</span> (D1) · <span class="mono">LINEAR_TOKENS</span> (KV) · <span class="mono">SESSION_RUNNER</span> (Workflow) · <span class="mono">ASSETS</span> · cron <span class="mono">*/5 * * * *</span>.</div>
+      </div>
+      <div class="card">
+        <h4>Secrets</h4>
+        <div class="desc"><span class="mono">LINEAR_CLIENT_ID/SECRET/WEBHOOK_SECRET</span> · <span class="mono">DISPATCH_HMAC_SECRET</span> · <span class="mono">CREDENTIAL_KEK</span> · <span class="mono">BETTER_AUTH_SECRET</span> · <span class="mono">GITHUB_APP_*</span> · <span class="mono">GITHUB_CLIENT_*</span> · <span class="mono">ADMIN_TOKEN</span>.</div>
+      </div>
+    </div>
+
+    <h3>Source layout</h3>
+    <details open>
+      <summary><span class="mono">src/</span> — primary modules</summary>
+      <table>
+        <thead><tr><th>Path</th><th>Purpose</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">src/index.ts</td><td>Hono app factory, <span class="mono">Env</span> interface, <span class="mono">fetch</span> + <span class="mono">scheduled</span> handlers, re-export of <span class="mono">SessionRunner</span>.</td></tr>
+          <tr><td class="mono">src/workflows/session-runner.ts</td><td>Cloudflare Workflow that drives a single Agent Session end-to-end. Two modes: <span class="mono">agent_session</span> (Linear-visible) and <span class="mono">trigger</span> (headless). Outer try/finally always calls <span class="mono">dispatcher.stop()</span>.</td></tr>
+          <tr><td class="mono">src/routes/webhook.ts</td><td>Linear webhook receiver — verifies HMAC, dedupes, dispatches AgentSessionEvent → Workflow, Issue → resolver + <span class="mono">dispatchTrigger</span>. Handles <code>stop</code> signal entirely here (Workflow <code>finally</code> not trusted after <code>terminate()</code>).</td></tr>
+          <tr><td class="mono">src/routes/api-v1.ts</td><td>REST API surface for workflows, triggers, projects, settings, webhook events, api tokens, integrations.</td></tr>
+          <tr><td class="mono">src/routes/mcp.ts</td><td>MCP Streamable-HTTP transport at <span class="mono">POST /mcp</span>. Tool handlers dispatch into the v1 router via synthetic <span class="mono">Request</span>s — single source of truth.</td></tr>
+          <tr><td class="mono">src/routes/dashboard.ts</td><td>Dashboard SPA shell + session APIs (list, live SSE, debug payload, rerun, me).</td></tr>
+          <tr><td class="mono">src/routes/dashboard-api.ts</td><td>Project/integration/settings CRUD for the dashboard UI (session-cookie auth).</td></tr>
+          <tr><td class="mono">src/routes/oauth.ts</td><td>Linear <span class="mono">actor=app</span> OAuth install flow.</td></tr>
+          <tr><td class="mono">src/routes/github.ts</td><td>Symphony GitHub App install + per-org credential management.</td></tr>
+          <tr><td class="mono">src/routes/admin.ts</td><td><span class="mono">ADMIN_TOKEN</span>-gated CRUD + sandbox stop.</td></tr>
+          <tr><td class="mono">src/routes/openapi.ts</td><td>Builds OpenAPI 3.1 document from declared shapes.</td></tr>
+          <tr><td class="mono">src/lib/dispatcher.ts</td><td>HMAC-signed client for <span class="mono">sandbox-dispatcher</span>. <span class="mono">runStream()</span> yields <span class="mono">NormalizedEvent</span>s from SSE, terminating on <span class="mono">result</span>. Pinned wire-compat HMAC vector matches Elixir signer.</td></tr>
+          <tr><td class="mono">src/lib/dispatch-trigger.ts</td><td>Trigger flow: resolve project, render Liquid prompt, mint Linear AgentSession on issue, queue <span class="mono">SESSION_RUNNER</span> with synthetic webhook + workflow_overrides snapshot.</td></tr>
+          <tr><td class="mono">src/lib/activities.ts</td><td>Linear <span class="mono">AgentActivity</span> wrappers (<span class="mono">postThought/Response/Error/Elicitation/Action</span>), <span class="mono">createAgentSessionOnIssue</span>, refresh-on-401 client.</td></tr>
+          <tr><td class="mono">src/lib/auth.ts · auth/*.ts</td><td>Better Auth factory (email/password, GitHub OAuth, Linear genericOAuth, organization+teams plugin); bearer/scope middleware.</td></tr>
+          <tr><td class="mono">src/lib/credentials.ts</td><td>Envelope encryption: random per-row DEK (AES-GCM-256) wrapped by master KEK. <span class="mono">kek_version</span> column drives rotation.</td></tr>
+          <tr><td class="mono">src/lib/store.ts</td><td>D1 repository classes: <span class="mono">LinearAgentInstallStore · GitHubInstallStore · ProjectStore · AgentSessionStore · AgentSessionEventStore · WebhookEventStore · SettingStore</span>.</td></tr>
+          <tr><td class="mono">src/lib/workflows/resolver.ts</td><td>Resolves best <span class="mono">(workflow, trigger)</span> for an <span class="mono">EventTuple</span> via SQL JOIN ordered by <span class="mono">scope_tier</span> (user&gt;team&gt;org) then <span class="mono">priority DESC</span>.</td></tr>
+          <tr><td class="mono">src/lib/workflows/render.ts</td><td>Liquid template rendering for workflow <span class="mono">prompt_template</span>.</td></tr>
+          <tr><td class="mono">src/lib/workflows/seed.ts</td><td><span class="mono">ensureDefaultWorkflow</span> — lazy-seeds Engineering Default workflow on an org's first webhook.</td></tr>
+          <tr><td class="mono">src/lib/event-mapper-inbound.ts</td><td>Maps Linear <span class="mono">Issue</span> webhook → normalized <span class="mono">EventTuple[]</span> (<span class="mono">state_entered</span>, <span class="mono">label_added</span>).</td></tr>
+          <tr><td class="mono">src/lib/event-mapper.ts</td><td>Maps dispatcher <span class="mono">NormalizedEvent</span> → Linear <span class="mono">AgentActivityContent</span> for live timeline.</td></tr>
+          <tr><td class="mono">src/lib/install-token.ts · linear-token.ts · token-refresh.ts</td><td>Linear OAuth token rotation. Single-flight per-orgId refresh. <span class="mono">resolveLinearMcpToken</span> picks per-user accounts.accessToken first, falls back to install access_token; delivered to sandbox as <span class="mono">LINEAR_API_TOKEN</span>.</td></tr>
+          <tr><td class="mono">src/lib/github-app.ts</td><td>Mints per-installation token using GitHub App JWT (RS256, 10-min TTL).</td></tr>
+          <tr><td class="mono">src/lib/signature.ts</td><td><span class="mono">verifyLinearSignature</span> (HMAC-SHA256 over raw body, constant-time compare).</td></tr>
+          <tr><td class="mono">src/lib/reconciler.ts</td><td>Cron-driven zombie session reaper — flips <span class="mono">running</span> rows past timeout to <span class="mono">error</span>.</td></tr>
+          <tr><td class="mono">src/lib/prompts/linear-graphql.ts</td><td>Appends a "use the linear skill" marker block (issue/team UUIDs) to every dispatched prompt.</td></tr>
+          <tr><td class="mono">src/schemas/*.ts</td><td>Zod schemas — validated at REST + MCP boundaries.</td></tr>
+          <tr><td class="mono">src/db/*.ts</td><td>Drizzle schema bundle (Better Auth + domain tables).</td></tr>
+          <tr><td class="mono">src/types/agent-session.ts</td><td>Linear <span class="mono">AgentSessionEventWebhook</span> + <span class="mono">AgentActivityContent</span> types.</td></tr>
+        </tbody>
+      </table>
+    </details>
+  </section>
+
+  <!-- =================== ROUTES =================== -->
+  <section id="routes">
+    <h2>HTTP routes <span class="id">~50 endpoints across 9 routers</span></h2>
+    <p>Every router is mounted from <span class="mono">buildApp()</span> in <span class="mono">src/index.ts</span>. Auth modes: <strong>none</strong> (public), <strong>signature</strong> (Linear HMAC), <strong>session</strong> (Better Auth cookie), <strong>bearer</strong> (api_tokens), <strong>admin</strong> (<span class="mono">ADMIN_TOKEN</span>).</p>
+
+    <details open>
+      <summary>Public / auth surfaces</summary>
+      <table>
+        <tbody>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/</span></td><td>Service banner JSON</td><td class="nowrap"><span class="tag auth">none</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/health</span></td><td>Liveness probe</td><td class="nowrap"><span class="tag auth">none</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span><span class="tag method-post">POST</span> <span class="mono">/api/auth/*</span></td><td>Better Auth — sign-in/up, social, org, session</td><td class="nowrap"><span class="tag auth">session</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/openapi.json</span></td><td>OpenAPI 3.1 document for /api/v1</td><td class="nowrap"><span class="tag auth">none</span></td></tr>
+        </tbody>
+      </table>
+    </details>
+
+    <details>
+      <summary>Linear &amp; webhook surfaces</summary>
+      <table>
+        <tbody>
+          <tr><td><span class="tag method-post">POST</span> <span class="mono">/webhook</span></td><td>Linear AgentSession + Issue receiver. 5s ack / 10s first-activity SLA. Inserts <span class="mono">webhook_events</span> row for every delivery.</td><td class="nowrap"><span class="tag auth">HMAC</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/linear/agent-install</span></td><td>OAuth authorize redirect (actor=app install)</td><td class="nowrap"><span class="tag auth">none</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/linear/agent-install/callback</span></td><td>OAuth callback — upserts <span class="mono">linear_agent_installs</span></td><td class="nowrap"><span class="tag auth">state</span></td></tr>
+          <tr><td><span class="tag method-post">POST</span> <span class="mono">/linear/agent-install/revoke</span></td><td>Revoke install token</td><td class="nowrap"><span class="tag auth">session</span></td></tr>
+        </tbody>
+      </table>
+    </details>
+
+    <details>
+      <summary>/api/v1 REST surface</summary>
+      <table>
+        <tbody>
+          <tr><td><span class="tag method-get">GET</span><span class="tag method-post">POST</span> <span class="mono">/api/v1/workflows</span></td><td>List + create workflows (org/team/user scoped)</td><td class="nowrap"><span class="tag auth">session|bearer</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/api/v1/workflows/resolve</span></td><td>Inspect resolver for a given EventTuple</td><td class="nowrap"><span class="tag auth">session|bearer</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span><span class="tag method-put">PUT</span><span class="tag method-delete">DEL</span> <span class="mono">/api/v1/workflows/:id</span></td><td>Workflow item CRUD</td><td class="nowrap"><span class="tag auth">session|bearer</span></td></tr>
+          <tr><td><span class="tag method-post">POST</span> <span class="mono">/api/v1/workflows/:id/{publish,duplicate,preview}</span></td><td>Workflow lifecycle ops</td><td class="nowrap"><span class="tag auth">session|bearer</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span><span class="tag method-post">POST</span> <span class="mono">/api/v1/workflows/:id/triggers</span></td><td>Nested trigger CRUD</td><td class="nowrap"><span class="tag auth">session|bearer</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span><span class="tag method-put">PUT</span><span class="tag method-delete">DEL</span> <span class="mono">/api/v1/triggers/:id</span></td><td>Trigger item CRUD (top-level)</td><td class="nowrap"><span class="tag auth">session|bearer</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/api/v1/webhook-events[/:id]</span></td><td>List/get webhook deliveries (debug)</td><td class="nowrap"><span class="tag auth">session|bearer</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span><span class="tag method-post">POST</span><span class="tag method-put">PUT</span><span class="tag method-delete">DEL</span> <span class="mono">/api/v1/projects[/:id]</span></td><td>Project CRUD</td><td class="nowrap"><span class="tag auth">session|bearer</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span><span class="tag method-put">PUT</span><span class="tag method-delete">DEL</span> <span class="mono">/api/v1/settings[/:key]</span></td><td>Org settings. Curated keys: <span class="mono">agent.default_engine</span>, <span class="mono">agent.default_model</span>, <span class="mono">agent.max_turns</span>.</td><td class="nowrap"><span class="tag auth">session|bearer</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/api/v1/integrations</span></td><td>Status of Linear/GitHub/credential integrations</td><td class="nowrap"><span class="tag auth">session|bearer</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span><span class="tag method-post">POST</span><span class="tag method-delete">DEL</span> <span class="mono">/api/v1/api-tokens[/:id]</span></td><td>Bearer API token CRUD (sha256 at rest)</td><td class="nowrap"><span class="tag auth">session</span></td></tr>
+        </tbody>
+      </table>
+    </details>
+
+    <details>
+      <summary>/mcp — Model Context Protocol</summary>
+      <p>Single endpoint at <span class="mono">POST /mcp</span> exposes ~28 tools. Each tool builds a synthetic <span class="mono">Request</span> against the internal v1 router so validation, scope, persistence, and error envelopes match REST exactly — no parallel implementation to drift.</p>
+      <table>
+        <tbody>
+          <tr><td class="nowrap"><span class="mono">workflows.list/get/create/update/delete/publish/duplicate/preview</span></td><td>Workflow CRUD via MCP</td></tr>
+          <tr><td class="nowrap"><span class="mono">triggers.list/get/create/update/delete</span></td><td>Trigger CRUD via MCP</td></tr>
+          <tr><td class="nowrap"><span class="mono">projects.list/get/create/update/delete</span></td><td>Project CRUD via MCP</td></tr>
+          <tr><td class="nowrap"><span class="mono">settings.list/get/set/delete</span></td><td>Settings via MCP</td></tr>
+          <tr><td class="nowrap"><span class="mono">webhook_events.list/get</span></td><td>Webhook debug surface</td></tr>
+          <tr><td class="nowrap"><span class="mono">integrations.status · openapi.get</span></td><td>Status + spec retrieval</td></tr>
+        </tbody>
+      </table>
+    </details>
+
+    <details>
+      <summary>/dashboard — SPA shell + dashboard APIs</summary>
+      <table>
+        <tbody>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/dashboard, /dashboard/*</span></td><td>Serves Vite-built React SPA <span class="mono">index.html</span></td><td class="nowrap"><span class="tag auth">cookie</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/dashboard/api/sessions[/...]</span></td><td>List, live SSE, debug payload, rerun</td><td class="nowrap"><span class="tag auth">session</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/dashboard/api/me</span></td><td>Current user + active org</td><td class="nowrap"><span class="tag auth">session</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span><span class="tag method-post">POST</span><span class="tag method-put">PUT</span><span class="tag method-delete">DEL</span> <span class="mono">/dashboard/api/projects[/:id]</span></td><td>Project CRUD (session-auth mirror of v1)</td><td class="nowrap"><span class="tag auth">session</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span><span class="tag method-put">PUT</span> <span class="mono">/dashboard/api/integrations[/credentials]</span></td><td>Status + per-org BYO credential writes</td><td class="nowrap"><span class="tag auth">session</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/dashboard/api/linear/projects</span></td><td>Proxies Linear GraphQL teams list</td><td class="nowrap"><span class="tag auth">session</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/dashboard/api/github/repos</span></td><td>Installed-app accessible repos</td><td class="nowrap"><span class="tag auth">session</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span><span class="tag method-put">PUT</span><span class="tag method-delete">DEL</span> <span class="mono">/dashboard/api/settings[/:key]</span></td><td>Surfaces <span class="mono">agent_defaults</span> (from env.DEFAULT_*) on GET</td><td class="nowrap"><span class="tag auth">session</span></td></tr>
+        </tbody>
+      </table>
+    </details>
+
+    <details>
+      <summary>/github — Symphony GitHub App + /admin surfaces</summary>
+      <table>
+        <tbody>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/github/install</span></td><td>Redirect to GitHub App install URL</td><td class="nowrap"><span class="tag auth">session</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/github/install/callback</span></td><td>Upserts <span class="mono">github_installs</span></td><td class="nowrap"><span class="tag auth">state</span></td></tr>
+          <tr><td><span class="tag method-put">PUT</span><span class="tag method-delete">DEL</span><span class="tag method-get">GET</span> <span class="mono">/admin/credentials/:orgId/...</span></td><td>Per-org credential CRUD (envelope-encrypted)</td><td class="nowrap"><span class="tag auth">admin</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span><span class="tag method-post">POST</span><span class="tag method-delete">DEL</span> <span class="mono">/admin/projects[/...]</span></td><td>Legacy project admin</td><td class="nowrap"><span class="tag auth">admin</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/admin/installations</span></td><td>List installed Linear orgs</td><td class="nowrap"><span class="tag auth">admin</span></td></tr>
+          <tr><td><span class="tag method-get">GET</span> <span class="mono">/admin/smoke</span></td><td>HMAC + dispatcher reachability smoke</td><td class="nowrap"><span class="tag auth">admin</span></td></tr>
+          <tr><td><span class="tag method-post">POST</span> <span class="mono">/admin/sandbox/stop</span></td><td>Force-stop a per-issue sandbox</td><td class="nowrap"><span class="tag auth">admin</span></td></tr>
+        </tbody>
+      </table>
+    </details>
+  </section>
+
+  <!-- =================== WORKFLOW =================== -->
+  <section id="workflow">
+    <h2>SessionRunner Workflow <span class="id">src/workflows/session-runner.ts</span></h2>
+    <p>One Cloudflare Workflow class with two run modes: <span class="mono">agent_session</span> (Linear-visible) and <span class="mono">trigger</span> (headless). Instance id is set to the Linear <span class="mono">agentSession.id</span> so Linear retries collide on an existing instance idempotently. Every step is checkpointed; eviction resumes from the last completed step. The outer <span class="mono">try/finally</span> always calls <span class="mono">stopSandboxQuiet()</span> so an errored run can't leave a zombie sandbox burning CPU.</p>
+
+    <h3>agent_session mode — steps</h3>
+    <ol class="flow">
+      <li><strong>load-token</strong> — read install access_token + GitHub install id from D1. <span class="mono">refreshInstallTokenIfNeeded</span> rotates it if <span class="mono">expires_at</span> is inside the run window.</li>
+      <li><strong>post-initial-thought</strong> — meet Linear's 10s SLA. Picks workflow name from <span class="mono">workflow_overrides.name</span> if present.</li>
+      <li><strong>start-session-side-effects</strong> (only on <span class="mono">action=created</span>) — set issue delegate to the agent viewer, attach <span class="mono">externalUrls</span> to <span class="mono">/dashboard/sessions/&lt;id&gt;</span>, post initial 2-item plan. All best-effort — never throws.</li>
+      <li><strong>resolve-inputs</strong> — <span class="mono">ProjectStore.getByTeamId</span> → repo; <span class="mono">resolvePrompt</span> → promptContext|comment|description; resolve engine/model/max_turns via the chain below; append Linear GraphQL skill marker via <span class="mono">withLinearGraphqlReference</span>.</li>
+      <li><strong>mint-github-token</strong> — JWT-mint per-installation token if GitHub App is configured, else fall back to <span class="mono">env.GITHUB_TOKEN</span>.</li>
+      <li><strong>record-session-start</strong> — insert <span class="mono">agent_sessions</span> row with <span class="mono">config_snapshot</span>.</li>
+      <li>
+        <strong>turn-N loop</strong> (up to <span class="mono">max_turns</span>) — for each turn:
+        <ul class="tight">
+          <li><span class="mono">resolve-linear-mcp-token-N</span>: per-user Linear OAuth from <span class="mono">accounts</span> (preferred) → install <span class="mono">access_token</span> fallback; delivered to sandbox as <span class="mono">LINEAR_API_TOKEN</span>.</li>
+          <li><span class="mono">turn-N</span> with <span class="mono">timeout: 35 minutes</span> (Workflows step default is 10m; dispatcher caps runs at 30m so we need headroom): <span class="mono">dispatcher.runStream()</span> yields <span class="mono">NormalizedEvent</span>s; each event is persisted to <span class="mono">agent_session_events</span> and (in agent_session mode) mapped to a Linear activity posted live.</li>
+          <li>On <span class="mono">turn_end:needs_continuation</span>, build continuation prompt and loop. On <span class="mono">result</span>, exit.</li>
+        </ul>
+      </li>
+      <li><strong>step.waitForEvent('linear.prompted', 25m)</strong> — bounded wait for follow-up <span class="mono">prompted</span> webhook between turn batches (Linear marks sessions stale after ~30m). The webhook route forwards via <span class="mono">instance.sendEvent</span> when the runner is alive, or spins up a <span class="mono">:rN</span>-suffixed fresh instance otherwise.</li>
+      <li><strong>post-terminal-activity</strong> — <span class="mono">postResponse</span> on success, <span class="mono">postError</span> on failure (engine exit ≠ 0 or in-band error).</li>
+      <li><strong>update-final-plan</strong> (only on <span class="mono">action=created</span>) — completes/cancels the 2-item plan.</li>
+      <li><strong>record-session-end</strong> — flips agent_sessions row to <span class="mono">completed</span> / <span class="mono">error</span> with <span class="mono">completed_at</span>.</li>
+      <li><strong>stop-sandbox</strong> (outer finally) — <span class="mono">DispatcherClient.stop(issueId)</span>. Idempotent.</li>
+    </ol>
+
+    <h3>trigger mode</h3>
+    <p>Mirrors agent_session mode minus Linear-side activity posts. Today <em>unused at the call site</em> — trigger flows queue the agent_session mode with a synthesized webhook via <span class="mono">dispatch-trigger.ts</span>, which gives the same Linear-visible timeline. Kept on the type for future headless workflows (cron-fired runs).</p>
+  </section>
+
+  <!-- =================== SCHEMA =================== -->
+  <section id="schema">
+    <h2>D1 schema <span class="id">migrations/0001..0008</span></h2>
+    <p>One D1 database per env (<span class="mono">symphony-linear-agent</span>). All domain tables FK to Better Auth's <span class="mono">organizations.id</span> — the tenant root.</p>
+
+    <h3>Better Auth tables (owned by drizzle adapter)</h3>
+    <table>
+      <tbody>
+        <tr><td class="mono">organizations</td><td>Tenant root. <span class="mono">metadata</span> JSON holds <span class="mono">linearOrgId</span> etc.</td></tr>
+        <tr><td class="mono">users</td><td>App users (login).</td></tr>
+        <tr><td class="mono">teams · teamMembers</td><td>Better Auth org sub-teams (distinct from Linear teams).</td></tr>
+        <tr><td class="mono">sessions</td><td>Cookie-tracked user sessions. <span class="mono">activeOrganizationId/activeTeamId</span> track context.</td></tr>
+        <tr><td class="mono">accounts</td><td>Per-user OAuth/social provider link (email/password creds, GitHub, Linear actor=user).</td></tr>
+        <tr><td class="mono">verifications</td><td>Email verification + similar tokens.</td></tr>
+        <tr><td class="mono">members · invitations</td><td>Org membership + invites.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Domain tables</h3>
+    <table>
+      <tbody>
+        <tr><td class="mono">linear_agent_installs</td><td>Per-org <span class="mono">actor=app</span> Linear install (access + refresh + expires_at + scopes). UNIQUE on <span class="mono">linear_organization_id</span> — webhook tenant lookup.</td></tr>
+        <tr><td class="mono">github_installs</td><td>Per-org Symphony GitHub App install. Used to mint per-run installation tokens via JWT.</td></tr>
+        <tr><td class="mono">projects</td><td>Per-Linear-team project config: <span class="mono">repo_url, default_branch, scope</span>. Legacy <span class="mono">engine/model/max_turns</span> columns are ignored by the runner.</td></tr>
+        <tr><td class="mono">agent_sessions</td><td>One row per Agent Session. Holds status, prompt, <span class="mono">config_snapshot</span>, <span class="mono">stderr</span>, <span class="mono">error</span>, started/completed_at.</td></tr>
+        <tr><td class="mono">agent_session_events</td><td>Streaming timeline — one row per <span class="mono">NormalizedEvent</span> appended live during a turn (turn, ts, type, body truncated).</td></tr>
+        <tr><td class="mono">org_credentials</td><td>Envelope-encrypted BYO secrets (DEK + KEK + <span class="mono">kek_version</span>). Decryption only in the Worker; dispatcher never sees plaintext.</td></tr>
+        <tr><td class="mono">workflows</td><td>Trigger-fired workflow defs: <span class="mono">engine, model, max_turns, prompt_template</span> (Liquid), <span class="mono">allowed/disallowed_tools, permission_mode, status</span> (draft/published).</td></tr>
+        <tr><td class="mono">workflow_versions</td><td>Append-only version history of workflows.</td></tr>
+        <tr><td class="mono">workflow_triggers</td><td>Many-per-workflow trigger rules: <span class="mono">event_type, to/from_state, label_name, team/project/label/skip_label/assignee filters, action, priority</span>.</td></tr>
+        <tr><td class="mono">api_tokens</td><td>Bearer tokens hashed (sha256) at rest. Scoped per-org with optional per-scope ACL.</td></tr>
+        <tr><td class="mono">webhook_events</td><td>Every webhook delivery: signature_ok flag, raw_body (truncated to 64KB), dispatched_action, event_summary, latency_ms.</td></tr>
+        <tr><td class="mono">settings</td><td>Org-scoped key/value (e.g. <span class="mono">agent.default_engine</span>, <span class="mono">tracker.api_key</span>).</td></tr>
+      </tbody>
+    </table>
+
+    <h3>KV</h3>
+    <ul class="tight">
+      <li><strong>LINEAR_TOKENS</strong> — OAuth state nonces (short TTL) · webhook dedupe markers (60-min TTL) keyed <span class="mono">webhook:&lt;webhookId&gt;:&lt;sessionId&gt;</span> or <span class="mono">webhook:issue:&lt;webhookId&gt;:&lt;dataId&gt;:&lt;timestamp&gt;</span> · per-org agent viewer id cache.</li>
+    </ul>
+  </section>
+
+  <!-- =================== DASHBOARD =================== -->
+  <section id="dashboard">
+    <h2>Dashboard SPA <span class="id">workers/linear-agent/dashboard/</span></h2>
+    <p>Vite 8 + React 19 SPA, served as static assets from the same Worker (<span class="mono">/dashboard/*</span> basepath). TanStack Router with file-per-route convention; TanStack Query + an SSE stream (<span class="mono">/dashboard/api/sessions/live</span>) for live updates. Radix UI + Tailwind 4 for components.</p>
+    <div class="grid cols-2">
+      <div class="card">
+        <h4>Routes</h4>
+        <ul class="tight">
+          <li><span class="mono">/</span> dashboard.tsx — live sessions</li>
+          <li><span class="mono">/sessions/$sessionId</span> — canonical UUID URL (Linear externalUrls)</li>
+          <li><span class="mono">/session/$issueIdentifier</span> — legacy per-issue</li>
+          <li><span class="mono">/history</span> — paginated past sessions</li>
+          <li><span class="mono">/webhooks</span> — webhook_events viewer</li>
+          <li><span class="mono">/projects</span> — Linear team + GitHub repo picker</li>
+          <li><span class="mono">/workflows</span> + <span class="mono">/workflows/$id</span> — Liquid editor + triggers</li>
+          <li><span class="mono">/settings</span> — Agent + integrations tabs</li>
+          <li><span class="mono">/login, /signup, /setup, /create-organization</span></li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>Notable deps</h4>
+        <ul class="tight">
+          <li><span class="mono">@tanstack/react-router</span> with <span class="mono">basepath: '/dashboard'</span></li>
+          <li><span class="mono">@tanstack/react-query</span> + SSE (<span class="mono">EventSource</span>)</li>
+          <li><span class="mono">better-auth</span> (client) — session cookie</li>
+          <li><span class="mono">@monaco-editor/react</span> — Liquid prompt editor</li>
+          <li><span class="mono">recharts</span> · <span class="mono">react-hook-form</span> + <span class="mono">zod</span></li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================== ENGINE CHAIN =================== -->
+  <section id="engine-chain">
+    <h2>Engine / model / max_turns resolution</h2>
+    <p>Every dispatch resolves three runtime fields through the same precedence chain. Higher entries win. <span class="mono">projects.{engine,model,max_turns}</span> columns are <strong>not</strong> consulted — they remain to avoid a destructive migration but the runner ignores them.</p>
+    <table>
+      <thead><tr><th>Rank</th><th>Source</th><th>Applies to</th><th>Note</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td class="mono">workflow_overrides</td><td>Trigger-fired runs</td><td>Snapshot of workflow row at queue time (engine/model/max_turns + allowed/disallowed_tools/permission_mode). Frozen — mid-run workflow edits don't perturb in-flight. <span class="mono">NULL workflow.model</span> means "inherit" so the field is omitted.</td></tr>
+        <tr><td>2</td><td class="mono">settings('agent.default_*')</td><td>All runs</td><td>Per-org overrides set via Agent settings tab.</td></tr>
+        <tr><td>3</td><td class="mono">env.DEFAULT_*</td><td>All runs</td><td>Worker-wide floor from <span class="mono">wrangler.jsonc</span>.</td></tr>
+        <tr><td>4</td><td>Baked-in literal</td><td>Last resort</td><td><span class="mono">engine=pi, model=null, max_turns=10</span></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- =================== REQUEST FLOWS =================== -->
+  <section id="flows">
+    <h2>Request flows</h2>
+
+    <h3>1. Linear @-mention → PR</h3>
+    <ol class="flow">
+      <li>User @-mentions the agent in Linear → Linear POSTs <span class="mono">AgentSessionEvent.created</span> to <span class="mono">/webhook</span>.</li>
+      <li>Webhook route verifies HMAC, dedupes on <span class="mono">(webhookId, sessionId)</span> in <span class="mono">LINEAR_TOKENS</span> KV, inserts <span class="mono">webhook_events</span> row.</li>
+      <li><span class="mono">SESSION_RUNNER.create({id: agentSession.id, params:{mode:'agent_session', event}})</span> — Workflow instance keyed on session id (idempotent on retry).</li>
+      <li>Workflow steps: load-token → post-initial-thought → start-session-side-effects (delegate + externalUrls + plan) → resolve-inputs → mint-github-token → record-session-start.</li>
+      <li>Turn loop: <span class="mono">dispatcher.runStream()</span> over HMAC-signed SSE; each event is persisted to <span class="mono">agent_session_events</span> and (live) posted as a Linear activity via <span class="mono">mapToActivity</span>.</li>
+      <li><span class="mono">step.waitForEvent('linear.prompted', 25m)</span> — picks up follow-ups; webhook route forwards them via <span class="mono">instance.sendEvent</span>.</li>
+      <li>post-terminal-activity (response or error) → update-final-plan → record-session-end. Outer finally: <span class="mono">dispatcher.stop(issueId)</span>.</li>
+    </ol>
+
+    <h3>2. Trigger-initiated workflow (state change / label add)</h3>
+    <ol class="flow">
+      <li>Linear Issue webhook → <span class="mono">/webhook</span>.</li>
+      <li><span class="mono">event-mapper-inbound</span> emits normalized <span class="mono">EventTuple[]</span> (<span class="mono">state_entered</span> uses <span class="mono">data.state.name</span>, <span class="mono">label_added</span> per added label).</li>
+      <li><span class="mono">ensureDefaultWorkflow(orgId)</span> — idempotent first-delivery seed.</li>
+      <li>For each tuple: <span class="mono">resolveWorkflow</span> picks the best (workflow, trigger) by scope tier (user&gt;team&gt;org) then priority.</li>
+      <li><span class="mono">dispatchTrigger</span>: resolve project → render Liquid prompt → refresh install token → <span class="mono">createAgentSessionOnIssue</span> → <span class="mono">linearSessionId</span>.</li>
+      <li>Build synthetic <span class="mono">AgentSessionEvent(action:created)</span> with <span class="mono">promptContext = rendered prompt</span>.</li>
+      <li><span class="mono">SESSION_RUNNER.create</span> with mode <span class="mono">agent_session</span> + <span class="mono">workflow_overrides</span> snapshot (engine/model/max_turns/name/+policy).</li>
+      <li>Same Workflow as @-mention runs — Linear timeline renders it identically.</li>
+    </ol>
+
+    <h3>3. Stop signal</h3>
+    <ol class="flow">
+      <li>Linear <span class="mono">prompted</span> webhook arrives with <span class="mono">agentActivity.signal: "stop"</span>.</li>
+      <li>Webhook route detects via <span class="mono">extractStopSignal</span> (probes 3 paths).</li>
+      <li><span class="mono">SESSION_RUNNER.get(sessionId).terminate()</span> — Workflow <span class="mono">finally</span> is <strong>not</strong> trusted to run after terminate.</li>
+      <li><span class="mono">DispatcherClient.stop(issueIdentifier)</span> — destroys the per-issue sandbox DO.</li>
+      <li><span class="mono">postResponse("Stopped at user request.")</span> to Linear timeline (with refresh-on-401).</li>
+      <li><span class="mono">AgentSessionStore.update(status:'stopped')</span>.</li>
+    </ol>
+  </section>
+
+  <!-- =================== SANDBOX SDK SKILL =================== -->
+  <section id="sandbox-skill">
+    <h2>sandbox-sdk skill <span class="id">.claude/skills/sandbox-sdk/</span></h2>
+    <p>A reference skill for building on top of <span class="mono">@cloudflare/sandbox</span>. Not directly imported by <span class="mono">linear-agent</span> — it documents what the sibling <span class="mono">sandbox-dispatcher</span> Worker is built on, and is the playbook future contributors load when editing dispatcher code or resnapshotting baselines.</p>
+
+    <div class="grid cols-2">
+      <div class="card">
+        <h4>Files</h4>
+        <ul class="tight">
+          <li><span class="mono">SKILL.md</span> — entry doc: install, wrangler config, quick reference, anti-patterns.</li>
+          <li><span class="mono">references/api-quick-ref.md</span> — full TypeScript signatures.</li>
+          <li><span class="mono">references/examples.md</span> — example index (minimal, code-interpreter, openai-agents, claude-code, opencode, typescript-validator, authentication).</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>What it covers</h4>
+        <ul class="tight">
+          <li>Lifecycle: <span class="mono">getSandbox/destroy/sleepAfter/keepAlive</span></li>
+          <li>Commands: <span class="mono">sandbox.exec()</span></li>
+          <li>Code interpreter: <span class="mono">createCodeContext + runCode</span> (python/javascript/typescript)</li>
+          <li>File ops: <span class="mono">writeFile/readFile/mkdir/listFiles/deleteFile</span></li>
+          <li>Port exposure + preview URLs (needs custom wildcard domain)</li>
+          <li>Dockerfile extension on <span class="mono">docker.io/cloudflare/sandbox:0.7.0</span></li>
+          <li>OpenAI Agents SDK helpers (<span class="mono">@cloudflare/sandbox/openai</span>)</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3>Required wrangler config (per skill)</h3>
+<pre><code>{
+  "containers": [{
+    "class_name": "Sandbox",
+    "image": "./Dockerfile",
+    "instance_type": "lite",
+    "max_instances": 1
+  }],
+  "durable_objects": {
+    "bindings": [{ "class_name": "Sandbox", "name": "Sandbox" }]
+  },
+  "migrations": [{ "new_sqlite_classes": ["Sandbox"], "tag": "v1" }]
+}</code></pre>
+
+    <h3>Anti-patterns called out</h3>
+    <ul class="tight">
+      <li>Don't use internal clients (<span class="mono">CommandClient</span>, <span class="mono">FileClient</span>) — use <span class="mono">sandbox.*</span> methods.</li>
+      <li>Don't skip <span class="mono">export { Sandbox }</span> — Worker won't deploy.</li>
+      <li>Don't hardcode sandbox IDs for multi-user — key on user/session.</li>
+      <li>Don't forget <span class="mono">destroy()</span> for temporary sandboxes.</li>
+    </ul>
+  </section>
+
+  <!-- =================== PATTERNS =================== -->
+  <section id="patterns">
+    <h2>Key patterns &amp; invariants</h2>
+    <div class="grid cols-2">
+      <div class="card">
+        <h4>Webhook dedupe</h4>
+        <div class="desc">60-min KV markers keyed per <span class="mono">(webhookId, agentSessionId)</span> or <span class="mono">(webhookId, issueId, webhookTimestamp)</span>. Retries collapse; real re-transitions get distinct keys via <span class="mono">webhookTimestamp</span>.</div>
+      </div>
+      <div class="card">
+        <h4>Workflow id collision</h4>
+        <div class="desc">SESSION_RUNNER instance id = Linear <span class="mono">agentSession.id</span>. Linear retries idempotently collide on the existing instance.</div>
+      </div>
+      <div class="card">
+        <h4>Single-flight OAuth refresh</h4>
+        <div class="desc">Per-orgId <span class="mono">refreshInstallToken</span> is single-flight within a Worker instance — dozens of activity posts from a streaming turn collapse onto one refresh.</div>
+      </div>
+      <div class="card">
+        <h4>Envelope encryption</h4>
+        <div class="desc">Random per-row DEK (AES-GCM-256) wrapped by master KEK (also AES-GCM-256, Workers secret). <span class="mono">kek_version</span> drives rotation; old KEK kept available during re-wrap migration.</div>
+      </div>
+      <div class="card">
+        <h4>HMAC wire compat</h4>
+        <div class="desc">Pinned test vector <span class="mono">"test-secret-do-not-use-in-prod" / "{\"scope\":\"alice\"}" → 1628b1de…</span> asserted in dispatcher.test.ts, sandbox-dispatcher hmac.ts, and the Elixir <span class="mono">DispatcherClient</span>. Drift breaks all three suites loudly.</div>
+      </div>
+      <div class="card">
+        <h4>REST/MCP unification</h4>
+        <div class="desc">MCP tool handlers dispatch synthetic <span class="mono">Request</span>s into the same v1 router REST callers use. Validation, scope enforcement, persistence, error envelopes match exactly — no parallel implementation to drift.</div>
+      </div>
+      <div class="card">
+        <h4>Stop-signal path</h4>
+        <div class="desc">Handled fully in the webhook route — Cloudflare Workflow's <span class="mono">finally</span> doesn't run reliably after <span class="mono">terminate()</span>. Order: terminate instance → <span class="mono">dispatcher.stop</span> → <span class="mono">postResponse</span> → DB <span class="mono">status='stopped'</span>.</div>
+      </div>
+      <div class="card">
+        <h4>Per-issue sandbox branch</h4>
+        <div class="desc">Branch derived as <span class="mono">symphony/&lt;lowercased-sanitized-identifier&gt;</span> — gives continuity across multiple runs on the same issue (e.g. <span class="mono">SYM-123 → symphony/sym-123</span>).</div>
+      </div>
+      <div class="card">
+        <h4>Step timeout headroom</h4>
+        <div class="desc">Workflow turn steps use <span class="mono">timeout: "35 minutes"</span>. Cloudflare's default 10m races dispatcher's own 10m default and surfaces as <span class="mono">WorkflowTimeoutError</span>; dispatcher caps runs at 30m so 35m gives SSE-close + post-terminal-activity room.</div>
+      </div>
+      <div class="card">
+        <h4>Linear skill marker</h4>
+        <div class="desc">Every dispatched prompt is post-processed by <span class="mono">withLinearGraphqlReference</span> to append a marker block with issue/team UUIDs. The baked-in <span class="mono">linear</span> skill in the sandbox baseline reads <span class="mono">LINEAR_API_TOKEN</span> env and calls <span class="mono">api.linear.app/graphql</span> directly — no hosted MCP dependency.</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="raw">
+    <h2>Raw architecture JSON</h2>
+    <p>Same data as <a href="architecture.json">architecture.json</a>, inlined here for offline reading. Use <kbd>⌘F</kbd> to grep.</p>
+    <pre id="raw-json"></pre>
+  </section>
+
+</main>
+
+<script>
+  // Inline the JSON for offline use. Anchor mirrors the sibling file.
+  fetch('architecture.json')
+    .then(r => r.json())
+    .then(j => { document.getElementById('raw-json').textContent = JSON.stringify(j, null, 2); })
+    .catch(() => { document.getElementById('raw-json').textContent = '(load architecture.json from the same directory to view inline)'; });
+</script>
+
+</body>
+</html>
