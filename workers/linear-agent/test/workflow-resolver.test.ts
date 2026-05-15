@@ -50,6 +50,8 @@ interface TriggerRow {
   from_state: string | null;
   label_name: string | null;
   comment_match: string | null;
+  external_id_filter: string | null;
+  payload_match: string | null;
   team_filter: string | null;
   project_filter: string | null;
   label_filter: string | null;
@@ -115,6 +117,8 @@ class MockResolverDB {
       from_state: null,
       label_name: null,
       comment_match: null,
+      external_id_filter: null,
+      payload_match: null,
       team_filter: null,
       project_filter: null,
       label_filter: null,
@@ -213,6 +217,8 @@ class MockStatement {
       t_from_state: t.from_state,
       t_label_name: t.label_name,
       t_comment_match: t.comment_match,
+      t_external_id_filter: t.external_id_filter,
+      t_payload_match: t.payload_match,
       t_team_filter: t.team_filter,
       t_project_filter: t.project_filter,
       t_label_filter: t.label_filter,
@@ -598,6 +604,52 @@ describe("resolveWorkflow — scope filters", () => {
     };
     const r = await resolveWorkflow(makeEnv(db), right);
     expect(r?.trigger.id).toBe("t-1");
+  });
+});
+
+describe("resolveWorkflow — generic webhook filters", () => {
+  it("matches external_id_filter and payload_match JSONPath", async () => {
+    const db = new MockResolverDB();
+    db.addWorkflow({ id: "wf-1", organization_id: "org-1" });
+    db.addTrigger({
+      id: "t-1",
+      workflow_id: "wf-1",
+      event_type: "generic.webhook",
+      external_id_filter: "^deploy-",
+      payload_match: JSON.stringify({ path: "$.event.type", equals: "deploy.success" }),
+      action: "start_session",
+    });
+
+    const event: EventTuple = {
+      event_type: "generic.webhook",
+      organization_id: "org-1",
+      team_id: null,
+      project_id: null,
+      user_id: null,
+      assignee_id: null,
+      labels: [],
+      subject: {
+        kind: "generic",
+        external_id: "deploy-123",
+        payload: { event: { type: "deploy.success" } },
+      },
+      issue: null,
+      actor_id: null,
+      context: { payload: { event: { type: "deploy.success" } } },
+    };
+
+    const r = await resolveWorkflow(makeEnv(db), event);
+    expect(r?.trigger.id).toBe("t-1");
+
+    const rejected = await resolveWorkflow(makeEnv(db), {
+      ...event,
+      subject: {
+        kind: "generic",
+        external_id: "deploy-123",
+        payload: { event: { type: "deploy.failed" } },
+      },
+    });
+    expect(rejected).toBeNull();
   });
 });
 

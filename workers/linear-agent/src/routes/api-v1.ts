@@ -33,7 +33,9 @@ import {
   ProjectStore,
   SettingStore,
   WebhookEventStore,
+  WebhookSourceStore,
   type WebhookEventRecord,
+  type WebhookSourceRecord,
 } from "../lib/store";
 import { ApiTokenCreateSchema } from "../schemas/api-token";
 import {
@@ -44,6 +46,12 @@ import {
   TriggerCreateSchema,
   TriggerUpdateSchema,
 } from "../schemas/trigger";
+import {
+  WebhookSourceConfigSchema,
+  WebhookSourceCreateSchema,
+  WebhookSourceUpdateSchema,
+  type WebhookSourceConfig,
+} from "../schemas/webhook-source";
 import {
   eventTupleSchema,
   SubjectRefSchema,
@@ -98,6 +106,8 @@ interface TriggerRow {
   from_state: string | null;
   label_name: string | null;
   comment_match: string | null;
+  external_id_filter: string | null;
+  payload_match: string | null;
   team_filter: string | null;
   project_filter: string | null;
   label_filter: string | null;
@@ -115,7 +125,7 @@ const WORKFLOW_COLS =
   "id, organization_id, team_id, user_id, name, description, engine, model, max_turns, max_continuations, allowed_tools, disallowed_tools, allowed_domains, mcp_servers, permission_mode, additional_read_paths, additional_write_paths, hook_after_create, hook_before_remove, hook_timeout_ms, prompt_template, version, status, published_at, created_at, updated_at";
 
 const TRIGGER_COLS =
-  "id, workflow_id, event_type, to_state, from_state, label_name, comment_match, team_filter, project_filter, label_filter, skip_label_filter, assignee_filter, action, action_params, priority, enabled, created_at, updated_at";
+  "id, workflow_id, event_type, to_state, from_state, label_name, comment_match, external_id_filter, payload_match, team_filter, project_filter, label_filter, skip_label_filter, assignee_filter, action, action_params, priority, enabled, created_at, updated_at";
 
 function nowSec(): number {
   return Math.floor(Date.now() / 1000);
@@ -190,6 +200,8 @@ function serializeTrigger(row: TriggerRow): Record<string, unknown> {
     from_state: row.from_state,
     label_name: row.label_name,
     comment_match: row.comment_match,
+    external_id_filter: row.external_id_filter,
+    payload_match: asJsonObject(row.payload_match),
     team_filter: asJsonArray(row.team_filter),
     project_filter: asJsonArray(row.project_filter),
     label_filter: asJsonArray(row.label_filter),
@@ -200,7 +212,11 @@ function serializeTrigger(row: TriggerRow): Record<string, unknown> {
     priority: row.priority,
     enabled: row.enabled !== 0,
     expected_subject_kinds:
-      row.event_type === "api.invoke" ? ["linear_issue", "generic"] : ["linear_issue"],
+      row.event_type === "api.invoke"
+        ? ["linear_issue", "generic"]
+        : row.event_type === "generic.webhook"
+          ? ["generic"]
+          : ["linear_issue"],
     created_at: row.created_at,
     updated_at: row.updated_at,
   };
@@ -218,6 +234,43 @@ const TriggerInvokeRequestSchema = z.object({
 });
 
 const WEBHOOK_BODY_LIST_LIMIT = 8 * 1024;
+
+function randomSecret(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function publicBaseUrl(c: Context<{ Bindings: Env; Variables: AuthVariables }>): string {
+  return (c.env.URL || new URL(c.req.url).origin).replace(/\/$/, "");
+}
+
+function parseWebhookSourceConfig(raw: string): WebhookSourceConfig {
+  try {
+    const parsed = WebhookSourceConfigSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : WebhookSourceConfigSchema.parse({});
+  } catch {
+    return WebhookSourceConfigSchema.parse({});
+  }
+}
+
+function serializeWebhookSource(
+  c: Context<{ Bindings: Env; Variables: AuthVariables }>,
+  row: WebhookSourceRecord,
+): Record<string, unknown> {
+  return {
+    id: row.id,
+    organization_id: row.organization_id,
+    name: row.name,
+    kind: row.kind,
+    enabled: row.enabled !== 0,
+    config: parseWebhookSourceConfig(row.config),
+    webhook_url: `${publicBaseUrl(c)}/webhook/source/${row.id}`,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    last_used_at: row.last_used_at,
+  };
+}
 
 function parseIntOr(raw: string | undefined, fallback: number): number {
   if (!raw) return fallback;
@@ -291,6 +344,8 @@ export function buildApiV1Router() {
   });
   app.use("/api/v1/webhooks", rwScopes);
   app.use("/api/v1/webhooks/*", rwScopes);
+  app.use("/api/v1/webhook-sources", rwScopes);
+  app.use("/api/v1/webhook-sources/*", rwScopes);
   app.use("/api/v1/webhook-events", rwScopes);
   app.use("/api/v1/webhook-events/*", rwScopes);
   app.use("/api/v1/projects", rwScopes);
@@ -738,11 +793,11 @@ export function buildApiV1Router() {
     await c.env.DB.prepare(
       `INSERT INTO workflow_triggers (
          id, workflow_id, event_type,
-         to_state, from_state, label_name, comment_match,
+         to_state, from_state, label_name, comment_match, external_id_filter, payload_match,
          team_filter, project_filter, label_filter, skip_label_filter, assignee_filter,
          action, action_params, priority, enabled, created_at, updated_at
        ) VALUES (
-         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
        )`,
     )
       .bind(
@@ -753,6 +808,8 @@ export function buildApiV1Router() {
         t.from_state ?? null,
         t.label_name ?? null,
         t.comment_match ?? null,
+        t.external_id_filter ?? null,
+        jsonOrNull(t.payload_match),
         jsonOrNull(t.team_filter),
         jsonOrNull(t.project_filter),
         jsonOrNull(t.label_filter),
@@ -924,6 +981,10 @@ export function buildApiV1Router() {
     if (t.label_name !== undefined) set("label_name", t.label_name ?? null);
     if (t.comment_match !== undefined)
       set("comment_match", t.comment_match ?? null);
+    if (t.external_id_filter !== undefined)
+      set("external_id_filter", t.external_id_filter ?? null);
+    if (t.payload_match !== undefined)
+      set("payload_match", jsonOrNull(t.payload_match));
     if (t.team_filter !== undefined)
       set("team_filter", jsonOrNull(t.team_filter));
     if (t.project_filter !== undefined)
@@ -962,6 +1023,69 @@ export function buildApiV1Router() {
     await c.env.DB.prepare("DELETE FROM workflow_triggers WHERE id = ?")
       .bind(existing.id)
       .run();
+    return c.json({ ok: true });
+  });
+
+  // ── Webhook sources — HMAC-authenticated public source configs ───
+
+  app.get("/api/v1/webhook-sources", async (c) => {
+    const auth = c.get("auth");
+    const rows = await new WebhookSourceStore(c.env.DB).listByOrg(auth.orgId);
+    return c.json({ sources: rows.map((row) => serializeWebhookSource(c, row)) });
+  });
+
+  app.post("/api/v1/webhook-sources", async (c) => {
+    const auth = c.get("auth");
+    const raw = await c.req.json().catch(() => null);
+    const parsed = WebhookSourceCreateSchema.safeParse(raw);
+    if (!parsed.success) {
+      return respondError(c, "validation_failed", undefined, parsed.error.issues);
+    }
+    const config = WebhookSourceConfigSchema.parse(parsed.data.config ?? {});
+    const secret = randomSecret();
+    const row = await new WebhookSourceStore(c.env.DB).create({
+      organizationId: auth.orgId,
+      name: parsed.data.name,
+      enabled: parsed.data.enabled,
+      secret,
+      config,
+    });
+    return c.json({ source: { ...serializeWebhookSource(c, row), secret } }, 201);
+  });
+
+  app.get("/api/v1/webhook-sources/:id", async (c) => {
+    const auth = c.get("auth");
+    const row = await new WebhookSourceStore(c.env.DB).getById(c.req.param("id"), auth.orgId);
+    if (!row) return respondError(c, "not_found");
+    return c.json({ source: serializeWebhookSource(c, row) });
+  });
+
+  app.put("/api/v1/webhook-sources/:id", async (c) => {
+    const auth = c.get("auth");
+    const raw = await c.req.json().catch(() => null);
+    const parsed = WebhookSourceUpdateSchema.safeParse(raw);
+    if (!parsed.success) {
+      return respondError(c, "validation_failed", undefined, parsed.error.issues);
+    }
+    const existing = await new WebhookSourceStore(c.env.DB).getById(c.req.param("id"), auth.orgId);
+    if (!existing) return respondError(c, "not_found");
+    const currentConfig = parseWebhookSourceConfig(existing.config);
+    const nextConfig = parsed.data.config
+      ? WebhookSourceConfigSchema.parse({ ...currentConfig, ...parsed.data.config })
+      : undefined;
+    const row = await new WebhookSourceStore(c.env.DB).update(c.req.param("id"), auth.orgId, {
+      name: parsed.data.name,
+      enabled: parsed.data.enabled,
+      config: nextConfig,
+    });
+    if (!row) return respondError(c, "not_found");
+    return c.json({ source: serializeWebhookSource(c, row) });
+  });
+
+  app.delete("/api/v1/webhook-sources/:id", async (c) => {
+    const auth = c.get("auth");
+    const deleted = await new WebhookSourceStore(c.env.DB).delete(c.req.param("id"), auth.orgId);
+    if (!deleted) return respondError(c, "not_found");
     return c.json({ ok: true });
   });
 
@@ -1473,6 +1597,8 @@ function hydrateTriggerFromRow(row: TriggerRow): Trigger {
     from_state: row.from_state,
     label_name: row.label_name,
     comment_match: row.comment_match,
+    external_id_filter: row.external_id_filter,
+    payload_match: asJsonObject(row.payload_match) as Trigger["payload_match"],
     team_filter: asJsonArray(row.team_filter) as string[] | null,
     project_filter: asJsonArray(row.project_filter) as string[] | null,
     label_filter: asJsonArray(row.label_filter) as string[] | null,

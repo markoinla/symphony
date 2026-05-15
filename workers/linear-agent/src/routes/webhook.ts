@@ -10,14 +10,18 @@ import {
   mapIssueUpdateToEvent,
   type IssueWebhookEnvelope,
 } from "../lib/event-mapper-inbound";
-import { verifyLinearSignature } from "../lib/signature";
+import { readJsonPath } from "../lib/json-path";
+import { verifyHmacSignature, verifyLinearSignature } from "../lib/signature";
 import {
   AgentSessionStore,
   LinearAgentInstallStore,
   WebhookEventStore,
+  WebhookSourceStore,
 } from "../lib/store";
 import { resolveWorkflow } from "../lib/workflows/resolver";
 import { ensureDefaultWorkflow } from "../lib/workflows/seed";
+import { WebhookSourceConfigSchema } from "../schemas/webhook-source";
+import type { EventTuple } from "../schemas/event";
 import type { AgentSessionEventWebhook } from "../types/agent-session";
 
 export { summarizeStdout } from "../lib/session-helpers";
@@ -169,6 +173,156 @@ export function buildWebhookRouter() {
         } catch {}
       }
       return c.json({ error: "webhook_handler_error", message: msg, stack }, 500);
+    }
+  });
+
+  app.post("/webhook/source/:id", async (c) => {
+    const receivedAt = Math.floor(Date.now() / 1000);
+    const startedMs = Date.now();
+    const sourceId = c.req.param("id");
+    const events = new WebhookEventStore(c.env.DB);
+    let logId: string | null = null;
+
+    try {
+      const source = await new WebhookSourceStore(c.env.DB).getById(sourceId);
+      const raw = await c.req.raw.clone().text();
+      logId = await events.insert({
+        receivedAt,
+        organizationId: source?.organization_id ?? null,
+        webhookId: sourceId,
+        envelopeType: "generic.webhook",
+        envelopeAction: "post",
+        signatureOk: false,
+        rawBody: raw.slice(0, 65_536),
+      });
+
+      if (!source || source.kind !== "generic") {
+        await events.update(logId, {
+          dispatchedAction: "not_found",
+          error: "source_not_found",
+          latencyMs: Date.now() - startedMs,
+        });
+        return c.json({ error: "not_found" }, 404);
+      }
+      if (source.enabled === 0) {
+        await events.update(logId, {
+          dispatchedAction: "disabled_source",
+          error: "disabled_source",
+          latencyMs: Date.now() - startedMs,
+        });
+        return c.json({ error: "not_found" }, 404);
+      }
+
+      const config = WebhookSourceConfigSchema.parse(JSON.parse(source.config));
+      const signature = c.req.header(config.signature_header);
+      const sigOk = await verifyHmacSignature(
+        source.secret,
+        raw,
+        signature,
+        config.signature_algorithm,
+      );
+      await events.update(logId, { signatureOk: sigOk });
+      if (!sigOk) {
+        await events.update(logId, {
+          dispatchedAction: "error",
+          error: "invalid_signature",
+          latencyMs: Date.now() - startedMs,
+        });
+        return c.json({ error: "invalid_signature" }, 401);
+      }
+
+      let payload: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(raw) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          throw new Error("payload_not_object");
+        }
+        payload = parsed as Record<string, unknown>;
+      } catch {
+        await events.update(logId, {
+          dispatchedAction: "error",
+          error: "invalid_json",
+          latencyMs: Date.now() - startedMs,
+        });
+        return c.json({ error: "invalid_json" }, 400);
+      }
+
+      const extracted = readJsonPath(payload, config.external_id_path);
+      const externalId =
+        typeof extracted === "string" && extracted.trim() !== ""
+          ? extracted.trim()
+          : crypto.randomUUID();
+      const dedupeKey = `webhook-source:${source.id}:${externalId}`;
+      if (await c.env.LINEAR_TOKENS.get(dedupeKey)) {
+        await events.update(logId, {
+          deduped: true,
+          dispatchedAction: "deduped",
+          eventSummary: `Generic webhook ${externalId}`,
+          latencyMs: Date.now() - startedMs,
+        });
+        return c.json({ ok: true, deduped: true });
+      }
+      await c.env.LINEAR_TOKENS.put(dedupeKey, "1", { expirationTtl: 60 });
+
+      const event: EventTuple = {
+        event_type: "generic.webhook",
+        organization_id: source.organization_id,
+        team_id: null,
+        project_id: null,
+        user_id: null,
+        assignee_id: null,
+        labels: [],
+        subject: { kind: "generic", external_id: externalId, payload },
+        issue: null,
+        actor_id: null,
+        context: { payload },
+      };
+      const resolved = await resolveWorkflow(c.env, event);
+      if (!resolved) {
+        await events.update(logId, {
+          dispatchedAction: "no_match",
+          eventSummary: `Generic webhook ${externalId}`,
+          latencyMs: Date.now() - startedMs,
+        });
+        await new WebhookSourceStore(c.env.DB).touch(source.id);
+        return c.json({ ok: true, matched: false });
+      }
+
+      const result = await dispatchTrigger(c.env, {
+        workflow: resolved.workflow,
+        trigger: resolved.trigger,
+        event,
+        context: { payload },
+        source: "webhook",
+      });
+      await events.update(logId, {
+        matchedWorkflowId: resolved.workflow.id,
+        matchedTriggerId: resolved.trigger.id,
+        dispatchedAction: result.outcome,
+        agentSessionId: result.agentSessionId ?? null,
+        error: result.error ?? null,
+        eventSummary: `Generic webhook ${externalId}`,
+        latencyMs: Date.now() - startedMs,
+      });
+      await new WebhookSourceStore(c.env.DB).touch(source.id);
+
+      if (result.outcome === "error") {
+        return c.json({ error: result.error ?? "dispatch_failed" }, 500);
+      }
+      if (result.outcome === "no_handler") {
+        return c.json({ error: result.error ?? "no_handler" }, 422);
+      }
+      return c.json({ ok: true, session_id: result.agentSessionId }, 202);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (logId) {
+        await events.update(logId, {
+          dispatchedAction: "error",
+          error: msg,
+          latencyMs: Date.now() - startedMs,
+        });
+      }
+      return c.json({ error: "webhook_handler_error", message: msg }, 500);
     }
   });
 

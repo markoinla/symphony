@@ -13,8 +13,10 @@
 // in the base build. The result set is bounded by event_type + scope,
 // so the post-filter pass is small.
 
+import { readJsonPath } from "../json-path";
 import type { EventTuple } from "../../schemas/event";
 import type { Trigger } from "../../schemas/trigger";
+import type { PayloadMatch } from "../../schemas/webhook-source";
 import type { Workflow } from "../../schemas/workflow";
 
 export interface ResolveResult {
@@ -56,6 +58,7 @@ export async function resolveWorkflow(
 
   for (const raw of rows.results ?? []) {
     if (!passesCommentMatch(raw, event)) continue;
+    if (!passesGenericFilters(raw, event)) continue;
     if (!passesScopeFilters(raw, event)) continue;
     return {
       workflow: hydrateWorkflow(raw),
@@ -76,6 +79,8 @@ const SELECT_SQL = `
     t.from_state      AS t_from_state,
     t.label_name      AS t_label_name,
     t.comment_match   AS t_comment_match,
+    t.external_id_filter AS t_external_id_filter,
+    t.payload_match   AS t_payload_match,
     t.team_filter     AS t_team_filter,
     t.project_filter  AS t_project_filter,
     t.label_filter    AS t_label_filter,
@@ -161,6 +166,29 @@ function passesCommentMatch(raw: RawJoinedRow, event: EventTuple): boolean {
   } catch {
     return body.includes(pattern);
   }
+}
+
+function passesGenericFilters(raw: RawJoinedRow, event: EventTuple): boolean {
+  const subject = event.subject;
+  const isGeneric = subject?.kind === "generic";
+
+  if (raw.t_external_id_filter != null) {
+    if (!isGeneric) return false;
+    try {
+      if (!new RegExp(raw.t_external_id_filter).test(subject.external_id)) return false;
+    } catch {
+      if (!subject.external_id.includes(raw.t_external_id_filter)) return false;
+    }
+  }
+
+  const payloadMatch = parseJsonOrNull<PayloadMatch>(raw.t_payload_match);
+  if (payloadMatch) {
+    if (!isGeneric) return false;
+    const actual = readJsonPath(subject.payload, payloadMatch.path);
+    if (JSON.stringify(actual) !== JSON.stringify(payloadMatch.equals)) return false;
+  }
+
+  return true;
 }
 
 // Scope filters live in JSON arrays. We evaluate them in JS so we can
@@ -268,6 +296,8 @@ function hydrateTrigger(raw: RawJoinedRow): Trigger {
     from_state: raw.t_from_state ?? null,
     label_name: raw.t_label_name ?? null,
     comment_match: raw.t_comment_match ?? null,
+    external_id_filter: raw.t_external_id_filter ?? null,
+    payload_match: parseJsonOrNull<Trigger["payload_match"]>(raw.t_payload_match),
     team_filter: parseStringArray(raw.t_team_filter),
     project_filter: parseStringArray(raw.t_project_filter),
     label_filter: parseStringArray(raw.t_label_filter),
@@ -293,6 +323,8 @@ interface RawJoinedRow {
   t_from_state: string | null;
   t_label_name: string | null;
   t_comment_match: string | null;
+  t_external_id_filter: string | null;
+  t_payload_match: string | null;
   t_team_filter: string | null;
   t_project_filter: string | null;
   t_label_filter: string | null;

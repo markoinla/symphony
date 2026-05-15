@@ -12,25 +12,45 @@
  * Docs: https://linear.app/developers/webhooks#securing-webhooks
  */
 
+export type HmacAlgorithm = "sha1" | "sha256";
+
 export async function verifyLinearSignature(
   secret: string,
   body: string | Uint8Array,
   provided: string | null | undefined,
 ): Promise<boolean> {
-  if (!provided) return false;
-  const expected = await computeLinearSignature(secret, body);
-  return constantTimeEqual(expected, provided);
+  return verifyHmacSignature(secret, body, provided, "sha256");
 }
 
 export async function computeLinearSignature(
   secret: string,
   body: string | Uint8Array,
 ): Promise<string> {
+  return computeHmacSignature(secret, body, "sha256");
+}
+
+export async function verifyHmacSignature(
+  secret: string,
+  body: string | Uint8Array,
+  provided: string | null | undefined,
+  algorithm: HmacAlgorithm,
+): Promise<boolean> {
+  if (!provided) return false;
+  const expected = await computeHmacSignature(secret, body, algorithm);
+  const normalized = normalizeProvidedSignature(provided, algorithm);
+  return constantTimeEqual(expected, normalized);
+}
+
+export async function computeHmacSignature(
+  secret: string,
+  body: string | Uint8Array,
+  algorithm: HmacAlgorithm,
+): Promise<string> {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey(
     "raw",
     enc.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
+    { name: "HMAC", hash: algorithm === "sha1" ? "SHA-1" : "SHA-256" },
     false,
     ["sign"],
   );
@@ -39,6 +59,12 @@ export async function computeLinearSignature(
   let out = "";
   for (const byte of sig) out += byte.toString(16).padStart(2, "0");
   return out;
+}
+
+function normalizeProvidedSignature(provided: string, algorithm: HmacAlgorithm): string {
+  const trimmed = provided.trim().toLowerCase();
+  const prefix = `${algorithm}=`;
+  return trimmed.startsWith(prefix) ? trimmed.slice(prefix.length) : trimmed;
 }
 
 function constantTimeEqual(a: string, b: string): boolean {

@@ -680,6 +680,43 @@ export async function getWebhook(id: string): Promise<{ webhook: WebhookEvent }>
   return requestJson<{ webhook: WebhookEvent }>(`/api/v1/webhooks/${id}`)
 }
 
+export type WebhookSource = {
+  id: string
+  organization_id: string
+  name: string
+  kind: 'generic'
+  enabled: boolean
+  config: {
+    external_id_path: string
+    signature_header: string
+    signature_algorithm: 'sha1' | 'sha256'
+  }
+  webhook_url: string
+  secret?: string
+  created_at: number
+  updated_at: number
+  last_used_at: number | null
+}
+
+export type WebhookSourceCreateBody = {
+  name: string
+  enabled?: boolean
+  config?: Partial<WebhookSource['config']>
+}
+
+export function getWebhookSources(): Promise<{ sources: WebhookSource[] }> {
+  return requestJson<{ sources: WebhookSource[] }>('/api/v1/webhook-sources')
+}
+
+export function createWebhookSource(
+  body: WebhookSourceCreateBody,
+): Promise<{ source: WebhookSource }> {
+  return requestJson<{ source: WebhookSource }>('/api/v1/webhook-sources', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
 // ── Settings ────────────────────────────────────────────────────────
 
 export function getSettings(): Promise<SettingsPayload> {

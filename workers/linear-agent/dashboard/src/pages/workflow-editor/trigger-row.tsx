@@ -30,6 +30,7 @@ import type {
 
 const eventTypeOptions: { value: EventType; label: string }[] = [
   { value: 'api.invoke', label: 'API invoke' },
+  { value: 'generic.webhook', label: 'Generic webhook' },
   { value: 'state_entered', label: 'State entered' },
   { value: 'state_exited', label: 'State exited' },
   { value: 'comment_added', label: 'Comment added' },
@@ -52,7 +53,9 @@ function expectedSubjectKinds(trigger: Trigger): string {
   if (trigger.expected_subject_kinds?.length) {
     return trigger.expected_subject_kinds.join(', ')
   }
-  return trigger.event_type === 'api.invoke' ? 'linear_issue, generic' : 'linear_issue'
+  if (trigger.event_type === 'api.invoke') return 'linear_issue, generic'
+  if (trigger.event_type === 'generic.webhook') return 'generic'
+  return 'linear_issue'
 }
 
 export function TriggerRow({
@@ -86,6 +89,8 @@ export function TriggerRow({
                 to_state: null,
                 label_name: null,
                 comment_match: null,
+                external_id_filter: null,
+                payload_match: null,
               })
             }
           >
@@ -222,6 +227,38 @@ export function TriggerRow({
               value={trigger.comment_match ?? ''}
             />
           </Field>
+        )}
+
+        {trigger.event_type === 'generic.webhook' && (
+          <>
+            <Field label="External ID filter (regex)">
+              <Input
+                onChange={(event) =>
+                  onChange({ external_id_filter: event.target.value || null })
+                }
+                placeholder="^deploy-"
+                value={trigger.external_id_filter ?? ''}
+              />
+            </Field>
+            <Field label="Payload match" hint='JSON: {"path":"$.event.type","equals":"deploy.success"}'>
+              <Input
+                onChange={(event) => {
+                  const value = event.target.value.trim()
+                  if (!value) {
+                    onChange({ payload_match: null })
+                    return
+                  }
+                  try {
+                    onChange({ payload_match: JSON.parse(value) })
+                  } catch {
+                    // Keep the previous valid value while the user edits invalid JSON.
+                  }
+                }}
+                placeholder='{"path":"$.event.type","equals":"deploy.success"}'
+                value={trigger.payload_match ? JSON.stringify(trigger.payload_match) : ''}
+              />
+            </Field>
+          </>
         )}
 
         {trigger.event_type === 'assignee_changed' && (

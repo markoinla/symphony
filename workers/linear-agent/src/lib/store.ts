@@ -786,6 +786,127 @@ export class AgentSessionEventStore {
   }
 }
 
+// ── webhook_sources ────────────────────────────────────────────────
+
+export interface WebhookSourceRecord {
+  id: string;
+  organization_id: string;
+  name: string;
+  kind: "generic";
+  enabled: number;
+  secret: string;
+  config: string;
+  created_at: number;
+  updated_at: number;
+  last_used_at: number | null;
+}
+
+export class WebhookSourceStore {
+  constructor(private readonly db: D1Database) {}
+
+  private static readonly COLUMNS =
+    "id, organization_id, name, kind, enabled, secret, config, created_at, updated_at, last_used_at";
+
+  async create(input: {
+    organizationId: string;
+    name: string;
+    secret: string;
+    config: Record<string, unknown>;
+    enabled?: boolean;
+  }): Promise<WebhookSourceRecord> {
+    const id = crypto.randomUUID();
+    const ts = Math.floor(Date.now() / 1000);
+    await this.db
+      .prepare(
+        `INSERT INTO webhook_sources
+           (id, organization_id, name, kind, enabled, secret, config, created_at, updated_at, last_used_at)
+         VALUES (?, ?, ?, 'generic', ?, ?, ?, ?, ?, NULL)`,
+      )
+      .bind(
+        id,
+        input.organizationId,
+        input.name,
+        input.enabled === false ? 0 : 1,
+        input.secret,
+        JSON.stringify(input.config),
+        ts,
+        ts,
+      )
+      .run();
+    const row = await this.getById(id, input.organizationId);
+    if (!row) throw new Error("webhook_source_insert_failed");
+    return row;
+  }
+
+  async listByOrg(organizationId: string): Promise<WebhookSourceRecord[]> {
+    const result = await this.db
+      .prepare(
+        `SELECT ${WebhookSourceStore.COLUMNS}
+         FROM webhook_sources
+         WHERE organization_id = ?
+         ORDER BY created_at DESC`,
+      )
+      .bind(organizationId)
+      .all<WebhookSourceRecord>();
+    return result.results ?? [];
+  }
+
+  async getById(id: string, organizationId?: string): Promise<WebhookSourceRecord | null> {
+    const where = organizationId ? "id = ? AND organization_id = ?" : "id = ?";
+    const bindings = organizationId ? [id, organizationId] : [id];
+    return await this.db
+      .prepare(`SELECT ${WebhookSourceStore.COLUMNS} FROM webhook_sources WHERE ${where}`)
+      .bind(...bindings)
+      .first<WebhookSourceRecord>();
+  }
+
+  async update(
+    id: string,
+    organizationId: string,
+    attrs: { name?: string; enabled?: boolean; config?: Record<string, unknown> },
+  ): Promise<WebhookSourceRecord | null> {
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    if (attrs.name !== undefined) {
+      sets.push("name = ?");
+      values.push(attrs.name);
+    }
+    if (attrs.enabled !== undefined) {
+      sets.push("enabled = ?");
+      values.push(attrs.enabled ? 1 : 0);
+    }
+    if (attrs.config !== undefined) {
+      sets.push("config = ?");
+      values.push(JSON.stringify(attrs.config));
+    }
+    if (sets.length > 0) {
+      sets.push("updated_at = ?");
+      values.push(Math.floor(Date.now() / 1000), id, organizationId);
+      await this.db
+        .prepare(`UPDATE webhook_sources SET ${sets.join(", ")} WHERE id = ? AND organization_id = ?`)
+        .bind(...values)
+        .run();
+    }
+    return await this.getById(id, organizationId);
+  }
+
+  async touch(id: string): Promise<void> {
+    const ts = Math.floor(Date.now() / 1000);
+    await this.db
+      .prepare("UPDATE webhook_sources SET last_used_at = ?, updated_at = ? WHERE id = ?")
+      .bind(ts, ts, id)
+      .run();
+  }
+
+  async delete(id: string, organizationId: string): Promise<boolean> {
+    const result = await this.db
+      .prepare("DELETE FROM webhook_sources WHERE id = ? AND organization_id = ?")
+      .bind(id, organizationId)
+      .run();
+    return (result.meta.changes ?? 0) > 0;
+  }
+}
+
 // ── webhook_events ──────────────────────────────────────────────────
 
 export interface WebhookEventRecord {
@@ -867,6 +988,7 @@ export class WebhookEventStore {
     id: string,
     fields: {
       organizationId?: string | null;
+      signatureOk?: boolean;
       deduped?: boolean;
       matchedWorkflowId?: string | null;
       matchedTriggerId?: string | null;
@@ -883,6 +1005,10 @@ export class WebhookEventStore {
     if (fields.organizationId !== undefined) {
       sets.push("organization_id = ?");
       values.push(fields.organizationId);
+    }
+    if (fields.signatureOk !== undefined) {
+      sets.push("signature_ok = ?");
+      values.push(fields.signatureOk ? 1 : 0);
     }
     if (fields.deduped !== undefined) {
       sets.push("deduped = ?");

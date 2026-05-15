@@ -305,7 +305,31 @@ because it's pure key paste — but defer to a second pass:
 PUT    /api/v1/integrations/credentials  (admin)   [deferred]
 ```
 
-### 6. Webhook events
+### 6. Webhook sources
+
+```
+GET    /api/v1/webhook-sources           (read)
+POST   /api/v1/webhook-sources           (write)
+GET    /api/v1/webhook-sources/:id       (read)
+PUT    /api/v1/webhook-sources/:id       (write)
+DELETE /api/v1/webhook-sources/:id       (write)
+POST   /webhook/source/:id               (public HMAC)
+```
+
+Generic sources accept HMAC-signed JSON payloads and emit
+`generic.webhook` events. Source config includes
+`external_id_path`, `signature_header`, and `signature_algorithm`
+(`sha256` or `sha1`). The created response returns the secret once.
+Duplicate deliveries with the same `source_id + external_id` within 60s
+are deduped.
+
+Trigger match fields for `generic.webhook` include
+`external_id_filter` (regex) and `payload_match` (`{ path, equals }`).
+The raw payload is available to prompts as `context.payload` and
+`subject.payload`; `subject.external_id` contains the extracted id or a
+UUID fallback.
+
+### 7. Webhook events
 
 ```
 GET    /api/v1/webhook-events            (read)
@@ -326,7 +350,7 @@ not *webhook configurations*).
 - List response truncates `raw_body` at 8KB (today). Detail endpoint
   returns full body.
 
-### 7. API tokens
+### 8. API tokens
 
 See [Auth → Token lifecycle](#token-lifecycle).
 
