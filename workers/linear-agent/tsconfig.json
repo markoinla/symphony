@@ -14,5 +14,8 @@
     "isolatedModules": true,
     "noEmit": true
   },
-  "include": ["src/**/*", "test/**/*"]
+  "include": ["src/**/*", "test/**/*"],
+  // Imports the React dashboard's browser code; type-checking it under the
+  // Worker libs (no DOM, ES2022) is wrong. vitest still runs it (glob-based).
+  "exclude": ["test/dashboard-api-adapter.test.ts"]
 }
