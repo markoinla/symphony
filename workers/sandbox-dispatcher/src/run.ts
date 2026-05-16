@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { getSandbox, parseSSEStream } from "@cloudflare/sandbox";
+import { getSandbox } from "@cloudflare/sandbox";
 
 import type { Env } from "./index";
 import { BaselineStore } from "./storage";
@@ -12,7 +12,7 @@ import type { EngineAdapter, NormalizedEvent } from "./engines/types";
 /**
  * `/run` — execute one agent turn in a fresh per-issue sandbox.
  *
- * Flow:
+ * Buffered flow (non-streaming `/run`):
  *   1. Look up the baseline snapshot for `engine`. 412 if absent.
  *   2. Get a per-issue sandbox (`run-<sanitized-issue-id>`), restore the
  *      baseline so engine binary + base toolchain are available.
@@ -22,6 +22,11 @@ import type { EngineAdapter, NormalizedEvent } from "./engines/types";
  *   5. Build an engine command and exec it with the configured timeout.
  *   6. Always destroy the sandbox in `finally`.
  *
+ * Streaming flow (`Accept: text/event-stream`) is different: the engine
+ * runs as a *detached background process* and the sandbox is NOT
+ * destroyed when the SSE reader disconnects — see `runStreaming`. It is
+ * torn down only via `POST /run/stop`.
+ *
  * Returns `{ engine, exit_code, stdout, stderr, duration_ms }` on success.
  *
  * Baselines contain only binaries (no credentials). Per-tenant secrets
@@ -30,6 +35,16 @@ import type { EngineAdapter, NormalizedEvent } from "./engines/types";
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_TIMEOUT_MS = 30 * 60 * 1000;
+
+// Poll cadence for tailing a detached engine process's log. Starts at
+// POLL_MIN_MS and backs off toward POLL_MAX_MS while no new output
+// arrives, resetting to the floor whenever the engine emits again.
+const POLL_MIN_MS = 2000;
+const POLL_MAX_MS = 5000;
+
+// Prefix marking a dispatcher-injected prelude event line in the engine
+// process's stdout (setup narration). See `buildPreludeCommand`.
+const PRELUDE_PREFIX = "__SYMPHONY_EVENT__ ";
 
 const SUPPORTED_ENGINES = new Set(["pi", "claude"] as const);
 type Engine = "pi" | "claude";
@@ -53,6 +68,9 @@ interface RunBody {
   // from the default branch HEAD. Unset = current behavior (work on
   // the default branch). See `resolveBranch` for the logic.
   branch?: unknown;
+  // Current turn number (1-based). Per-turn engine processes are keyed
+  // by this so a multi-turn session's turns don't collide; defaults to 1.
+  turn?: unknown;
 }
 
 interface CredentialsBody {
@@ -90,6 +108,7 @@ interface ParsedRun {
   githubToken: string | null;
   credentials: ParsedCredentials | null;
   branch: string | null;
+  turn: number;
 }
 
 export function buildRunRouter() {
@@ -224,6 +243,51 @@ export function buildRunRouter() {
     return c.json({ ok: true, issue_id: issueId });
   });
 
+  // Re-attach to an in-flight (or already-finished) engine process for
+  // an issue/turn and resume the SSE stream from `cursor` — the number
+  // of normalized events the caller already consumed. This is how the
+  // linear-agent worker recovers when its Workflow step is evicted
+  // mid-turn: the engine kept running as a detached process, so the
+  // retry re-attaches here instead of re-dispatching a fresh run.
+  app.post("/run/attach", async (c) => {
+    const body = await readJsonBody<{
+      issue_id?: unknown;
+      turn?: unknown;
+      cursor?: unknown;
+      engine?: unknown;
+    }>(c.req.raw);
+
+    const issueId = parseIssueId(body.issue_id);
+    if (!issueId) {
+      return c.json({ error: "invalid_issue_id" }, 400);
+    }
+    if (
+      typeof body.engine !== "string" ||
+      !SUPPORTED_ENGINES.has(body.engine as Engine)
+    ) {
+      return c.json({ error: "unsupported_engine" }, 400);
+    }
+    const engine = body.engine as Engine;
+    const turn = parseTurn(body.turn);
+    const cursor = parseCursor(body.cursor);
+
+    const sandbox = getSandbox(c.env.Sandbox, runSandboxId(issueId));
+    const processId = runProcessId(issueId, turn);
+
+    return streamRun({
+      sandbox,
+      adapter: adapterFor(engine),
+      cursor,
+      start: async () => {
+        const proc = await sandbox.getProcess(processId);
+        if (!proc) {
+          return { ok: false, message: "process_not_found" };
+        }
+        return { ok: true, processId };
+      },
+    });
+  });
+
   return app;
 }
 
@@ -232,79 +296,50 @@ export function runSandboxId(issueId: string): string {
 }
 
 /**
- * Streaming branch of `/run`. Same setup as the buffered branch (snap
- * restore, clone, build engine command) but executes the engine via
- * `sandbox.execStream` and pipes normalized engine events back as SSE.
+ * Streaming branch of `/run`. Setup (snapshot restore, clone, branch,
+ * MCP config) runs as before, but the engine is then launched as a
+ * *detached background process* (`sandbox.startProcess`) that writes
+ * its own stdout to the process log. The HTTP response only ever
+ * *tails* that log — see `streamRun`.
  *
- * Wire format mirrors the engine-agnostic envelope in
- * `src/engines/types.ts`. Each `data:` line is a JSON-encoded
- * NormalizedEvent. The stream always terminates with exactly one
- * `result` event (exit_code + duration_ms) followed by stream close,
- * even on internal error — so the caller's reader loop always reaches
- * a terminal frame.
+ * Why detached: a Cloudflare Workflows step on the caller side
+ * (linear-agent's `turn-N`) gets evicted with `WorkflowInternalError`
+ * roughly every ~5 minutes. When that happens the SSE reader
+ * disconnects. If the engine were tied to this request it would die
+ * with it; as a background process it keeps running, and the caller
+ * re-attaches via `POST /run/attach` from the last cursor.
  *
- * Backpressure / cancellation: if the caller disconnects, the writer's
- * close() rejects, we catch it, and the `finally` block destroys the
- * sandbox so a stale pi process doesn't keep burning CPU. (The pi
- * subprocess inside the container exits when stdin closes; the
- * container itself is destroyed by `safeDestroy`.)
+ * Setup narration ("Cloning…", "Calling model…") is echoed by the
+ * process itself as `__SYMPHONY_EVENT__`-prefixed prelude lines, so
+ * those events live in the same durable log and a re-attach replays
+ * them deterministically rather than the dispatcher having to
+ * reproduce request-scoped state.
  */
-async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
+function runStreaming(env: Env, parsed: ParsedRun): Response {
   const sandbox = getSandbox(env.Sandbox, runSandboxId(parsed.issueId));
-  const adapter = adapterFor(parsed.engine);
-  const startedAt = Date.now();
+  const processId = runProcessId(parsed.issueId, parsed.turn);
 
-  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-  const writer = writable.getWriter();
-  const encoder = new TextEncoder();
+  return streamRun({
+    sandbox,
+    adapter: adapterFor(parsed.engine),
+    // A fresh /run always starts from the beginning of the event
+    // stream; re-attach (/run/attach) is the path that carries a
+    // non-zero cursor.
+    cursor: 0,
+    start: async () => {
+      // Idempotent re-entry. If a caller's turn step was evicted after
+      // the engine process started but before any event was persisted,
+      // its retry lands back on /run with cursor 0. Attaching to the
+      // existing process is mandatory here: re-running setup would
+      // `rm -rf` the workspace out from under the live engine and
+      // `startProcess` would collide on the same processId.
+      const existing = await sandbox.getProcess(processId);
+      if (existing) return { ok: true, processId };
 
-  async function emit(event: NormalizedEvent): Promise<void> {
-    const frame = `data: ${JSON.stringify(event)}\n\n`;
-    try {
-      await writer.write(encoder.encode(frame));
-    } catch {
-      // Reader has disconnected; swallow so the cleanup path runs.
-    }
-  }
+      // Setup narration is collected, not streamed: it's echoed by the
+      // engine process as prelude lines so it survives a re-attach.
+      const preludeThoughts: string[] = ["Spinning up a sandbox…"];
 
-  async function emitTerminal(
-    exitCode: number,
-    options: {
-      message?: string;
-      branch?: string | null;
-    } = {},
-  ): Promise<void> {
-    if (options.message) {
-      await emit({ type: "error", message: options.message });
-    }
-    await emit({
-      type: "result",
-      exit_code: exitCode,
-      duration_ms: Date.now() - startedAt,
-      branch: options.branch ?? null,
-      // pr_url stays null on the dispatcher side — the linear-agent
-      // worker creates the PR after seeing this `result` event and
-      // attaches the URL to Linear directly.
-      pr_url: null,
-    });
-  }
-
-  // Run the dispatch in the background; the response Response object
-  // returns the readable end of the pipe immediately so SSE headers
-  // flush before the engine even starts.
-  //
-  // Every code path inside the IIFE must reach `emitTerminal` so the
-  // SSE stream closes with a `result` frame. The first await (baseline
-  // lookup) is inside the try/catch on purpose: a failure here used to
-  // orphan the writable side of the TransformStream and let the
-  // Workers runtime kill the request after a hang-detection timeout,
-  // surfacing on the caller as `stream_closed_without_result_frame`.
-  void (async () => {
-    try {
-      await emit({
-        type: "thought",
-        text: "Spinning up a sandbox…",
-      });
       const baselineEngine = resolveBaselineEngine(parsed.engine);
       const record = await new BaselineStore(env.DB).get(baselineEngine);
       if (!record) {
@@ -312,14 +347,10 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
           baselineEngine === parsed.engine
             ? `missing_baseline: ${parsed.engine}`
             : `missing_baseline: ${baselineEngine} (engine ${parsed.engine})`;
-        await emitTerminal(75 /* EX_TEMPFAIL */, { message });
-        return;
+        return { ok: false, message };
       }
 
-      await emit({
-        type: "thought",
-        text: "Configuring environment…",
-      });
+      preludeThoughts.push("Configuring environment…");
       await sandbox.restoreBackup(record.handle);
 
       const workspaceDir = `/workspace/${parsed.issueId}`;
@@ -327,26 +358,20 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
       await sandbox.exec(
         `rm -rf ${shellQuote(workspaceDir)} && mkdir -p ${shellQuote(workspaceDir)}`,
       );
-      await emit({
-        type: "thought",
-        text: `Cloning ${redactRepoUrl(parsed.repoUrl)}…`,
-      });
-      const streamCloneToken = parsed.githubToken ?? env.DISPATCH_GITHUB_TOKEN;
-      const streamCloneUrl = buildAuthenticatedCloneUrl(
-        parsed.repoUrl,
-        streamCloneToken,
-      );
+
+      preludeThoughts.push(`Cloning ${redactRepoUrl(parsed.repoUrl)}…`);
+      const cloneToken = parsed.githubToken ?? env.DISPATCH_GITHUB_TOKEN;
+      const cloneUrl = buildAuthenticatedCloneUrl(parsed.repoUrl, cloneToken);
       const cloneResult = await sandbox.exec(
-        `cd ${shellQuote(workspaceDir)} && git clone ${shellQuote(streamCloneUrl)} .`,
+        `cd ${shellQuote(workspaceDir)} && git clone ${shellQuote(cloneUrl)} .`,
       );
       if (cloneResult.exitCode !== 0) {
-        await emitTerminal(cloneResult.exitCode, {
-          message: `clone_failed: ${redactToken(cloneResult.stderr, streamCloneToken).slice(0, 500)}`,
-        });
-        return;
+        return {
+          ok: false,
+          message: `clone_failed: ${redactToken(cloneResult.stderr, cloneToken).slice(0, 500)}`,
+        };
       }
 
-      let streamResolvedBranch: string | null = null;
       if (parsed.branch) {
         const branchName = parsed.branch;
         const branchResult = await resolveBranch(
@@ -354,22 +379,21 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
           workspaceDir,
           branchName,
           {
-            onAction: async (action) => {
-              const text =
+            onAction: (action) => {
+              preludeThoughts.push(
                 action === "create"
                   ? `Creating new branch ${branchName}…`
-                  : `Checking out existing branch ${branchName}…`;
-              await emit({ type: "thought", text });
+                  : `Checking out existing branch ${branchName}…`,
+              );
             },
           },
         );
         if (!branchResult.ok) {
-          await emitTerminal(branchResult.exitCode || 1, {
+          return {
+            ok: false,
             message: `branch_setup_failed: ${branchResult.stderr.slice(0, 500)}`,
-          });
-          return;
+          };
         }
-        streamResolvedBranch = branchName;
       }
 
       if (parsed.credentials) {
@@ -377,74 +401,186 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
           await writeMcpConfig(sandbox, workspaceDir, parsed.engine, parsed.credentials);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          await emitTerminal(1, {
-            message: `mcp_config_write_failed: ${msg.slice(0, 500)}`,
-          });
-          return;
+          return { ok: false, message: `mcp_config_write_failed: ${msg.slice(0, 500)}` };
         }
       }
 
-      const cmd = buildEngineCommand(parsed, workspaceDir);
-      await emit({
-        type: "thought",
-        text: parsed.model
-          ? `Calling model (${parsed.model})…`
-          : "Calling model…",
-      });
-      const execStream = await sandbox.execStream(cmd, {
+      preludeThoughts.push(
+        parsed.model ? `Calling model (${parsed.model})…` : "Calling model…",
+      );
+
+      // Prefix the engine command with a `printf` that emits the setup
+      // narration as prelude lines on the same stdout the engine writes
+      // to. `;` (not `&&`) so a printf hiccup can't block the run.
+      const processCmd = `${buildPreludeCommand(preludeThoughts)}${buildEngineCommand(parsed, workspaceDir)}`;
+
+      await sandbox.startProcess(processCmd, {
+        processId,
+        // Keep the process record + logs after exit so a late
+        // re-attach (caller retried after the engine already finished)
+        // can still read the terminal output.
+        autoCleanup: false,
         timeout: parsed.timeoutMs,
       });
+      return { ok: true, processId };
+    },
+  });
+}
 
-      // execStream returns an SSE stream of ExecEvent records. We
-      // line-buffer the `stdout` payloads so partial lines spanning two
-      // ExecEvent chunks parse correctly.
-      let stdoutBuffer = "";
-      let exitCode = 0;
+type RunSandbox = ReturnType<typeof getSandbox>;
 
-      for await (const ev of parseSSEStream<ExecEvent>(execStream)) {
-        if (ev.type === "stdout" && typeof ev.data === "string") {
-          stdoutBuffer += ev.data;
-          const lines = stdoutBuffer.split(/\r?\n/);
-          stdoutBuffer = lines.pop() ?? "";
-          for (const line of lines) {
-            for (const normalized of adapter.parseEvents(line)) {
-              await emit(normalized);
-            }
+type StreamRunStart =
+  | { ok: true; processId: string }
+  | { ok: false; message: string };
+
+/**
+ * Tail a detached engine process and pipe its normalized events back
+ * as SSE, starting from `cursor` — the number of normalized events the
+ * caller already consumed on a prior attach.
+ *
+ * The poll loop reads the process log incrementally (by byte offset),
+ * so each tick only parses freshly-appended output. It never destroys
+ * the sandbox — a reader disconnect just ends this loop; the engine
+ * keeps running and the next `/run/attach` resumes from a higher
+ * cursor.
+ *
+ * The stream always closes with exactly one `result` event so the
+ * caller's reader loop reaches a terminal frame; `turn_end` is
+ * synthesized here for single-turn engines (pi).
+ */
+function streamRun(opts: {
+  sandbox: RunSandbox;
+  adapter: EngineAdapter;
+  cursor: number;
+  start: () => Promise<StreamRunStart>;
+}): Response {
+  const { sandbox, adapter, cursor } = opts;
+  const startedAt = Date.now();
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+  // Set once the SSE reader disconnects (a write rejects). The detached
+  // engine keeps running regardless; this just stops the tail loop so an
+  // evicted caller's stale poller doesn't run alongside its retry's.
+  let readerGone = false;
+
+  async function emit(event: NormalizedEvent): Promise<void> {
+    try {
+      await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+    } catch {
+      // Reader disconnected — swallow and flag so the tail loop stops.
+      // The engine process is detached and keeps running; the caller
+      // re-attaches via /run/attach.
+      readerGone = true;
+    }
+  }
+
+  void (async () => {
+    // `emitted` counts every normalized event in stream order,
+    // including the ones skipped because they fall below `cursor`.
+    let emitted = 0;
+    const emitAt = async (event: NormalizedEvent): Promise<void> => {
+      if (emitted >= cursor) await emit(event);
+      emitted++;
+    };
+
+    try {
+      const started = await opts.start();
+      if (!started.ok) {
+        // Setup failure (missing baseline, clone, branch, MCP). These
+        // are terminal and fast — no process was started, so there is
+        // nothing to re-attach to.
+        await emit({ type: "error", message: started.message });
+        await emit({
+          type: "result",
+          exit_code: 75 /* EX_TEMPFAIL */,
+          duration_ms: Date.now() - startedAt,
+          branch: null,
+          pr_url: null,
+        });
+        return;
+      }
+
+      const processId = started.processId;
+      let stdoutOffset = 0;
+      let lineBuf = "";
+      let exitCode = 1;
+      let pollMs = POLL_MIN_MS;
+
+      while (true) {
+        // The reader (caller's Workflow step) disconnected — stop
+        // tailing. The engine process is untouched; a retry re-attaches.
+        if (readerGone) return;
+
+        const proc = await sandbox.getProcess(processId);
+        if (!proc) {
+          // Process record vanished (sandbox destroyed out from under
+          // us). Surface it; the caller decides whether to retry.
+          await emit({ type: "error", message: "process_not_found" });
+          break;
+        }
+
+        const logs = await sandbox.getProcessLogs(processId);
+        if (logs.stdout.length > stdoutOffset) {
+          lineBuf += logs.stdout.slice(stdoutOffset);
+          stdoutOffset = logs.stdout.length;
+          const segments = lineBuf.split(/\r?\n/);
+          lineBuf = segments.pop() ?? "";
+          for (const line of segments) {
+            for (const ev of parseLogLine(line, adapter)) await emitAt(ev);
           }
-        } else if (ev.type === "complete") {
-          exitCode = ev.exitCode ?? 0;
-        } else if (ev.type === "error") {
-          await emit({
-            type: "error",
-            message: ev.error ?? "engine_error",
-          });
+          pollMs = POLL_MIN_MS;
+        } else {
+          // No new output — back off so a long idle stretch doesn't
+          // re-fetch the full process log every second.
+          pollMs = Math.min(pollMs + 1000, POLL_MAX_MS);
         }
+
+        if (isTerminalStatus(proc.status)) {
+          exitCode = proc.exitCode ?? (proc.status === "completed" ? 0 : 1);
+          break;
+        }
+        await sleep(pollMs);
       }
 
-      // Flush any trailing buffered line that didn't end in a newline.
-      if (stdoutBuffer.length > 0) {
-        for (const normalized of adapter.parseEvents(stdoutBuffer)) {
-          await emit(normalized);
-        }
+      // Flush a trailing line the engine wrote without a final newline.
+      if (lineBuf.length > 0) {
+        for (const ev of parseLogLine(lineBuf, adapter)) await emitAt(ev);
       }
 
-      // Single-turn engines (pi today) get a synthetic `turn_end` so
-      // the client can attribute the prior activities to a turn.
-      // Multi-turn engines (Claude) emit this themselves from in-band
-      // result chunks.
+      // Single-turn engines (pi) don't emit their own turn_end.
       if (!adapter.emitsTurnEnd) {
-        await emit({ type: "turn_end", turn: 1, reason: "completed" });
+        await emitAt({ type: "turn_end", turn: 1, reason: "completed" });
       }
-
-      await emitTerminal(exitCode, { branch: streamResolvedBranch });
+      await emitAt({
+        type: "result",
+        exit_code: exitCode,
+        duration_ms: Date.now() - startedAt,
+        // pr_url/branch stay null on the dispatcher side — the
+        // linear-agent worker owns the PR flow.
+        branch: null,
+        pr_url: null,
+      });
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      await emitTerminal(1, { message });
+      await emit({
+        type: "error",
+        message: e instanceof Error ? e.message : String(e),
+      });
+      await emit({
+        type: "result",
+        exit_code: 1,
+        duration_ms: Date.now() - startedAt,
+        branch: null,
+        pr_url: null,
+      });
     } finally {
       try {
         await writer.close();
       } catch {}
-      await safeDestroy(sandbox);
+      // Deliberately NO safeDestroy here. A reader disconnect must not
+      // tear down the run — that is the whole point of the detached
+      // process. The sandbox is destroyed explicitly via POST /run/stop
+      // once the caller has consumed the terminal `result`.
     }
   })();
 
@@ -461,15 +597,63 @@ async function runStreaming(env: Env, parsed: ParsedRun): Promise<Response> {
   });
 }
 
-interface ExecEvent {
-  type: "start" | "stdout" | "stderr" | "complete" | "error";
-  timestamp?: string;
-  data?: string;
-  command?: string;
-  exitCode?: number;
-  error?: string;
-  sessionId?: string;
-  pid?: number;
+/**
+ * Build the `printf` prefix that echoes setup narration as prelude
+ * events onto the engine process's stdout. Each thought becomes one
+ * `__SYMPHONY_EVENT__ <json>` line; `streamRun` parses those back into
+ * normalized `thought` events. Trailing `;` so the engine command runs
+ * regardless of printf's exit status.
+ */
+function buildPreludeCommand(thoughts: string[]): string {
+  if (thoughts.length === 0) return "";
+  const lines = thoughts.map(
+    (text) => `${PRELUDE_PREFIX}${JSON.stringify({ type: "thought", text })}`,
+  );
+  return `printf '%s\\n' ${lines.map(shellQuote).join(" ")} ; `;
+}
+
+/**
+ * Parse one stdout line from the engine process log into normalized
+ * events. Prelude lines (dispatcher-injected setup narration) are
+ * decoded directly; everything else is engine output handed to the
+ * adapter.
+ */
+export function parseLogLine(
+  line: string,
+  adapter: EngineAdapter,
+): NormalizedEvent[] {
+  if (line.length === 0) return [];
+  if (line.startsWith(PRELUDE_PREFIX)) {
+    try {
+      return [JSON.parse(line.slice(PRELUDE_PREFIX.length)) as NormalizedEvent];
+    } catch {
+      return [];
+    }
+  }
+  return adapter.parseEvents(line);
+}
+
+/** Process statuses that mean the engine is no longer producing output. */
+function isTerminalStatus(status: string): boolean {
+  return (
+    status === "completed" ||
+    status === "failed" ||
+    status === "killed" ||
+    status === "error"
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Deterministic background-process id for an engine turn. Per-turn so a
+ * multi-turn session's turns don't collide in the same sandbox, and
+ * derivable by `/run/attach` from `issue_id` + `turn` alone.
+ */
+export function runProcessId(issueId: string, turn: number): string {
+  return `engine-${sanitizeScopeForId(issueId)}-t${turn}`;
 }
 
 function adapterFor(engine: Engine): EngineAdapter {
@@ -524,6 +708,8 @@ function parseRun(body: RunBody): ParsedRun | string {
   const branch = parseBranch(body.branch);
   if (branch === false) return "invalid_branch";
 
+  const turn = parseTurn(body.turn);
+
   return {
     issueId,
     repoUrl,
@@ -538,6 +724,7 @@ function parseRun(body: RunBody): ParsedRun | string {
     githubToken,
     credentials,
     branch,
+    turn,
   };
 }
 
@@ -610,6 +797,25 @@ function parseTimeout(value: unknown): number {
     return DEFAULT_TIMEOUT_MS;
   }
   return Math.min(Math.floor(value), MAX_TIMEOUT_MS);
+}
+
+/** Turn number from the request body; defaults to 1, floored, min 1. */
+function parseTurn(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {
+    return 1;
+  }
+  return Math.floor(value);
+}
+
+/**
+ * Re-attach cursor: how many normalized events the caller already
+ * consumed. Defaults to 0 (replay from the start), floored, min 0.
+ */
+function parseCursor(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return 0;
+  }
+  return Math.floor(value);
 }
 
 const CREDENTIAL_ENV_MAP: Array<{

@@ -797,6 +797,22 @@ export class AgentSessionEventStore {
       .first<{ n: number }>();
     return row?.n ?? 0;
   }
+
+  // Count events already persisted for one turn of a session. Used as
+  // the dispatcher re-attach cursor: when a Workflow turn step is
+  // retried after an eviction, this is how many normalized events the
+  // prior attempt(s) already streamed, so the dispatcher resumes the
+  // still-running engine process after them instead of replaying.
+  async countByTurn(sessionId: string, turn: number): Promise<number> {
+    const row = await this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM agent_session_events
+         WHERE session_id = ? AND turn = ?`,
+      )
+      .bind(sessionId, turn)
+      .first<{ n: number }>();
+    return row?.n ?? 0;
+  }
 }
 
 // ── webhook_sources ────────────────────────────────────────────────

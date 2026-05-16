@@ -69,6 +69,20 @@ export interface RunArgs {
    * on the default branch (current behavior).
    */
   branch?: string | null;
+  /** 1-based turn number — keys the dispatcher's per-turn engine process. */
+  turn?: number;
+}
+
+/**
+ * Arguments for re-attaching to an in-flight (or finished) engine run.
+ * The dispatcher locates the detached process by `issueId` + `turn` and
+ * resumes the SSE stream after `cursor` normalized events.
+ */
+export interface AttachArgs {
+  issueId: string;
+  turn: number;
+  cursor: number;
+  engine: string;
 }
 
 export interface RunResult {
@@ -227,12 +241,32 @@ export class DispatcherClient {
   }
 
   async *runStream(args: RunArgs): AsyncIterable<NormalizedEvent> {
-    const body = JSON.stringify(serializeRunArgs(args));
+    yield* this.streamSse("/run", JSON.stringify(serializeRunArgs(args)));
+  }
 
+  /**
+   * Re-attach to an in-flight (or already-finished) engine run and
+   * resume the normalized-event stream after `cursor` events. Used by
+   * the Workflow turn step on retry: the engine kept running as a
+   * detached process after a prior attempt's eviction, so this picks up
+   * where the last attempt's persisted events left off instead of
+   * re-dispatching a fresh run.
+   */
+  async *attachStream(args: AttachArgs): AsyncIterable<NormalizedEvent> {
+    yield* this.streamSse(
+      "/run/attach",
+      JSON.stringify(serializeAttachArgs(args)),
+    );
+  }
+
+  private async *streamSse(
+    path: string,
+    body: string,
+  ): AsyncIterable<NormalizedEvent> {
     const sig = await computeSignature(this.secret, body);
 
     const fetchFn = this.fetchImpl;
-    const res = await fetchFn(`${stripTrailingSlash(this.url)}/run`, {
+    const res = await fetchFn(`${stripTrailingSlash(this.url)}${path}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -409,6 +443,16 @@ function serializeRunArgs(
     ...(args.githubToken ? { github_token: args.githubToken } : {}),
     ...(args.credentials ? { credentials: args.credentials } : {}),
     ...(args.branch ? { branch: args.branch } : {}),
+    turn: args.turn ?? 1,
+  };
+}
+
+function serializeAttachArgs(args: AttachArgs): Record<string, unknown> {
+  return {
+    issue_id: args.issueId,
+    turn: args.turn,
+    cursor: args.cursor,
+    engine: args.engine,
   };
 }
 
