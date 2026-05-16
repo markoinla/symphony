@@ -45,17 +45,40 @@ export function useLocalBackupBucket(env: Env): boolean {
 }
 
 /**
+ * True when an error means "the sandbox has no such process".
+ *
+ * The Sandbox SDK throws `ProcessNotFoundError` for a container 404, but
+ * detecting it is awkward for two reasons:
+ *
+ *  1. The class is not exported from `@cloudflare/sandbox`, so there is no
+ *     `instanceof` to match on.
+ *  2. `getSandbox` returns a Durable Object stub — every `getProcess` /
+ *     `getProcessLogs` call is a DO RPC. workerd cannot reconstruct a
+ *     non-standard error subclass across that boundary: on the Worker side
+ *     the error arrives as a plain `Error` with `name === "Error"` and the
+ *     original class name folded into `message`
+ *     (e.g. "ProcessNotFoundError: Process engine-… not found").
+ *
+ * So `name` is only reliable for an in-isolate throw (tests); in production
+ * the signal lives in the message. Match both. A false positive here just
+ * surfaces a recoverable `process_not_found`, so the loose message match is
+ * an acceptable trade against missing the real thing.
+ */
+export function isProcessNotFoundError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  if (e.name === "ProcessNotFoundError") return true;
+  return /ProcessNotFoundError|Process\s+\S+\s+not found/i.test(e.message);
+}
+
+/**
  * `getProcess` with a missing process normalized to `null`.
  *
- * The Sandbox SDK's `getProcess` is *not* uniformly null-returning: its
- * HTTP layer throws `ProcessNotFoundError` when the container answers 404
- * for an unknown process id, and only returns `null` for the rarer
- * 200-with-empty-body case. Both mean the same thing — "no such process" —
- * so callers that want a plain absence check must funnel through here.
- *
- * Any other failure (sandbox unreachable, transport error) is genuine and
- * re-thrown. Matched on `name` rather than an `instanceof` because
- * `ProcessNotFoundError` is not exported from `@cloudflare/sandbox`.
+ * `getProcess` is *not* uniformly null-returning: it throws
+ * `ProcessNotFoundError` when the container answers 404 for an unknown
+ * process id, and only returns `null` for the rarer 200-with-empty-body
+ * case. Both mean "no such process", so callers that want a plain absence
+ * check must funnel through here. Any other failure (sandbox unreachable,
+ * transport error) is genuine and re-thrown.
  */
 export async function getProcessOrNull<T>(
   sandbox: { getProcess(processId: string): Promise<T | null> },
@@ -64,7 +87,27 @@ export async function getProcessOrNull<T>(
   try {
     return await sandbox.getProcess(processId);
   } catch (e) {
-    if (e instanceof Error && e.name === "ProcessNotFoundError") return null;
+    if (isProcessNotFoundError(e)) return null;
+    throw e;
+  }
+}
+
+/**
+ * `getProcessLogs` with a missing process normalized to `null`.
+ *
+ * Like `getProcess`, the logs endpoint throws `ProcessNotFoundError` when
+ * the process record has vanished (sandbox destroyed/GC'd out from under a
+ * live tail). Callers treat `null` as the same terminal signal as a
+ * `getProcessOrNull` miss; any other failure is re-thrown.
+ */
+export async function getProcessLogsOrNull<T>(
+  sandbox: { getProcessLogs(processId: string): Promise<T> },
+  processId: string,
+): Promise<T | null> {
+  try {
+    return await sandbox.getProcessLogs(processId);
+  } catch (e) {
+    if (isProcessNotFoundError(e)) return null;
     throw e;
   }
 }

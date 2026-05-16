@@ -6,6 +6,7 @@ import { BaselineStore } from "./storage";
 import { resolveBaselineEngine } from "./baseline-alias";
 import {
   SANDBOX_HOME,
+  getProcessLogsOrNull,
   getProcessOrNull,
   safeDestroy,
   sanitizeScopeForId,
@@ -525,7 +526,14 @@ function streamRun(opts: {
           break;
         }
 
-        const logs = await sandbox.getProcessLogs(processId);
+        // The process can still vanish between the check above and this
+        // read (idle GC, explicit destroy); a 404 here is the same
+        // terminal signal as the miss above.
+        const logs = await getProcessLogsOrNull(sandbox, processId);
+        if (!logs) {
+          await emit({ type: "error", message: "process_not_found" });
+          break;
+        }
         if (logs.stdout.length > stdoutOffset) {
           lineBuf += logs.stdout.slice(stdoutOffset);
           stdoutOffset = logs.stdout.length;

@@ -37,6 +37,19 @@ type FakeProcStatus =
   | "error";
 
 /**
+ * Build the error a `getProcess`/`getProcessLogs` call actually raises in
+ * production. The SDK throws `ProcessNotFoundError` inside the Sandbox
+ * Durable Object, but that crosses a DO RPC boundary on the way back to
+ * the Worker: workerd cannot reconstruct the non-standard subclass, so the
+ * Worker sees a plain `Error` whose `name` is "Error" and whose `message`
+ * carries the original class name. A fake that sets `name` directly would
+ * mask that — the bug is precisely that `name` is unreliable here.
+ */
+function rpcProcessNotFound(id: string): Error {
+  return new Error(`ProcessNotFoundError: Process ${id} not found`);
+}
+
+/**
  * The dispatcher launches the engine as a detached background process
  * whose stdout is the process log. The prelude (`printf '%s\n' …`) is
  * prepended to the engine command, so the process log starts with the
@@ -66,6 +79,10 @@ class FakeSandbox {
   // returning null. When set, `getProcess` throws instead of returning
   // null while no process exists.
   getProcessThrowsNotFound = false;
+  // When set, `getProcessLogs` throws ProcessNotFoundError even though
+  // `getProcess` reports the process exists — models the process
+  // vanishing mid-tail (sandbox GC'd between the two RPC calls).
+  getProcessLogsThrowsNotFound = false;
 
   async restoreBackup(handle: { id: string; dir: string }) {
     this.restoredBackups.push({ id: handle.id, dir: handle.dir });
@@ -120,17 +137,14 @@ class FakeSandbox {
 
   async getProcess(id: string) {
     if (!this.hasProcess) {
-      if (this.getProcessThrowsNotFound) {
-        const err = new Error(`Process ${id} not found`);
-        err.name = "ProcessNotFoundError";
-        throw err;
-      }
+      if (this.getProcessThrowsNotFound) throw rpcProcessNotFound(id);
       return null;
     }
     return { status: this.procStatus, exitCode: this.procExitCode };
   }
 
   async getProcessLogs(id: string) {
+    if (this.getProcessLogsThrowsNotFound) throw rpcProcessNotFound(id);
     return { stdout: this.procLog, stderr: "", processId: id };
   }
 
@@ -880,7 +894,9 @@ describe("POST /run/attach", () => {
     const app = buildApp();
     const db = new FakeD1();
 
-    // SDK-accurate FakeSandbox: getProcess *throws* for an unknown id.
+    // SDK-accurate FakeSandbox: getProcess *throws* for an unknown id,
+    // and the throw arrives RPC-mangled (name "Error", class name in
+    // the message) — see rpcProcessNotFound.
     const sandbox = new FakeSandbox(runSandboxId("SYM-903"));
     sandbox.getProcessThrowsNotFound = true;
     sandboxHandles[runSandboxId("SYM-903")] = sandbox;
@@ -915,7 +931,8 @@ describe("POST /run/attach", () => {
 
     // The /run idempotency re-entry check calls getProcess before the
     // engine process exists. The real SDK throws ProcessNotFoundError
-    // there; the run must treat that as "no process yet" and proceed.
+    // there, RPC-mangled into a plain Error; the run must treat that as
+    // "no process yet" and proceed rather than aborting.
     const sandbox = new FakeSandbox(runSandboxId("SYM-382"));
     sandbox.getProcessThrowsNotFound = true;
     sandbox.engineStdout = [
@@ -943,5 +960,43 @@ describe("POST /run/attach", () => {
     expect(events.map((e) => e.type)).toContain("assistant_msg");
     expect(events.at(-1)).toMatchObject({ type: "result", exit_code: 0 });
     expect(sandbox.startProcessCalls).toHaveLength(1);
+  });
+
+  it("attach treats a getProcessLogs ProcessNotFoundError as process_not_found", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+
+    // The process exists for the tail loop's getProcess check, but the
+    // immediately-following getProcessLogs throws ProcessNotFoundError —
+    // the process vanished mid-tail. That must surface cleanly, not as a
+    // raw error frame.
+    const sandbox = new FakeSandbox(runSandboxId("SYM-904"));
+    sandbox.seedProcess("", "running", 0);
+    sandbox.getProcessLogsThrowsNotFound = true;
+    sandboxHandles[runSandboxId("SYM-904")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-904",
+      turn: 1,
+      cursor: 0,
+      engine: "pi",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run/attach", {
+        method: "POST",
+        body,
+      }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+    // The tail-loop break flows through the single-turn `turn_end`
+    // synthesis, same as a `getProcess` miss mid-tail.
+    expect(events.map((e) => e.type)).toEqual(["error", "turn_end", "result"]);
+    expect((events[0] as { message: string }).message).toBe(
+      "process_not_found",
+    );
   });
 });
