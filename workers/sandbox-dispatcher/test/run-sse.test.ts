@@ -61,6 +61,11 @@ class FakeSandbox {
   procExitCode = 0;
   private procLog = "";
   private hasProcess = false;
+  // Model the real `@cloudflare/sandbox` SDK: `getProcess` *throws*
+  // `ProcessNotFoundError` for an unknown process id rather than
+  // returning null. When set, `getProcess` throws instead of returning
+  // null while no process exists.
+  getProcessThrowsNotFound = false;
 
   async restoreBackup(handle: { id: string; dir: string }) {
     this.restoredBackups.push({ id: handle.id, dir: handle.dir });
@@ -113,8 +118,15 @@ class FakeSandbox {
     this.hasProcess = true;
   }
 
-  async getProcess(_id: string) {
-    if (!this.hasProcess) return null;
+  async getProcess(id: string) {
+    if (!this.hasProcess) {
+      if (this.getProcessThrowsNotFound) {
+        const err = new Error(`Process ${id} not found`);
+        err.name = "ProcessNotFoundError";
+        throw err;
+      }
+      return null;
+    }
     return { status: this.procStatus, exitCode: this.procExitCode };
   }
 
@@ -862,5 +874,74 @@ describe("POST /run/attach", () => {
     expect((events[0] as { message: string }).message).toContain(
       "process_not_found",
     );
+  });
+
+  it("attach treats a thrown ProcessNotFoundError as process_not_found", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+
+    // SDK-accurate FakeSandbox: getProcess *throws* for an unknown id.
+    const sandbox = new FakeSandbox(runSandboxId("SYM-903"));
+    sandbox.getProcessThrowsNotFound = true;
+    sandboxHandles[runSandboxId("SYM-903")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-903",
+      turn: 1,
+      cursor: 0,
+      engine: "pi",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run/attach", {
+        method: "POST",
+        body,
+      }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+    expect(events.map((e) => e.type)).toEqual(["error", "result"]);
+    expect((events[0] as { message: string }).message).toContain(
+      "process_not_found",
+    );
+  });
+
+  it("starts a fresh run even though the idempotency check's getProcess throws ProcessNotFoundError", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+
+    // The /run idempotency re-entry check calls getProcess before the
+    // engine process exists. The real SDK throws ProcessNotFoundError
+    // there; the run must treat that as "no process yet" and proceed.
+    const sandbox = new FakeSandbox(runSandboxId("SYM-382"));
+    sandbox.getProcessThrowsNotFound = true;
+    sandbox.engineStdout = [
+      '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Done."}]}}',
+      '{"type":"agent_end"}',
+    ].join("\n");
+    sandboxHandles[runSandboxId("SYM-382")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-382",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+    // No error frame: the throw must not abort the run.
+    expect(events.some((e) => e.type === "error")).toBe(false);
+    expect(events.map((e) => e.type)).toContain("assistant_msg");
+    expect(events.at(-1)).toMatchObject({ type: "result", exit_code: 0 });
+    expect(sandbox.startProcessCalls).toHaveLength(1);
   });
 });

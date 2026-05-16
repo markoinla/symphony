@@ -45,6 +45,31 @@ export function useLocalBackupBucket(env: Env): boolean {
 }
 
 /**
+ * `getProcess` with a missing process normalized to `null`.
+ *
+ * The Sandbox SDK's `getProcess` is *not* uniformly null-returning: its
+ * HTTP layer throws `ProcessNotFoundError` when the container answers 404
+ * for an unknown process id, and only returns `null` for the rarer
+ * 200-with-empty-body case. Both mean the same thing — "no such process" —
+ * so callers that want a plain absence check must funnel through here.
+ *
+ * Any other failure (sandbox unreachable, transport error) is genuine and
+ * re-thrown. Matched on `name` rather than an `instanceof` because
+ * `ProcessNotFoundError` is not exported from `@cloudflare/sandbox`.
+ */
+export async function getProcessOrNull<T>(
+  sandbox: { getProcess(processId: string): Promise<T | null> },
+  processId: string,
+): Promise<T | null> {
+  try {
+    return await sandbox.getProcess(processId);
+  } catch (e) {
+    if (e instanceof Error && e.name === "ProcessNotFoundError") return null;
+    throw e;
+  }
+}
+
+/**
  * Tear a sandbox down without throwing. Cleanup failures are deliberately
  * swallowed: the sandbox may already be gone (idle GC, prior destroy), and
  * a teardown error shouldn't mask the real result of whatever the caller

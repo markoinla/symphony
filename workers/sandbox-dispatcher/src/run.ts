@@ -4,7 +4,12 @@ import { getSandbox } from "@cloudflare/sandbox";
 import type { Env } from "./index";
 import { BaselineStore } from "./storage";
 import { resolveBaselineEngine } from "./baseline-alias";
-import { SANDBOX_HOME, safeDestroy, sanitizeScopeForId } from "./sandbox-helpers";
+import {
+  SANDBOX_HOME,
+  getProcessOrNull,
+  safeDestroy,
+  sanitizeScopeForId,
+} from "./sandbox-helpers";
 import { createClaudeEngineAdapter } from "./engines/claude";
 import { piEngineAdapter } from "./engines/pi";
 import type { EngineAdapter, NormalizedEvent } from "./engines/types";
@@ -279,7 +284,7 @@ export function buildRunRouter() {
       adapter: adapterFor(engine),
       cursor,
       start: async () => {
-        const proc = await sandbox.getProcess(processId);
+        const proc = await getProcessOrNull(sandbox, processId);
         if (!proc) {
           return { ok: false, message: "process_not_found" };
         }
@@ -333,7 +338,7 @@ function runStreaming(env: Env, parsed: ParsedRun): Response {
       // existing process is mandatory here: re-running setup would
       // `rm -rf` the workspace out from under the live engine and
       // `startProcess` would collide on the same processId.
-      const existing = await sandbox.getProcess(processId);
+      const existing = await getProcessOrNull(sandbox, processId);
       if (existing) return { ok: true, processId };
 
       // Setup narration is collected, not streamed: it's echoed by the
@@ -512,7 +517,7 @@ function streamRun(opts: {
         // tailing. The engine process is untouched; a retry re-attaches.
         if (readerGone) return;
 
-        const proc = await sandbox.getProcess(processId);
+        const proc = await getProcessOrNull(sandbox, processId);
         if (!proc) {
           // Process record vanished (sandbox destroyed out from under
           // us). Surface it; the caller decides whether to retry.
