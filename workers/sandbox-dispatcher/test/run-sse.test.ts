@@ -701,6 +701,50 @@ describe("POST /run (Accept: text/event-stream)", () => {
       "Checking out existing branch symphony/sym-511…",
     );
   });
+
+  it("attaches to an existing engine process instead of re-running setup", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-800"));
+    // A prior (evicted) attempt already started the engine process for
+    // this turn. A retry that lands back on /run must reuse it.
+    sandbox.seedProcess(
+      [preludeLine("Spinning up a sandbox…"), preludeLine("Calling model…")].join(
+        "\n",
+      ) + "\n",
+      "completed",
+      0,
+    );
+    sandboxHandles[runSandboxId("SYM-800")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-800",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "hi",
+      engine: "pi",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+    expect(events.map((e) => e.type)).toEqual([
+      "thought",
+      "thought",
+      "turn_end",
+      "result",
+    ]);
+    // The existing process was reused — no duplicate startProcess, and
+    // no setup re-run (which would rm -rf the live workspace).
+    expect(sandbox.startProcessCalls).toHaveLength(0);
+    expect(sandbox.execCalls).toHaveLength(0);
+    expect(sandbox.restoredBackups).toHaveLength(0);
+  });
 });
 
 describe("POST /run/attach", () => {

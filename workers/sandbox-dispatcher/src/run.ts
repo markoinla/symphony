@@ -12,7 +12,7 @@ import type { EngineAdapter, NormalizedEvent } from "./engines/types";
 /**
  * `/run` — execute one agent turn in a fresh per-issue sandbox.
  *
- * Flow:
+ * Buffered flow (non-streaming `/run`):
  *   1. Look up the baseline snapshot for `engine`. 412 if absent.
  *   2. Get a per-issue sandbox (`run-<sanitized-issue-id>`), restore the
  *      baseline so engine binary + base toolchain are available.
@@ -21,6 +21,11 @@ import type { EngineAdapter, NormalizedEvent } from "./engines/types";
  *      `credentials` block.
  *   5. Build an engine command and exec it with the configured timeout.
  *   6. Always destroy the sandbox in `finally`.
+ *
+ * Streaming flow (`Accept: text/event-stream`) is different: the engine
+ * runs as a *detached background process* and the sandbox is NOT
+ * destroyed when the SSE reader disconnects — see `runStreaming`. It is
+ * torn down only via `POST /run/stop`.
  *
  * Returns `{ engine, exit_code, stdout, stderr, duration_ms }` on success.
  *
@@ -31,8 +36,11 @@ import type { EngineAdapter, NormalizedEvent } from "./engines/types";
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_TIMEOUT_MS = 30 * 60 * 1000;
 
-// Poll cadence for tailing a detached engine process's log.
-const POLL_INTERVAL_MS = 1000;
+// Poll cadence for tailing a detached engine process's log. Starts at
+// POLL_MIN_MS and backs off toward POLL_MAX_MS while no new output
+// arrives, resetting to the floor whenever the engine emits again.
+const POLL_MIN_MS = 2000;
+const POLL_MAX_MS = 5000;
 
 // Prefix marking a dispatcher-injected prelude event line in the engine
 // process's stdout (setup narration). See `buildPreludeCommand`.
@@ -253,11 +261,13 @@ export function buildRunRouter() {
     if (!issueId) {
       return c.json({ error: "invalid_issue_id" }, 400);
     }
-    const engine =
-      typeof body.engine === "string" &&
-      SUPPORTED_ENGINES.has(body.engine as Engine)
-        ? (body.engine as Engine)
-        : "pi";
+    if (
+      typeof body.engine !== "string" ||
+      !SUPPORTED_ENGINES.has(body.engine as Engine)
+    ) {
+      return c.json({ error: "unsupported_engine" }, 400);
+    }
+    const engine = body.engine as Engine;
     const turn = parseTurn(body.turn);
     const cursor = parseCursor(body.cursor);
 
@@ -317,6 +327,15 @@ function runStreaming(env: Env, parsed: ParsedRun): Response {
     // non-zero cursor.
     cursor: 0,
     start: async () => {
+      // Idempotent re-entry. If a caller's turn step was evicted after
+      // the engine process started but before any event was persisted,
+      // its retry lands back on /run with cursor 0. Attaching to the
+      // existing process is mandatory here: re-running setup would
+      // `rm -rf` the workspace out from under the live engine and
+      // `startProcess` would collide on the same processId.
+      const existing = await sandbox.getProcess(processId);
+      if (existing) return { ok: true, processId };
+
       // Setup narration is collected, not streamed: it's echoed by the
       // engine process as prelude lines so it survives a re-attach.
       const preludeThoughts: string[] = ["Spinning up a sandbox…"];
@@ -440,13 +459,19 @@ function streamRun(opts: {
   const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
+  // Set once the SSE reader disconnects (a write rejects). The detached
+  // engine keeps running regardless; this just stops the tail loop so an
+  // evicted caller's stale poller doesn't run alongside its retry's.
+  let readerGone = false;
 
   async function emit(event: NormalizedEvent): Promise<void> {
     try {
       await writer.write(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
     } catch {
-      // Reader disconnected — swallow. The engine process is detached,
-      // so it keeps running; the caller re-attaches via /run/attach.
+      // Reader disconnected — swallow and flag so the tail loop stops.
+      // The engine process is detached and keeps running; the caller
+      // re-attaches via /run/attach.
+      readerGone = true;
     }
   }
 
@@ -480,8 +505,13 @@ function streamRun(opts: {
       let stdoutOffset = 0;
       let lineBuf = "";
       let exitCode = 1;
+      let pollMs = POLL_MIN_MS;
 
       while (true) {
+        // The reader (caller's Workflow step) disconnected — stop
+        // tailing. The engine process is untouched; a retry re-attaches.
+        if (readerGone) return;
+
         const proc = await sandbox.getProcess(processId);
         if (!proc) {
           // Process record vanished (sandbox destroyed out from under
@@ -499,13 +529,18 @@ function streamRun(opts: {
           for (const line of segments) {
             for (const ev of parseLogLine(line, adapter)) await emitAt(ev);
           }
+          pollMs = POLL_MIN_MS;
+        } else {
+          // No new output — back off so a long idle stretch doesn't
+          // re-fetch the full process log every second.
+          pollMs = Math.min(pollMs + 1000, POLL_MAX_MS);
         }
 
         if (isTerminalStatus(proc.status)) {
           exitCode = proc.exitCode ?? (proc.status === "completed" ? 0 : 1);
           break;
         }
-        await sleep(POLL_INTERVAL_MS);
+        await sleep(pollMs);
       }
 
       // Flush a trailing line the engine wrote without a final newline.
