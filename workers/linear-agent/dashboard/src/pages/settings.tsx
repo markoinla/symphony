@@ -4,10 +4,8 @@ import { toast } from 'sonner'
 import {
   Check,
   Copy,
-  Globe,
   KeyRound,
   Lock,
-  Radio,
   Settings,
   Sliders,
   Trash2,
@@ -19,16 +17,13 @@ import {
   type ApiToken,
   type ApiTokenScope,
   type ApiTokenWithPlaintext,
-  type ProxyPingResult,
   type Setting,
   changePassword,
   createApiToken,
   deleteApiToken,
   deleteSetting,
-  getProxyStatus,
   getSettings,
   listApiTokens,
-  proxyPing,
   upsertSetting,
 } from '../lib/api'
 import { formatQueryError, isPositiveInteger } from '../lib/helpers'
@@ -47,7 +42,6 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-  Switch,
   Tabs,
   TabsContent,
   TabsList,
@@ -184,10 +178,6 @@ export function SettingsView() {
             <Sliders className="mr-1.5 h-3.5 w-3.5" />
             Agent
           </TabsTrigger>
-          <TabsTrigger value="networking">
-            <Globe className="mr-1.5 h-3.5 w-3.5" />
-            Networking
-          </TabsTrigger>
           <TabsTrigger value="security">
             <Lock className="mr-1.5 h-3.5 w-3.5" />
             Security
@@ -204,13 +194,6 @@ export function SettingsView() {
 
         <TabsContent value="agent">
           <AgentSettingsSection />
-        </TabsContent>
-
-        <TabsContent value="networking">
-          <div className="space-y-5">
-            <ProxySection />
-            <DomainSection />
-          </div>
         </TabsContent>
 
         <TabsContent value="security">
@@ -635,230 +618,6 @@ function ChangePasswordSection() {
           >
             {mutation.isPending ? 'Changing...' : 'Change password'}
           </Button>
-        </form>
-      </CardContent>
-    </Card>
-  )
-}
-
-function ProxySection() {
-  const queryClient = useQueryClient()
-  const proxyQuery = useQuery({ queryKey: ['proxy-status'], queryFn: getProxyStatus })
-
-  const proxyEnabled = proxyQuery.data?.enabled ?? true
-
-  const [pingResult, setPingResult] = useState<ProxyPingResult | null>(null)
-
-  const toggleMutation = useMutation({
-    mutationFn: async (enabled: boolean) => {
-      await upsertSetting('proxy.enabled', enabled ? 'true' : 'false')
-    },
-    onSuccess: async (_result, enabled) => {
-      await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      await queryClient.invalidateQueries({ queryKey: ['proxy-status'] })
-      toast.success(enabled ? 'Proxy enabled.' : 'Proxy disabled.')
-      setPingResult(null)
-    },
-    onError: (error: unknown) => toast.error(formatQueryError(error)),
-  })
-
-  const pingMutation = useMutation({
-    mutationFn: proxyPing,
-    onSuccess: (data) => {
-      setPingResult(data)
-    },
-    onError: (error: unknown) => {
-      toast.error(formatQueryError(error))
-      setPingResult(null)
-    },
-  })
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center gap-2">
-          <Radio className="h-4 w-4 text-th-text-3" />
-          <CardTitle>OAuth &amp; Webhook Proxy</CardTitle>
-          {proxyEnabled ? <Badge variant="running">Enabled</Badge> : <Badge variant="secondary">Disabled</Badge>}
-        </div>
-        <CardDescription>
-          Route OAuth flows and Linear webhooks through a Cloudflare Worker proxy. Required when Symphony is behind NAT or lacks a public URL.
-        </CardDescription>
-      </CardHeader>
-
-      <CardContent className="space-y-4">
-        <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2 rounded-lg border border-th-border bg-th-surface px-3 py-2">
-          <Switch
-            aria-label={proxyEnabled ? 'Disable proxy' : 'Enable proxy'}
-            checked={proxyEnabled}
-            disabled={toggleMutation.isPending}
-            onCheckedChange={(enabled) => {
-              setPingResult(null)
-              void toggleMutation.mutateAsync(enabled)
-            }}
-          />
-          <span className="text-sm text-th-text-2">
-            {proxyEnabled ? 'Proxy enabled' : 'Proxy disabled'}
-          </span>
-        </div>
-        <Button
-          disabled={pingMutation.isPending}
-          onClick={() => {
-            setPingResult(null)
-            void pingMutation.mutateAsync()
-          }}
-          size="sm"
-          type="button"
-          variant="ghost"
-        >
-          {pingMutation.isPending ? 'Testing...' : 'Test connectivity'}
-        </Button>
-      </div>
-
-      {pingResult ? (
-        <div className="space-y-2">
-          <div className={`flex items-center gap-2 rounded-lg border px-4 py-3 text-sm ${pingResult.proxy.ok ? 'border-th-success/30 bg-th-success/5 text-th-success' : 'border-th-danger/30 bg-th-danger/5 text-th-danger'}`}>
-            <span>{pingResult.proxy.ok ? 'Pass' : 'Fail'}:</span>
-            <span>{pingResult.proxy.ok ? 'Proxy is reachable' : `Proxy unreachable — ${pingResult.proxy.error ?? 'unknown error'}`}</span>
-          </div>
-          <div className={`flex items-center gap-2 rounded-lg border px-4 py-3 text-sm ${pingResult.webhook.ok ? 'border-th-success/30 bg-th-success/5 text-th-success' : 'border-th-danger/30 bg-th-danger/5 text-th-danger'}`}>
-            <span>{pingResult.webhook.ok ? 'Pass' : 'Fail'}:</span>
-            <span>
-              {pingResult.webhook.ok
-                ? 'Proxy can reach this instance — webhook forwarding will work'
-                : pingResult.webhook.registered === false
-                  ? 'No instance registered with proxy. Connect Linear OAuth or set a domain first.'
-                  : `Proxy cannot reach this instance — ${pingResult.webhook.error ?? 'unknown error'}`}
-            </span>
-          </div>
-          {!pingResult.webhook.ok && pingResult.webhook.registered !== false ? (
-            <div className="space-y-1">
-              <p className="text-xs text-th-text-4">
-                Webhook forwarding requires a publicly accessible URL. If you are behind NAT, use a tunnel (e.g. cloudflared) and set the tunnel URL as your domain above.
-              </p>
-              {pingResult.webhook.response_body ? (
-                <details className="text-xs text-th-text-4">
-                  <summary className="cursor-pointer">Response details</summary>
-                  <pre className="mt-1 max-h-32 overflow-auto rounded bg-th-bg-3 p-2 font-mono text-[11px]">
-                    {pingResult.webhook.response_server ? `Server: ${pingResult.webhook.response_server}\n` : ''}
-                    {pingResult.webhook.response_body}
-                  </pre>
-                </details>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-        <div className="space-y-3">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Instance URL">
-              <p className="text-sm text-th-text-2">
-                {proxyQuery.data?.instance_url || <span className="text-th-text-4">Not resolved yet</span>}
-              </p>
-              <p className="mt-1 text-xs text-th-text-4">
-                Resolved from public base URL or server IP. Set in the Domain section above.
-              </p>
-            </Field>
-            <Field label="Linear Organization ID">
-              <p className="text-sm text-th-text-2">
-                {proxyQuery.data?.linear_org_id || <span className="text-th-text-4">Automatically set after Linear OAuth</span>}
-              </p>
-              <p className="mt-1 text-xs text-th-text-4">
-                Synced automatically when you connect Linear.
-              </p>
-            </Field>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
-
-function DomainSection() {
-  const queryClient = useQueryClient()
-  const settingsQuery = useQuery({ queryKey: ['settings'], queryFn: getSettings })
-  const existing = settingsQuery.data?.settings.find((s) => s.key === 'domain')
-
-  const [domain, setDomain] = useState(existing?.value ?? '')
-
-  const prevExisting = useRef(existing?.value)
-  if (existing?.value !== prevExisting.current) {
-    prevExisting.current = existing?.value
-    if (existing) setDomain(existing.value)
-  }
-
-  const saveMutation = useMutation({
-    mutationFn: (value: string) => upsertSetting('domain', value),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      toast.success('Domain saved.')
-    },
-    onError: (error: unknown) => toast.error(formatQueryError(error)),
-  })
-
-  const removeMutation = useMutation({
-    mutationFn: () => deleteSetting('domain'),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['settings'] })
-      toast.success('Domain removed.')
-      setDomain('')
-    },
-    onError: (error: unknown) => toast.error(formatQueryError(error)),
-  })
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center gap-2">
-          <Globe className="h-4 w-4 text-th-text-3" />
-          <CardTitle>Domain</CardTitle>
-          {existing ? <Badge variant="running">Configured</Badge> : <Badge variant="secondary">Not set</Badge>}
-        </div>
-        <CardDescription>
-          Configure a custom domain for HTTPS access.
-        </CardDescription>
-      </CardHeader>
-
-      <CardContent className="space-y-4">
-        <form
-          className="space-y-4"
-          onSubmit={(e) => {
-            e.preventDefault()
-            void saveMutation.mutateAsync(domain.trim())
-          }}
-        >
-          <Field label="Domain name">
-            <Input
-              onChange={(e) => setDomain(e.target.value)}
-              placeholder="symphony.example.com"
-              required
-              value={domain}
-            />
-            <p className="mt-1.5 text-xs text-th-text-4">
-              Point your domain's DNS A record to this server's IP before saving.
-            </p>
-          </Field>
-          <div className="flex items-center gap-3">
-            <Button
-              disabled={saveMutation.isPending || !domain.trim()}
-              type="submit"
-              variant="secondary"
-            >
-              {existing ? 'Update' : 'Save'}
-            </Button>
-            {existing ? (
-              <Button
-                disabled={removeMutation.isPending}
-                onClick={() => void removeMutation.mutateAsync()}
-                type="button"
-                variant="destructive"
-              >
-                Remove
-              </Button>
-            ) : null}
-          </div>
         </form>
       </CardContent>
     </Card>
