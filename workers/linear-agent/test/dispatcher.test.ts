@@ -132,6 +132,7 @@ describe("DispatcherClient.run", () => {
           prompt: "do a thing",
           engine: "pi",
           model: "anthropic/claude-sonnet-4-6",
+          turn: 1,
         });
 
         const headers = new Headers(init?.headers);

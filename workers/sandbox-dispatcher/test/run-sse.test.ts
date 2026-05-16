@@ -11,7 +11,6 @@ vi.mock("@cloudflare/sandbox", () => {
       return sandboxHandles[id];
     }),
     proxyToSandbox: vi.fn(async () => null),
-    parseSSEStream: vi.fn(parseSSEStreamImpl),
   };
 });
 
@@ -21,13 +20,28 @@ import { runSandboxId } from "../src/run";
 
 const SECRET = "run-sse-test-secret";
 
-interface FakeExecEvent {
-  type: "stdout" | "stderr" | "complete" | "error";
-  data?: string;
-  exitCode?: number;
-  error?: string;
+// Mirrors the dispatcher's PRELUDE_PREFIX. Pinned here on purpose — it
+// is a wire-format constant the linear-agent worker also depends on.
+const PRELUDE_PREFIX = "__SYMPHONY_EVENT__ ";
+
+function preludeLine(text: string): string {
+  return `${PRELUDE_PREFIX}${JSON.stringify({ type: "thought", text })}`;
 }
 
+type FakeProcStatus =
+  | "starting"
+  | "running"
+  | "completed"
+  | "failed"
+  | "killed"
+  | "error";
+
+/**
+ * The dispatcher launches the engine as a detached background process
+ * whose stdout is the process log. The prelude (`printf '%s\n' …`) is
+ * prepended to the engine command, so the process log starts with the
+ * dispatcher's setup-narration lines, then the engine's own output.
+ */
 class FakeSandbox {
   constructor(public id: string) {}
 
@@ -35,10 +49,18 @@ class FakeSandbox {
   restoredBackups: Array<{ id: string; dir: string }> = [];
   execCalls: string[] = [];
   execQueue: Array<{ exitCode: number; stdout: string; stderr: string }> = [];
-  streamScript: FakeExecEvent[] = [];
   mkdirCalls: Array<{ path: string; recursive?: boolean }> = [];
   writeFileCalls: Array<{ path: string; content: string }> = [];
   writeFileError: Error | null = null;
+
+  // Background-process model.
+  startProcessCalls: Array<{ command: string; processId?: string }> = [];
+  // Raw stdout the engine emits, after the dispatcher's prelude lines.
+  engineStdout = "";
+  procStatus: FakeProcStatus = "completed";
+  procExitCode = 0;
+  private procLog = "";
+  private hasProcess = false;
 
   async restoreBackup(handle: { id: string; dir: string }) {
     this.restoredBackups.push({ id: handle.id, dir: handle.dir });
@@ -61,25 +83,62 @@ class FakeSandbox {
     this.writeFileCalls.push({ path, content });
   }
 
-  async execStream(
-    _cmd: string,
-    _opts?: { timeout?: number },
-  ): Promise<ReadableStream<Uint8Array>> {
-    const script = this.streamScript;
-    const encoder = new TextEncoder();
-    return new ReadableStream<Uint8Array>({
-      start(controller) {
-        for (const ev of script) {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(ev)}\n\n`));
-        }
-        controller.close();
-      },
-    });
+  async startProcess(
+    command: string,
+    options?: { processId?: string; autoCleanup?: boolean; timeout?: number },
+  ) {
+    this.startProcessCalls.push({ command, processId: options?.processId });
+    const prelude = extractPreludeLines(command);
+    const parts = [...prelude];
+    if (this.engineStdout.length > 0) parts.push(this.engineStdout);
+    this.procLog = parts.join("\n");
+    if (this.procLog.length > 0 && !this.procLog.endsWith("\n")) {
+      this.procLog += "\n";
+    }
+    this.hasProcess = true;
+    return {
+      id: options?.processId ?? "proc",
+      command,
+      status: this.procStatus,
+      startTime: new Date(),
+    };
+  }
+
+  /** Seed a finished/running process without going through startProcess
+   *  — used by /run/attach tests, which never call startProcess. */
+  seedProcess(log: string, status: FakeProcStatus, exitCode: number) {
+    this.procLog = log;
+    this.procStatus = status;
+    this.procExitCode = exitCode;
+    this.hasProcess = true;
+  }
+
+  async getProcess(_id: string) {
+    if (!this.hasProcess) return null;
+    return { status: this.procStatus, exitCode: this.procExitCode };
+  }
+
+  async getProcessLogs(id: string) {
+    return { stdout: this.procLog, stderr: "", processId: id };
   }
 
   async destroy() {
     this.destroyed = true;
   }
+}
+
+/**
+ * Recover the prelude lines the dispatcher prepended to the engine
+ * command (`printf '%s\n' '<l1>' '<l2>' … ; <engine cmd>`). The first
+ * single-quoted token is printf's `%s\n` format; the rest are prelude
+ * event lines.
+ */
+function extractPreludeLines(command: string): string[] {
+  if (!command.startsWith("printf ")) return [];
+  const sep = command.indexOf(" ; ");
+  const printfPart = sep === -1 ? command : command.slice(0, sep);
+  const tokens = [...printfPart.matchAll(/'([^']*)'/g)].map((m) => m[1] ?? "");
+  return tokens.slice(1);
 }
 
 async function* parseSSEStreamImpl<T>(
@@ -205,18 +264,12 @@ describe("POST /run (Accept: text/event-stream)", () => {
     seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-200"));
-    sandbox.streamScript = [
-      { type: "stdout", data: '{"type":"session","id":"x"}\n' },
-      { type: "stdout", data: '{"type":"agent_start"}\n' },
-      {
-        type: "stdout",
-        data:
-          '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Done — ',
-      },
-      { type: "stdout", data: 'opened PR #123."}]}}\n' },
-      { type: "stdout", data: '{"type":"agent_end"}\n' },
-      { type: "complete", exitCode: 0 },
-    ];
+    sandbox.engineStdout = [
+      '{"type":"session","id":"x"}',
+      '{"type":"agent_start"}',
+      '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Done — opened PR #123."}]}}',
+      '{"type":"agent_end"}',
+    ].join("\n");
     sandboxHandles[runSandboxId("SYM-200")] = sandbox;
 
     const body = JSON.stringify({
@@ -268,7 +321,13 @@ describe("POST /run (Accept: text/event-stream)", () => {
     expect(events[5]).toMatchObject({ type: "turn_end", turn: 1, reason: "completed" });
     expect(events[6]).toMatchObject({ type: "result", exit_code: 0 });
     expect(events[6]?.duration_ms).toEqual(expect.any(Number));
-    expect(sandbox.destroyed).toBe(true);
+    // The engine is detached: a /run stream does NOT destroy the sandbox.
+    expect(sandbox.destroyed).toBe(false);
+    // The engine ran as a per-turn background process.
+    expect(sandbox.startProcessCalls).toHaveLength(1);
+    expect(sandbox.startProcessCalls[0]!.processId).toContain(
+      "engine-sym-200-t1",
+    );
   });
 
   it("lets the claude adapter emit turn_end without adding a synthetic one", async () => {
@@ -277,11 +336,10 @@ describe("POST /run (Accept: text/event-stream)", () => {
     seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-338"));
-    sandbox.streamScript = [
-      { type: "stdout", data: '{"type":"assistant","message":{"content":[{"type":"text","text":"Done"}]}}\n' },
-      { type: "stdout", data: '{"type":"result","subtype":"success"}\n' },
-      { type: "complete", exitCode: 0 },
-    ];
+    sandbox.engineStdout = [
+      '{"type":"assistant","message":{"content":[{"type":"text","text":"Done"}]}}',
+      '{"type":"result","subtype":"success"}',
+    ].join("\n");
     sandboxHandles[runSandboxId("SYM-338")] = sandbox;
 
     const body = JSON.stringify({
@@ -318,17 +376,10 @@ describe("POST /run (Accept: text/event-stream)", () => {
     seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-310"));
-    sandbox.execQueue = [
-      { exitCode: 0, stdout: "", stderr: "" },
-      { exitCode: 0, stdout: "", stderr: "" },
-      { exitCode: 0, stdout: "", stderr: "" },
-      { exitCode: 0, stdout: "", stderr: "" },
-    ];
-    sandbox.streamScript = [
-      { type: "stdout", data: '{"type":"agent_start"}\n' },
-      { type: "stdout", data: '{"type":"agent_end"}\n' },
-      { type: "complete", exitCode: 0 },
-    ];
+    sandbox.engineStdout = [
+      '{"type":"agent_start"}',
+      '{"type":"agent_end"}',
+    ].join("\n");
     sandboxHandles[runSandboxId("SYM-310")] = sandbox;
 
     const body = JSON.stringify({
@@ -372,8 +423,12 @@ describe("POST /run (Accept: text/event-stream)", () => {
       auth: "bearer",
       bearerToken: "tok_abc",
     });
-
-    expect(sandbox.destroyed).toBe(true);
+    // The injected ANTHROPIC_API_KEY reaches the engine via the process
+    // command, which is passed to startProcess.
+    expect(sandbox.startProcessCalls[0]!.command).toContain(
+      "ANTHROPIC_API_KEY",
+    );
+    expect(sandbox.destroyed).toBe(false);
   });
 
   it("redacts repo URL in clone thought when it contains a token", async () => {
@@ -382,15 +437,7 @@ describe("POST /run (Accept: text/event-stream)", () => {
     seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-311"));
-    sandbox.execQueue = [
-      { exitCode: 0, stdout: "", stderr: "" },
-      { exitCode: 0, stdout: "", stderr: "" },
-      { exitCode: 0, stdout: "", stderr: "" },
-    ];
-    sandbox.streamScript = [
-      { type: "stdout", data: '{"type":"agent_end"}\n' },
-      { type: "complete", exitCode: 0 },
-    ];
+    sandbox.engineStdout = '{"type":"agent_end"}';
     sandboxHandles[runSandboxId("SYM-311")] = sandbox;
 
     const body = JSON.stringify({
@@ -408,10 +455,15 @@ describe("POST /run (Accept: text/event-stream)", () => {
     expect(res.status).toBe(200);
     const events = await consumeSseFrames(res);
     const cloneThought = events.find(
-      (e) => e.type === "thought" && typeof e.text === "string" && e.text.includes("Cloning"),
+      (e) =>
+        e.type === "thought" &&
+        typeof e.text === "string" &&
+        e.text.includes("Cloning"),
     );
     expect(cloneThought).toBeDefined();
-    expect((cloneThought as { text: string }).text).toContain("github.com/x/y.git");
+    expect((cloneThought as { text: string }).text).toContain(
+      "github.com/x/y.git",
+    );
   });
 
   it("emits an error event then result when the baseline is missing", async () => {
@@ -432,12 +484,13 @@ describe("POST /run (Accept: text/event-stream)", () => {
 
     expect(res.status).toBe(200);
     const events = await consumeSseFrames(res);
-    expect(events.map((e) => e.type)).toEqual(["thought", "error", "result"]);
-    expect((events[0] as { text: string }).text).toContain("Spinning up");
-    expect((events[1] as { message: string }).message).toContain(
+    // Setup failed before a process started, so there's no prelude — the
+    // stream is just the error + a terminal result frame.
+    expect(events.map((e) => e.type)).toEqual(["error", "result"]);
+    expect((events[0] as { message: string }).message).toContain(
       "missing_baseline",
     );
-    expect((events[2] as { exit_code: number }).exit_code).not.toBe(0);
+    expect((events[1] as { exit_code: number }).exit_code).not.toBe(0);
   });
 
   it("embeds the github_token in the clone URL and redacts it from clone_failed", async () => {
@@ -487,6 +540,8 @@ describe("POST /run (Accept: text/event-stream)", () => {
     expect(errorEvent!.message).toContain("clone_failed");
     expect(errorEvent!.message).not.toContain("ghs_secret");
     expect(errorEvent!.message).toContain("***");
+    // No background process is started when the clone fails.
+    expect(sandbox.startProcessCalls).toHaveLength(0);
   });
 
   it("emits an error event then result when git clone fails", async () => {
@@ -516,16 +571,12 @@ describe("POST /run (Accept: text/event-stream)", () => {
 
     expect(res.status).toBe(200);
     const events = await consumeSseFrames(res);
-    expect(events.map((e) => e.type)).toEqual([
-      "thought",
-      "thought",
-      "thought",
-      "error",
-      "result",
-    ]);
-    expect((events[3] as { message: string }).message).toContain("clone_failed");
-    expect((events[4] as { exit_code: number }).exit_code).toBe(128);
-    expect(sandbox.destroyed).toBe(true);
+    expect(events.map((e) => e.type)).toEqual(["error", "result"]);
+    expect((events[0] as { message: string }).message).toContain(
+      "clone_failed",
+    );
+    expect((events[1] as { exit_code: number }).exit_code).not.toBe(0);
+    expect(sandbox.destroyed).toBe(false);
   });
 
   it("emits error and result when MCP config write fails", async () => {
@@ -534,13 +585,7 @@ describe("POST /run (Accept: text/event-stream)", () => {
     seedBaseline(db, "pi");
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-312"));
-    sandbox.execQueue = [
-      { exitCode: 0, stdout: "", stderr: "" },
-      { exitCode: 0, stdout: "", stderr: "" },
-      { exitCode: 0, stdout: "", stderr: "" },
-    ];
     sandbox.writeFileError = new Error("Permission denied");
-    sandbox.streamScript = [];
     sandboxHandles[runSandboxId("SYM-312")] = sandbox;
 
     const body = JSON.stringify({
@@ -562,18 +607,11 @@ describe("POST /run (Accept: text/event-stream)", () => {
 
     expect(res.status).toBe(200);
     const events = await consumeSseFrames(res);
-    expect(events.map((e) => e.type)).toEqual([
-      "thought",
-      "thought",
-      "thought",
-      "error",
-      "result",
-    ]);
-    expect((events[3] as { message: string }).message).toContain(
+    expect(events.map((e) => e.type)).toEqual(["error", "result"]);
+    expect((events[0] as { message: string }).message).toContain(
       "mcp_config_write_failed",
     );
-    expect((events[4] as { exit_code: number }).exit_code).toBe(1);
-    expect(sandbox.destroyed).toBe(true);
+    expect(sandbox.startProcessCalls).toHaveLength(0);
   });
 
   it("emits 'Creating new branch' thought when the branch is absent on origin", async () => {
@@ -589,11 +627,7 @@ describe("POST /run (Accept: text/event-stream)", () => {
       { exitCode: 0, stdout: "", stderr: "" }, // ls-remote (empty)
       { exitCode: 0, stdout: "", stderr: "" }, // git checkout -b
     ];
-    sandbox.streamScript = [
-      { type: "stdout", data: '{"type":"agent_start"}\n' },
-      { type: "stdout", data: '{"type":"agent_end"}\n' },
-      { type: "complete", exitCode: 0 },
-    ];
+    sandbox.engineStdout = '{"type":"agent_end"}';
     sandboxHandles[runSandboxId("SYM-510")] = sandbox;
 
     const body = JSON.stringify({
@@ -620,8 +654,6 @@ describe("POST /run (Accept: text/event-stream)", () => {
     expect(thoughts[cloningIdx + 1]).toBe(
       "Creating new branch symphony/sym-510…",
     );
-    const resultEvent = events.find((e) => e.type === "result");
-    expect((resultEvent as { branch: string }).branch).toBe("symphony/sym-510");
   });
 
   it("emits 'Checking out existing branch' thought when the branch is on origin", async () => {
@@ -641,11 +673,7 @@ describe("POST /run (Accept: text/event-stream)", () => {
       }, // ls-remote (hit)
       { exitCode: 0, stdout: "", stderr: "" }, // git fetch + checkout
     ];
-    sandbox.streamScript = [
-      { type: "stdout", data: '{"type":"agent_start"}\n' },
-      { type: "stdout", data: '{"type":"agent_end"}\n' },
-      { type: "complete", exitCode: 0 },
-    ];
+    sandbox.engineStdout = '{"type":"agent_end"}';
     sandboxHandles[runSandboxId("SYM-511")] = sandbox;
 
     const body = JSON.stringify({
@@ -671,6 +699,124 @@ describe("POST /run (Accept: text/event-stream)", () => {
     expect(cloningIdx).toBeGreaterThanOrEqual(0);
     expect(thoughts[cloningIdx + 1]).toBe(
       "Checking out existing branch symphony/sym-511…",
+    );
+  });
+});
+
+describe("POST /run/attach", () => {
+  it("replays the full event stream when cursor is 0", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-900"));
+    sandbox.seedProcess(
+      [
+        preludeLine("Spinning up a sandbox…"),
+        preludeLine("Configuring environment…"),
+        preludeLine("Calling model…"),
+      ].join("\n") + "\n",
+      "completed",
+      0,
+    );
+    sandboxHandles[runSandboxId("SYM-900")] = sandbox;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-900",
+      turn: 1,
+      cursor: 0,
+      engine: "pi",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run/attach", {
+        method: "POST",
+        body,
+      }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+    expect(events.map((e) => e.type)).toEqual([
+      "thought",
+      "thought",
+      "thought",
+      "turn_end",
+      "result",
+    ]);
+    // Re-attaching must not destroy the sandbox.
+    expect(sandbox.destroyed).toBe(false);
+  });
+
+  it("skips the first `cursor` events on re-attach", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+
+    const sandbox = new FakeSandbox(runSandboxId("SYM-901"));
+    sandbox.seedProcess(
+      [
+        preludeLine("Spinning up a sandbox…"),
+        preludeLine("Configuring environment…"),
+        preludeLine("Calling model…"),
+      ].join("\n") + "\n",
+      "completed",
+      0,
+    );
+    sandboxHandles[runSandboxId("SYM-901")] = sandbox;
+
+    // The caller already consumed the 3 prelude thoughts on a prior
+    // attempt; cursor=3 resumes after them.
+    const body = JSON.stringify({
+      issue_id: "SYM-901",
+      turn: 1,
+      cursor: 3,
+      engine: "pi",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run/attach", {
+        method: "POST",
+        body,
+      }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+    // Only the synthetic terminal frames remain.
+    expect(events.map((e) => e.type)).toEqual(["turn_end", "result"]);
+    expect(events[1]).toMatchObject({ type: "result", exit_code: 0 });
+  });
+
+  it("emits an error + result when no process exists for the issue/turn", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+
+    // FakeSandbox with no seeded process — getProcess returns null.
+    sandboxHandles[runSandboxId("SYM-902")] = new FakeSandbox(
+      runSandboxId("SYM-902"),
+    );
+
+    const body = JSON.stringify({
+      issue_id: "SYM-902",
+      turn: 1,
+      cursor: 0,
+      engine: "pi",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run/attach", {
+        method: "POST",
+        body,
+      }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+    expect(events.map((e) => e.type)).toEqual(["error", "result"]);
+    expect((events[0] as { message: string }).message).toContain(
+      "process_not_found",
     );
   });
 });

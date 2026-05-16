@@ -151,6 +151,10 @@ export class FakeD1 {
   webhookEvents = new Map<string, WebhookEventRow>();
   // Keyed by `${organization_id}:${key}`.
   settings = new Map<string, SettingRow>();
+  // The fake doesn't model the agent_session_events table; this is the
+  // value returned for the re-attach cursor COUNT query. Tests that
+  // exercise the /run/attach path set it > 0.
+  agentSessionEventCount = 0;
 
   prepare(sql: string) {
     return new FakeStatement(this, sql);
@@ -755,6 +759,13 @@ class FakeStatement {
     if (/FROM webhook_events WHERE id = \?/i.test(sql)) {
       const [id] = this.bindings as [string];
       return (this.db.webhookEvents.get(id) as unknown as T) ?? null;
+    }
+
+    if (/FROM agent_session_events/i.test(sql)) {
+      // Re-attach cursor COUNT query. The fake doesn't model the events
+      // table (inserts are swallowed by `safe()` in runTurn); the count
+      // defaults to 0 (fresh run) and is overridable per test.
+      return { n: this.db.agentSessionEventCount } as unknown as T;
     }
 
     if (/FROM agent_sessions WHERE id/i.test(sql)) {

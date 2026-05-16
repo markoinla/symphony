@@ -192,6 +192,9 @@ function installFetchMock(opts: {
   dispatcherEvents?: NormalizedEvent[];
   dispatcherStatus?: number;
   dispatcherErrorBody?: unknown;
+  // When provided, every dispatcher /run or /run/attach call is recorded
+  // here so tests can assert which endpoint the turn hit.
+  dispatcherCalls?: Array<{ url: string; body: string }>;
 }): void {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const url = typeof input === "string" ? input : (input as Request).url;
@@ -204,7 +207,8 @@ function installFetchMock(opts: {
       });
     }
 
-    if (url.endsWith("/run")) {
+    if (url.endsWith("/run") || url.endsWith("/run/attach")) {
+      opts.dispatcherCalls?.push({ url, body: body ?? "" });
       if (opts.dispatcherStatus && opts.dispatcherStatus !== 200) {
         return new Response(JSON.stringify(opts.dispatcherErrorBody ?? {}), {
           status: opts.dispatcherStatus,
@@ -1014,6 +1018,58 @@ describe("SessionRunner.run — model resolution", () => {
 // Capture dispatcher `/run` POST bodies for resolution-chain
 // assertions. Mirrors installFetchMock but pushes the parsed body
 // into the provided sink instead of just returning canned events.
+describe("SessionRunner.run — re-attach", () => {
+  it("re-attaches to the running engine when the turn already has persisted events", async () => {
+    const kv = new FakeKV();
+    const db = seededDb();
+    // A prior (evicted) attempt already streamed 4 events for turn 1.
+    db.agentSessionEventCount = 4;
+    const dispatcherCalls: Array<{ url: string; body: string }> = [];
+    installFetchMock({
+      dispatcherEvents: [
+        { type: "assistant_msg", text: "resumed after eviction" },
+        { type: "turn_end", turn: 1, reason: "completed" },
+        {
+          type: "result",
+          exit_code: 0,
+          duration_ms: 50,
+          branch: null,
+          pr_url: null,
+        },
+      ],
+      dispatcherCalls,
+    });
+
+    const env = makeEnv(kv, {}, db);
+    const runner = buildRunner(env);
+    const { step } = makeStep();
+
+    const event: AgentSessionEventWebhook = {
+      type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
+      action: "created",
+      webhookId: "wh-1",
+      agentSession: baseSession,
+      promptContext: baseSession.promptContext,
+    };
+
+    const result = await runner.run(makeEvent(event), step as never);
+    expect(result.status).toBe("ok");
+
+    // The turn resumed via /run/attach carrying the cursor, and never
+    // dispatched a fresh /run.
+    const attach = dispatcherCalls.find((c) => c.url.endsWith("/run/attach"));
+    expect(attach).toBeDefined();
+    expect(JSON.parse(attach!.body)).toMatchObject({
+      issue_id: "SYM-1",
+      turn: 1,
+      cursor: 4,
+      engine: "pi",
+    });
+    expect(dispatcherCalls.some((c) => c.url.endsWith("/run"))).toBe(false);
+  });
+});
+
 function captureDispatcherRunBodies(
   sink: Record<string, unknown>[],
 ): void {

@@ -707,7 +707,12 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         const outcome: TurnOutcome = await step.do(
           turnLabel,
           {
-            retries: { limit: 0, delay: "1 second", backoff: "constant" },
+            // Retry on eviction: the turn is idempotent now — on retry
+            // `runTurn` re-attaches to the still-running engine process
+            // from a cursor instead of re-dispatching. Constant 2s so a
+            // ~5-min WorkflowInternalError eviction re-attaches promptly;
+            // 20 attempts comfortably cover the 30-min dispatcher cap.
+            retries: { limit: 20, delay: "2 seconds", backoff: "constant" },
             // Cloudflare Workflows' default step.do timeout is 10 min,
             // which exactly matches the dispatcher's DEFAULT_TIMEOUT_MS
             // — long-running engine streams hit the workflow timeout
@@ -1062,7 +1067,12 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         const outcome: TurnOutcome = await step.do(
           `trigger-turn-${turn}`,
           {
-            retries: { limit: 0, delay: "1 second", backoff: "constant" },
+            // Retry on eviction: the turn is idempotent now — on retry
+            // `runTurn` re-attaches to the still-running engine process
+            // from a cursor instead of re-dispatching. Constant 2s so a
+            // ~5-min WorkflowInternalError eviction re-attaches promptly;
+            // 20 attempts comfortably cover the 30-min dispatcher cap.
+            retries: { limit: 20, delay: "2 seconds", backoff: "constant" },
             // See note on the agent-session turn step above — default
             // 10-min Workflows step timeout races the dispatcher's
             // own 10-min default and loses. Cap matches the dispatcher's
@@ -1210,21 +1220,37 @@ async function runTurn(
   let lastAssistant: string | null = null;
   let turnEndReason: "completed" | "needs_continuation" | "error" | null = null;
 
+  // Re-attach cursor: how many events this turn already persisted on a
+  // prior (evicted) attempt. cursor === 0 → fresh dispatch; cursor > 0
+  // → resume the still-running engine process after those events so a
+  // retried step never re-dispatches or double-posts.
+  const cursor = await eventStore.countByTurn(sessionId, args.turn);
+  const stream =
+    cursor > 0
+      ? dispatcher.attachStream({
+          issueId: args.issueId,
+          turn: args.turn,
+          cursor,
+          engine: args.engine,
+        })
+      : dispatcher.runStream({
+          scope: args.scope,
+          issueId: args.issueId,
+          repoUrl: args.repoUrl,
+          prompt: args.prompt,
+          engine: args.engine,
+          model: args.model,
+          githubToken: args.githubToken,
+          credentials: args.credentials,
+          branch: args.branch,
+          allowedTools: args.allowedTools,
+          disallowedTools: args.disallowedTools,
+          permissionMode: args.permissionMode,
+          turn: args.turn,
+        });
+
   try {
-    for await (const ev of dispatcher.runStream({
-      scope: args.scope,
-      issueId: args.issueId,
-      repoUrl: args.repoUrl,
-      prompt: args.prompt,
-      engine: args.engine,
-      model: args.model,
-      githubToken: args.githubToken,
-      credentials: args.credentials,
-      branch: args.branch,
-      allowedTools: args.allowedTools,
-      disallowedTools: args.disallowedTools,
-      permissionMode: args.permissionMode,
-    })) {
+    for await (const ev of stream) {
       // Persist every event to D1 as it arrives. Wrapped in `safe`
       // because a transient D1 hiccup must not abort the turn — the
       // engine keeps streaming regardless, and a missing timeline row
@@ -1274,10 +1300,11 @@ async function runTurn(
   }
 
   if (!result) {
-    return {
-      kind: "dispatch_error",
-      message: "stream_closed_without_result_frame",
-    };
+    // The SSE closed without a terminal frame — almost always the
+    // dispatcher Worker was evicted mid-stream. Throw so the Workflow
+    // step retries and re-attaches from the cursor rather than ending
+    // the turn as a hard failure.
+    throw new Error("stream_closed_without_result_frame");
   }
 
   if (turnEndReason === "needs_continuation" && result.exit_code === 0) {
@@ -1323,21 +1350,34 @@ async function runTurnHeadless(
   let lastAssistant: string | null = null;
   let turnEndReason: "completed" | "needs_continuation" | "error" | null = null;
 
+  // Re-attach cursor — see runTurn for the rationale.
+  const cursor = await eventStore.countByTurn(sessionId, args.turn);
+  const stream =
+    cursor > 0
+      ? dispatcher.attachStream({
+          issueId: args.issueId,
+          turn: args.turn,
+          cursor,
+          engine: args.engine,
+        })
+      : dispatcher.runStream({
+          scope: args.scope,
+          issueId: args.issueId,
+          repoUrl: args.repoUrl,
+          prompt: args.prompt,
+          engine: args.engine,
+          model: args.model,
+          githubToken: args.githubToken,
+          credentials: args.credentials,
+          branch: args.branch,
+          allowedTools: args.allowedTools,
+          disallowedTools: args.disallowedTools,
+          permissionMode: args.permissionMode,
+          turn: args.turn,
+        });
+
   try {
-    for await (const ev of dispatcher.runStream({
-      scope: args.scope,
-      issueId: args.issueId,
-      repoUrl: args.repoUrl,
-      prompt: args.prompt,
-      engine: args.engine,
-      model: args.model,
-      githubToken: args.githubToken,
-      credentials: args.credentials,
-      branch: args.branch,
-      allowedTools: args.allowedTools,
-      disallowedTools: args.disallowedTools,
-      permissionMode: args.permissionMode,
-    })) {
+    for await (const ev of stream) {
       await safe(() => persistEvent(eventStore, sessionId, args.turn, ev));
 
       if (ev.type === "result") {
@@ -1371,10 +1411,11 @@ async function runTurnHeadless(
   }
 
   if (!result) {
-    return {
-      kind: "dispatch_error",
-      message: "stream_closed_without_result_frame",
-    };
+    // The SSE closed without a terminal frame — almost always the
+    // dispatcher Worker was evicted mid-stream. Throw so the Workflow
+    // step retries and re-attaches from the cursor rather than ending
+    // the turn as a hard failure.
+    throw new Error("stream_closed_without_result_frame");
   }
 
   if (turnEndReason === "needs_continuation" && result.exit_code === 0) {
