@@ -20,7 +20,7 @@ import type { EngineAdapter, NormalizedEvent } from "./engines/types";
  *
  * Buffered flow (non-streaming `/run`):
  *   1. Look up the baseline snapshot for `engine`. 412 if absent.
- *   2. Get a per-issue sandbox (`run-<sanitized-issue-id>`), restore the
+ *   2. Get a per-run sandbox (`run-<sanitized-run-id>`), restore the
  *      baseline so engine binary + base toolchain are available.
  *   3. Clone `repo_url` into `/workspace/<issue_id>`.
  *   4. Inject per-tenant credentials (env vars, MCP config) from the
@@ -77,6 +77,14 @@ interface RunBody {
   // Current turn number (1-based). Per-turn engine processes are keyed
   // by this so a multi-turn session's turns don't collide; defaults to 1.
   turn?: unknown;
+  // Caller-stable run identifier. The sandbox and engine process are
+  // namespaced by this, so two distinct agent sessions on the *same*
+  // issue (e.g. a Triage run then an implementation run) get isolated
+  // sandboxes instead of the second one re-attaching to the first's
+  // leftover process. Defaults to `issue_id` when absent — fine for
+  // one-shot callers (buffered `/run`, smoke tests) that have no
+  // session concept.
+  run_id?: unknown;
 }
 
 interface CredentialsBody {
@@ -102,6 +110,9 @@ export interface ParsedCredentials {
 
 interface ParsedRun {
   issueId: string;
+  // Run-scope key for the sandbox + engine process. Defaults to
+  // `issueId` when the caller omits `run_id`.
+  runId: string;
   repoUrl: string;
   prompt: string;
   engine: Engine;
@@ -156,7 +167,7 @@ export function buildRunRouter() {
       );
     }
 
-    const sandbox = getSandbox(c.env.Sandbox, runSandboxId(parsed.issueId));
+    const sandbox = getSandbox(c.env.Sandbox, runSandboxId(parsed.runId));
     const startedAt = Date.now();
 
     try {
@@ -166,8 +177,8 @@ export function buildRunRouter() {
       await sandbox.exec(`mkdir -p ${shellQuote(workspaceDir)}`);
 
       // Best-effort clean clone: if the dir already had something, blow it
-      // away so `git clone` doesn't fail. Per-issue sandbox ID means this is
-      // only nonempty if a previous /run for the same issue raced or failed
+      // away so `git clone` doesn't fail. Per-run sandbox ID means this is
+      // only nonempty if a previous /run for the same run raced or failed
       // mid-flight.
       await sandbox.exec(
         `rm -rf ${shellQuote(workspaceDir)} && mkdir -p ${shellQuote(workspaceDir)}`,
@@ -239,14 +250,19 @@ export function buildRunRouter() {
   });
 
   app.post("/run/stop", async (c) => {
-    const body = await readJsonBody<{ issue_id?: unknown }>(c.req.raw);
-    const issueId = parseIssueId(body.issue_id);
-    if (!issueId) {
-      return c.json({ error: "invalid_issue_id" }, 400);
+    const body = await readJsonBody<{ issue_id?: unknown; run_id?: unknown }>(
+      c.req.raw,
+    );
+    // `run_id` is the sandbox key; `issue_id` is the historical key and
+    // still accepted (Elixir client, smoke tests). Either identifies the
+    // sandbox — at least one must be present.
+    const runId = parseIssueId(body.run_id) ?? parseIssueId(body.issue_id);
+    if (!runId) {
+      return c.json({ error: "invalid_run_id" }, 400);
     }
-    const sandbox = getSandbox(c.env.Sandbox, runSandboxId(issueId));
+    const sandbox = getSandbox(c.env.Sandbox, runSandboxId(runId));
     await safeDestroy(sandbox);
-    return c.json({ ok: true, issue_id: issueId });
+    return c.json({ ok: true, run_id: runId });
   });
 
   // Re-attach to an in-flight (or already-finished) engine process for
@@ -258,6 +274,7 @@ export function buildRunRouter() {
   app.post("/run/attach", async (c) => {
     const body = await readJsonBody<{
       issue_id?: unknown;
+      run_id?: unknown;
       turn?: unknown;
       cursor?: unknown;
       engine?: unknown;
@@ -277,8 +294,11 @@ export function buildRunRouter() {
     const turn = parseTurn(body.turn);
     const cursor = parseCursor(body.cursor);
 
-    const sandbox = getSandbox(c.env.Sandbox, runSandboxId(issueId));
-    const processId = runProcessId(issueId, turn);
+    // Must match the `run_id` the original `/run` used, or the
+    // re-attach derives a different sandbox/process and finds nothing.
+    const runId = parseIssueId(body.run_id) ?? issueId;
+    const sandbox = getSandbox(c.env.Sandbox, runSandboxId(runId));
+    const processId = runProcessId(runId, turn);
 
     return streamRun({
       sandbox,
@@ -297,8 +317,13 @@ export function buildRunRouter() {
   return app;
 }
 
-export function runSandboxId(issueId: string): string {
-  return `run-${sanitizeScopeForId(issueId)}`;
+/**
+ * Sandbox id for a run. Keyed by `runId` (the caller's per-session run
+ * identifier, falling back to `issue_id`) so two agent sessions on the
+ * same issue get isolated sandboxes.
+ */
+export function runSandboxId(runId: string): string {
+  return `run-${sanitizeScopeForId(runId)}`;
 }
 
 /**
@@ -322,8 +347,8 @@ export function runSandboxId(issueId: string): string {
  * reproduce request-scoped state.
  */
 function runStreaming(env: Env, parsed: ParsedRun): Response {
-  const sandbox = getSandbox(env.Sandbox, runSandboxId(parsed.issueId));
-  const processId = runProcessId(parsed.issueId, parsed.turn);
+  const sandbox = getSandbox(env.Sandbox, runSandboxId(parsed.runId));
+  const processId = runProcessId(parsed.runId, parsed.turn);
 
   return streamRun({
     sandbox,
@@ -663,10 +688,10 @@ function sleep(ms: number): Promise<void> {
 /**
  * Deterministic background-process id for an engine turn. Per-turn so a
  * multi-turn session's turns don't collide in the same sandbox, and
- * derivable by `/run/attach` from `issue_id` + `turn` alone.
+ * derivable by `/run/attach` from `run_id` + `turn` alone.
  */
-export function runProcessId(issueId: string, turn: number): string {
-  return `engine-${sanitizeScopeForId(issueId)}-t${turn}`;
+export function runProcessId(runId: string, turn: number): string {
+  return `engine-${sanitizeScopeForId(runId)}-t${turn}`;
 }
 
 function adapterFor(engine: Engine): EngineAdapter {
@@ -723,8 +748,14 @@ function parseRun(body: RunBody): ParsedRun | string {
 
   const turn = parseTurn(body.turn);
 
+  // `run_id` reuses the issue-id character class (UUIDs / scoped names
+  // both fit). Falls back to `issueId` so callers without a session
+  // concept keep the historical per-issue sandbox behavior.
+  const runId = parseIssueId(body.run_id) ?? issueId;
+
   return {
     issueId,
+    runId,
     repoUrl,
     prompt: body.prompt,
     engine: body.engine as Engine,

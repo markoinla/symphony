@@ -563,7 +563,27 @@ describe("POST /run (engine: claude)", () => {
 });
 
 describe("POST /run/stop", () => {
-  it("destroys the per-issue sandbox and returns ok", async () => {
+  it("destroys the run_id-keyed sandbox and returns ok", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+
+    const sandbox = new FakeSandbox(runSandboxId("session-7"));
+    sandboxHandles[runSandboxId("session-7")] = sandbox;
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run/stop", {
+        method: "POST",
+        body: JSON.stringify({ run_id: "session-7" }),
+      }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, run_id: "session-7" });
+    expect(sandbox.destroyed).toBe(true);
+  });
+
+  it("falls back to issue_id when run_id is absent", async () => {
     const app = buildApp();
     const db = new FakeD1();
 
@@ -579,7 +599,7 @@ describe("POST /run/stop", () => {
     );
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, issue_id: "SYM-7" });
+    expect(await res.json()).toEqual({ ok: true, run_id: "SYM-7" });
     expect(sandbox.destroyed).toBe(true);
   });
 });

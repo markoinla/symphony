@@ -1062,6 +1062,9 @@ describe("SessionRunner.run — re-attach", () => {
     expect(attach).toBeDefined();
     expect(JSON.parse(attach!.body)).toMatchObject({
       issue_id: "SYM-1",
+      // Re-attach must carry the run id so it derives the same
+      // sandbox/process the original /run created.
+      run_id: "session-1",
       turn: 1,
       cursor: 4,
       engine: "pi",

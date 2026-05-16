@@ -1025,10 +1025,11 @@ describe("POST /webhook stop signal", () => {
     // Workflow instance terminated.
     expect(instance.terminate).toHaveBeenCalledTimes(1);
 
-    // Dispatcher was told to stop the per-issue sandbox.
+    // Dispatcher was told to stop the per-run sandbox. The sandbox is
+    // keyed by the run id (= session id), not the issue identifier.
     expect(dispatcherCalls.length).toBe(1);
-    expect((dispatcherCalls[0]!.body as { issue_id: string }).issue_id).toBe(
-      "STP-1",
+    expect((dispatcherCalls[0]!.body as { run_id: string }).run_id).toBe(
+      sessionId,
     );
 
     // Final `response` activity posted to Linear.

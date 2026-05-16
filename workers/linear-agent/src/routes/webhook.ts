@@ -736,8 +736,6 @@ async function handleStopSignal(
   startedMs: number,
 ): Promise<Response> {
   const sessionId = event.agentSession.id;
-  const issueIdentifier =
-    event.agentSession.issue?.identifier ?? sessionId;
   console.log("stop_signal_received", sessionId);
 
   // 1. Terminate the workflow instance if it's still alive.
@@ -766,15 +764,17 @@ async function handleStopSignal(
     );
   }
 
-  // 2. Tear down the dispatcher's per-issue sandbox so a hung pi
+  // 2. Tear down the dispatcher's per-run sandbox so a hung pi
   //    process doesn't keep burning CPU after we tell the user we
-  //    stopped. Mirrors `stopSandboxQuiet` in the workflow.
+  //    stopped. Mirrors `stopSandboxQuiet` in the workflow. The
+  //    dispatcher keys the sandbox by the run id (= session id), so
+  //    stop by `sessionId`, not the issue identifier.
   try {
     const dispatcher = new DispatcherClient(
       c.env.DISPATCHER_URL,
       c.env.DISPATCH_HMAC_SECRET,
     );
-    await dispatcher.stop(issueIdentifier);
+    await dispatcher.stop(sessionId);
   } catch (e) {
     console.error(
       "stop_signal_dispatcher_stop_failed",

@@ -51,6 +51,14 @@ export interface RunCredentials {
 export interface RunArgs {
   scope: string;
   issueId: string;
+  /**
+   * Per-session run identifier. The dispatcher namespaces its sandbox
+   * and engine process by this, so two agent sessions on the same issue
+   * (Triage then implementation) get isolated sandboxes instead of the
+   * second silently re-attaching to the first's leftover process. When
+   * omitted the dispatcher falls back to `issueId`.
+   */
+  runId?: string;
   repoUrl: string;
   prompt: string;
   engine: string;
@@ -75,11 +83,13 @@ export interface RunArgs {
 
 /**
  * Arguments for re-attaching to an in-flight (or finished) engine run.
- * The dispatcher locates the detached process by `issueId` + `turn` and
- * resumes the SSE stream after `cursor` normalized events.
+ * The dispatcher locates the detached process by `runId` + `turn` and
+ * resumes the SSE stream after `cursor` normalized events. `runId` must
+ * match the value the original `/run` used.
  */
 export interface AttachArgs {
   issueId: string;
+  runId?: string;
   turn: number;
   cursor: number;
   engine: string;
@@ -204,20 +214,21 @@ export class DispatcherClient {
    * events followed by a non-zero `result` and are NOT thrown.
    */
   /**
-   * Tear down the per-issue sandbox without dispatching a new run.
+   * Tear down the per-run sandbox without dispatching a new run.
    * Hits the dispatcher's `/run/stop` endpoint which calls
    * `safeDestroy` on the Sandbox DO. Idempotent — destroying a
    * sandbox that doesn't exist returns 200 ok.
    *
-   * Called from SessionRunner's outer try/finally so an aborted /
-   * errored / timed-out workflow run can't leave a zombie sandbox
-   * burning CPU. Without this, a hung pi process keeps the dispatcher
-   * IIFE's `for await` blocked, the IIFE never reaches its `finally`,
-   * and the sandbox lives until the in-container 30-min exec timeout
-   * elapses.
+   * `runId` must match the value passed to the corresponding `/run`
+   * (the dispatcher keys the sandbox by it). Called from SessionRunner's
+   * outer try/finally so an aborted / errored / timed-out workflow run
+   * can't leave a zombie sandbox burning CPU. Without this, a hung pi
+   * process keeps the dispatcher IIFE's `for await` blocked, the IIFE
+   * never reaches its `finally`, and the sandbox lives until the
+   * in-container 30-min exec timeout elapses.
    */
-  async stop(issueId: string): Promise<void> {
-    const body = JSON.stringify({ issue_id: issueId });
+  async stop(runId: string): Promise<void> {
+    const body = JSON.stringify({ run_id: runId });
     const sig = await computeSignature(this.secret, body);
     const fetchFn = this.fetchImpl;
     const res = await fetchFn(`${stripTrailingSlash(this.url)}/run/stop`, {
@@ -429,6 +440,7 @@ function serializeRunArgs(
   return {
     scope: args.scope,
     issue_id: args.issueId,
+    ...(args.runId ? { run_id: args.runId } : {}),
     repo_url: args.repoUrl,
     prompt: args.prompt,
     engine: args.engine,
@@ -450,6 +462,7 @@ function serializeRunArgs(
 function serializeAttachArgs(args: AttachArgs): Record<string, unknown> {
   return {
     issue_id: args.issueId,
+    ...(args.runId ? { run_id: args.runId } : {}),
     turn: args.turn,
     cursor: args.cursor,
     engine: args.engine,

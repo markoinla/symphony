@@ -195,14 +195,6 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     const webhookEvent = params.event;
     const sessionId = webhookEvent.agentSession.id;
 
-    // Issue identifier is also the sandbox slug key on the dispatcher
-    // side (`runSandboxId(issueId)`). Captured upfront so the cleanup
-    // step in `finally` can always tear down the per-issue sandbox,
-    // even if a step further down throws before `issueIdentifier`
-    // would have been bound below.
-    const cleanupIssueId =
-      webhookEvent.agentSession.issue?.identifier ?? sessionId;
-
     try {
       return await this.runAgentSessionMode(
         params,
@@ -211,7 +203,9 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         step,
       );
     } finally {
-      await this.stopSandboxQuiet(step, cleanupIssueId);
+      // The dispatcher keys the sandbox by the run id (= session id),
+      // so teardown always targets `sessionId`.
+      await this.stopSandboxQuiet(step, sessionId);
     }
   }
 
@@ -219,10 +213,13 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
    * Best-effort sandbox teardown. Wrapped in a step so the call is
    * recorded in the workflow timeline (handy when debugging zombie
    * sandboxes) and swallows all errors — never fail a finally.
+   *
+   * `runId` must be the same value the run dispatched with (the agent
+   * session id); the dispatcher keys the sandbox by it.
    */
   private async stopSandboxQuiet(
     step: WorkflowStep,
-    issueId: string,
+    runId: string,
   ): Promise<void> {
     try {
       await step.do("stop-sandbox", async () => {
@@ -231,12 +228,12 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           this.env.DISPATCH_HMAC_SECRET,
         );
         try {
-          await dispatcher.stop(issueId);
+          await dispatcher.stop(runId);
         } catch (e) {
           console.error(
             "stop_sandbox_failed",
             JSON.stringify({
-              issue_id: issueId,
+              run_id: runId,
               error: e instanceof Error ? e.message : String(e),
             }),
           );
@@ -977,7 +974,8 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     try {
       return await this.runTriggerModeInner(params, step);
     } finally {
-      await this.stopSandboxQuiet(step, params.issueIdentifier);
+      // Sandbox is keyed by the run id (= session id), not the issue.
+      await this.stopSandboxQuiet(step, params.sessionId);
     }
   }
 
@@ -1229,6 +1227,7 @@ async function runTurn(
     cursor > 0
       ? dispatcher.attachStream({
           issueId: args.issueId,
+          runId: sessionId,
           turn: args.turn,
           cursor,
           engine: args.engine,
@@ -1236,6 +1235,7 @@ async function runTurn(
       : dispatcher.runStream({
           scope: args.scope,
           issueId: args.issueId,
+          runId: sessionId,
           repoUrl: args.repoUrl,
           prompt: args.prompt,
           engine: args.engine,
@@ -1356,6 +1356,7 @@ async function runTurnHeadless(
     cursor > 0
       ? dispatcher.attachStream({
           issueId: args.issueId,
+          runId: sessionId,
           turn: args.turn,
           cursor,
           engine: args.engine,
@@ -1363,6 +1364,7 @@ async function runTurnHeadless(
       : dispatcher.runStream({
           scope: args.scope,
           issueId: args.issueId,
+          runId: sessionId,
           repoUrl: args.repoUrl,
           prompt: args.prompt,
           engine: args.engine,

@@ -771,6 +771,69 @@ describe("POST /run (Accept: text/event-stream)", () => {
     expect(sandbox.execCalls).toHaveLength(0);
     expect(sandbox.restoredBackups).toHaveLength(0);
   });
+
+  it("isolates same-issue runs by run_id — a second session does not hijack the first's sandbox", async () => {
+    // Regression guard for the Triage→Todo collision: the dispatcher
+    // keys the sandbox + engine process by `run_id`, not `issue_id`.
+    // Two agent sessions on one Linear issue (a Triage run, then an
+    // implementation run) are both "turn 1"; if the dispatcher keyed by
+    // issue_id the second `/run` would find the first's leftover
+    // process (kept by autoCleanup:false) and silently replay it
+    // instead of doing its own work.
+    const app = buildApp();
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+
+    // A prior run on SYM-700 left a completed engine process in the
+    // issue-slug sandbox. With issue_id keying, a second run would
+    // re-attach here and replay this (wrong) output.
+    const issueKeyed = new FakeSandbox(runSandboxId("SYM-700"));
+    issueKeyed.seedProcess(
+      [
+        preludeLine("Spinning up a sandbox…"),
+        '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"RUN A leftover — wrong workflow"}]}}',
+        '{"type":"agent_end"}',
+      ].join("\n") + "\n",
+      "completed",
+      0,
+    );
+    sandboxHandles[runSandboxId("SYM-700")] = issueKeyed;
+
+    // The second session dispatches with the same issue_id but its own
+    // run_id, so it must land in its own sandbox and run its own engine.
+    const runB = new FakeSandbox(runSandboxId("session-b"));
+    runB.engineStdout = [
+      '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"RUN B — own work"}]}}',
+      '{"type":"agent_end"}',
+    ].join("\n");
+    sandboxHandles[runSandboxId("session-b")] = runB;
+
+    const body = JSON.stringify({
+      issue_id: "SYM-700",
+      run_id: "session-b",
+      repo_url: "https://github.com/x/y.git",
+      prompt: "implement it",
+      engine: "pi",
+    });
+
+    const res = await app.fetch(
+      await signedRequest("https://example/run", { method: "POST", body }),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const events = await consumeSseFrames(res);
+
+    // Run B started its own engine in its own (run_id-keyed) sandbox...
+    expect(runB.startProcessCalls).toHaveLength(1);
+    // ...and the stream carries run B's output, never the issue-slug
+    // sandbox's leftover process.
+    expect(events.find((e) => e.type === "assistant_msg")?.text).toBe(
+      "RUN B — own work",
+    );
+    // The issue-slug sandbox was never even opened.
+    expect(issueKeyed.startProcessCalls).toHaveLength(0);
+  });
 });
 
 describe("POST /run/attach", () => {

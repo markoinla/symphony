@@ -178,6 +178,31 @@ describe("DispatcherClient.run", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
+  it("serializes run_id when provided so the dispatcher namespaces the sandbox per session", async () => {
+    let sentBody: Record<string, unknown> = {};
+    const fetchImpl = vi.fn(async (_input: Request | string, init?: RequestInit) => {
+      sentBody = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return new Response("{}", { status: 200 });
+    });
+    const client = new DispatcherClient(
+      "https://dispatcher.example",
+      "k",
+      fetchImpl as unknown as typeof fetch,
+    );
+    await client.run({
+      scope: "a",
+      issueId: "SYM-1",
+      runId: "session-abc",
+      repoUrl: "https://x.y/z.git",
+      prompt: "p",
+      engine: "pi",
+    });
+    // Both fields ride along: issue_id still drives the workspace dir
+    // and logging, run_id is the sandbox/process key.
+    expect(sentBody.issue_id).toBe("SYM-1");
+    expect(sentBody.run_id).toBe("session-abc");
+  });
+
   it("strips a trailing slash from the dispatcher URL", async () => {
     const fetchImpl = vi.fn(async () => new Response("{}", { status: 200 }));
     const client = new DispatcherClient(

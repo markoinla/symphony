@@ -216,31 +216,34 @@ export function buildAdminRouter() {
   });
 
   /**
-   * Manually tear down a per-issue sandbox. Operator escape hatch
+   * Manually tear down a per-run sandbox. Operator escape hatch
    * for zombie sandboxes — used when SessionRunner's auto-cleanup
    * couldn't fire (e.g., the worker was deployed before the cleanup
    * step existed, or the workflow died in a way that bypassed the
    * finally). Signs `/run/stop` against the dispatcher.
    *
-   * Body: { "issue_id": "SYM-305" }
+   * The dispatcher keys sandboxes by the run id (= the agent session
+   * id). Pass `run_id`; `issue_id` is still accepted for sandboxes
+   * from one-shot callers that never set a distinct run id.
+   *
+   * Body: { "run_id": "<session-uuid>" } or { "issue_id": "SYM-305" }
    */
   app.post("/admin/sandbox/stop", async (c) => {
     const body = (await c.req.json().catch(() => null)) as
-      | { issue_id?: unknown }
+      | { issue_id?: unknown; run_id?: unknown }
       | null;
-    const issueId =
-      body && typeof body.issue_id === "string" && body.issue_id.length > 0
-        ? body.issue_id
-        : null;
-    if (!issueId) {
-      return c.json({ error: "invalid_issue_id" }, 400);
+    const pick = (v: unknown): string | null =>
+      typeof v === "string" && v.length > 0 ? v : null;
+    const runId = body ? (pick(body.run_id) ?? pick(body.issue_id)) : null;
+    if (!runId) {
+      return c.json({ error: "invalid_run_id" }, 400);
     }
     const dispatcher = new DispatcherClient(
       c.env.DISPATCHER_URL,
       c.env.DISPATCH_HMAC_SECRET,
     );
     try {
-      await dispatcher.stop(issueId);
+      await dispatcher.stop(runId);
     } catch (e) {
       const message =
         e instanceof DispatcherError
@@ -250,7 +253,7 @@ export function buildAdminRouter() {
             : "unknown_error";
       return c.json({ ok: false, error: message }, 502);
     }
-    return c.json({ ok: true, issue_id: issueId });
+    return c.json({ ok: true, run_id: runId });
   });
 
   return app;
