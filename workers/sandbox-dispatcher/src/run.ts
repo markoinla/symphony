@@ -11,6 +11,14 @@ import {
   safeDestroy,
   sanitizeScopeForId,
 } from "./sandbox-helpers";
+import { computeSignature } from "./hmac";
+import {
+  ENGINE_CMD_PATH,
+  FORWARDER_PATH,
+  FORWARDER_SCRIPT,
+  INGEST_CONFIG_PATH,
+  type IngestConfig,
+} from "./forwarder";
 import { createClaudeEngineAdapter } from "./engines/claude";
 import { piEngineAdapter } from "./engines/pi";
 import type { EngineAdapter, NormalizedEvent } from "./engines/types";
@@ -85,6 +93,14 @@ interface RunBody {
   // one-shot callers (buffered `/run`, smoke tests) that have no
   // session concept.
   run_id?: unknown;
+  // `/run/start` only (engine-push, SYM-386). Base URL of the
+  // linear-agent worker; the forwarder POSTs run events to
+  // `<ingest_url>/internal/run-events/<run_id>`.
+  ingest_url?: unknown;
+  // `/run/start` only. Workflow instance id the ingest endpoint wakes
+  // when the run finishes. Usually equals `run_id`, but differs for
+  // `:rN` resume instances — so it is threaded explicitly.
+  instance_id?: unknown;
 }
 
 interface CredentialsBody {
@@ -126,6 +142,10 @@ interface ParsedRun {
   credentials: ParsedCredentials | null;
   branch: string | null;
   turn: number;
+  // `/run/start` push-path fields. Null for buffered `/run` and the SSE
+  // path, which don't use them.
+  ingestUrl: string | null;
+  instanceId: string | null;
 }
 
 export function buildRunRouter() {
@@ -263,6 +283,91 @@ export function buildRunRouter() {
     const sandbox = getSandbox(c.env.Sandbox, runSandboxId(runId));
     await safeDestroy(sandbox);
     return c.json({ ok: true, run_id: runId });
+  });
+
+  // `/run/start` — engine-push start (SYM-386). Runs the same setup as
+  // `/run` (baseline restore, clone, branch, MCP config) but then
+  // launches the sandbox *forwarder* as a detached process and returns
+  // immediately. The forwarder POSTs engine events straight to the
+  // linear-agent ingest endpoint, so the dispatcher holds nothing open
+  // — no SSE, no re-attach. The caller's Workflow parks on
+  // `step.waitForEvent` until the forwarder's terminal batch wakes it.
+  //
+  // pi only: claude still uses the SSE `/run` path.
+  app.post("/run/start", async (c) => {
+    const body = await readJsonBody<RunBody>(c.req.raw);
+    const parsed = parseRun(body);
+    if (typeof parsed === "string") {
+      return c.json({ error: parsed }, 400);
+    }
+    if (parsed.engine !== "pi") {
+      return c.json(
+        { error: "engine_not_supported_for_start", engine: parsed.engine },
+        400,
+      );
+    }
+    if (!parsed.ingestUrl) return c.json({ error: "missing_ingest_url" }, 400);
+    if (!parsed.instanceId) {
+      return c.json({ error: "missing_instance_id" }, 400);
+    }
+
+    const sandbox = getSandbox(c.env.Sandbox, runSandboxId(parsed.runId));
+    const processId = runProcessId(parsed.runId, parsed.turn);
+
+    // Idempotent re-entry. A retried `startRun` step lands back here; if
+    // the forwarder process already exists the run is in flight, so
+    // skip setup — re-running it would `rm -rf` the workspace out from
+    // under the live engine.
+    const existing = await getProcessOrNull(sandbox, processId);
+    if (existing) {
+      return c.json({ ok: true, run_id: parsed.runId, already_running: true });
+    }
+
+    const prep = await prepareWorkspace(c.env, sandbox, parsed);
+    if (!prep.ok) {
+      return c.json(prep.body, prep.status);
+    }
+
+    // The sandbox only ever holds a per-run token, never the master
+    // secret: token = HMAC(DISPATCH_HMAC_SECRET, run_id). The ingest
+    // endpoint recomputes it from the run id in its URL path.
+    const token = await computeSignature(
+      c.env.DISPATCH_HMAC_SECRET,
+      parsed.runId,
+    );
+    const ingestConfig: IngestConfig = {
+      url:
+        `${parsed.ingestUrl.replace(/\/+$/, "")}` +
+        `/internal/run-events/${encodeURIComponent(parsed.runId)}`,
+      token,
+      instanceId: parsed.instanceId,
+    };
+
+    try {
+      await writeForwarderFiles(
+        sandbox,
+        buildEngineCommand(parsed, prep.workspaceDir),
+        ingestConfig,
+      );
+    } catch (e) {
+      return c.json(
+        {
+          error: "forwarder_write_failed",
+          stderr: e instanceof Error ? e.message : String(e),
+        },
+        502,
+      );
+    }
+
+    await sandbox.startProcess(forwarderStartCommand(), {
+      processId,
+      // Keep the process record + logs after exit so a late retry of
+      // the caller's `startRun` step still observes `already_running`.
+      autoCleanup: false,
+      timeout: parsed.timeoutMs,
+    });
+
+    return c.json({ ok: true, run_id: parsed.runId });
   });
 
   // Re-attach to an in-flight (or already-finished) engine process for
@@ -694,6 +799,133 @@ export function runProcessId(runId: string, turn: number): string {
   return `engine-${sanitizeScopeForId(runId)}-t${turn}`;
 }
 
+type PrepareResult =
+  | { ok: true; workspaceDir: string }
+  | { ok: false; status: 412 | 502; body: Record<string, unknown> };
+
+/**
+ * Restore the engine baseline, clone the repo, set up the branch, and
+ * write MCP config — the setup `/run/start` runs before launching the
+ * forwarder. Mirrors the buffered `/run` setup but returns a structured
+ * failure for the caller to turn into a response.
+ */
+async function prepareWorkspace(
+  env: Env,
+  sandbox: RunSandbox,
+  parsed: ParsedRun,
+): Promise<PrepareResult> {
+  const baselineEngine = resolveBaselineEngine(parsed.engine);
+  const record = await new BaselineStore(env.DB).get(baselineEngine);
+  if (!record) {
+    return {
+      ok: false,
+      status: 412,
+      body: {
+        error: "missing_baseline",
+        engine: parsed.engine,
+        ...(baselineEngine !== parsed.engine
+          ? { baseline_engine: baselineEngine }
+          : {}),
+      },
+    };
+  }
+
+  await sandbox.restoreBackup(record.handle);
+
+  const workspaceDir = `/workspace/${parsed.issueId}`;
+  await sandbox.exec(`mkdir -p ${shellQuote(workspaceDir)}`);
+  await sandbox.exec(
+    `rm -rf ${shellQuote(workspaceDir)} && mkdir -p ${shellQuote(workspaceDir)}`,
+  );
+
+  const cloneToken = parsed.githubToken ?? env.DISPATCH_GITHUB_TOKEN;
+  const cloneUrl = buildAuthenticatedCloneUrl(parsed.repoUrl, cloneToken);
+  const cloneResult = await sandbox.exec(
+    `cd ${shellQuote(workspaceDir)} && git clone ${shellQuote(cloneUrl)} .`,
+  );
+  if (cloneResult.exitCode !== 0) {
+    return {
+      ok: false,
+      status: 502,
+      body: {
+        error: "clone_failed",
+        exit_code: cloneResult.exitCode,
+        stderr: redactToken(cloneResult.stderr, cloneToken),
+      },
+    };
+  }
+
+  if (parsed.branch) {
+    const branchResult = await resolveBranch(
+      sandbox,
+      workspaceDir,
+      parsed.branch,
+    );
+    if (!branchResult.ok) {
+      return {
+        ok: false,
+        status: 502,
+        body: {
+          error: "branch_setup_failed",
+          exit_code: branchResult.exitCode,
+          stderr: branchResult.stderr,
+        },
+      };
+    }
+  }
+
+  if (parsed.credentials) {
+    try {
+      await writeMcpConfig(
+        sandbox,
+        workspaceDir,
+        parsed.engine,
+        parsed.credentials,
+      );
+    } catch (e) {
+      return {
+        ok: false,
+        status: 502,
+        body: {
+          error: "mcp_config_write_failed",
+          exit_code: 1,
+          stderr: e instanceof Error ? e.message : String(e),
+        },
+      };
+    }
+  }
+
+  return { ok: true, workspaceDir };
+}
+
+/**
+ * Write the three per-run files the forwarder needs into the sandbox:
+ * the forwarder script, the engine command, and the ingest config.
+ */
+async function writeForwarderFiles(
+  sandbox: { writeFile(path: string, content: string): Promise<unknown> },
+  engineCmd: string,
+  ingestConfig: IngestConfig,
+): Promise<void> {
+  await sandbox.writeFile(FORWARDER_PATH, FORWARDER_SCRIPT);
+  await sandbox.writeFile(ENGINE_CMD_PATH, engineCmd);
+  await sandbox.writeFile(INGEST_CONFIG_PATH, JSON.stringify(ingestConfig));
+}
+
+/**
+ * Shell command that launches the forwarder. The PATH export mirrors
+ * `buildEngineEnvironment` so `node` resolves the same way the engine's
+ * toolchain does; `exec` replaces the shell so the forwarder is the
+ * process the dispatcher's `processId` tracks.
+ */
+function forwarderStartCommand(): string {
+  return (
+    `export HOME=${SANDBOX_HOME} && ` +
+    `export PATH=${SANDBOX_HOME}/.npm-global/bin:${SANDBOX_HOME}/.local/bin:$PATH && ` +
+    `exec node ${FORWARDER_PATH}`
+  );
+}
+
 function adapterFor(engine: Engine): EngineAdapter {
   switch (engine) {
     case "pi":
@@ -753,6 +985,12 @@ function parseRun(body: RunBody): ParsedRun | string {
   // concept keep the historical per-issue sandbox behavior.
   const runId = parseIssueId(body.run_id) ?? issueId;
 
+  const ingestUrl = parseIngestUrl(body.ingest_url);
+  if (ingestUrl === false) return "invalid_ingest_url";
+  // `instance_id` reuses the issue-id character class — it also has to
+  // accept `:` for `<sessionId>:rN` resume instance ids.
+  const instanceId = parseIssueId(body.instance_id);
+
   return {
     issueId,
     runId,
@@ -769,7 +1007,26 @@ function parseRun(body: RunBody): ParsedRun | string {
     credentials,
     branch,
     turn,
+    ingestUrl,
+    instanceId,
   };
+}
+
+/**
+ * Validate the optional `ingest_url` (engine-push, `/run/start`). Must
+ * be an `https://` URL; we also refuse shell metacharacters as defense
+ * in depth even though the value only ever lands in a JSON config file.
+ *
+ * Returns the trimmed value, `null` for absent, or `false` for invalid.
+ */
+export function parseIngestUrl(value: unknown): string | null | false {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 500) return false;
+  if (!/^https:\/\//.test(trimmed)) return false;
+  if (/[\s'"`$();&|<>\\]/.test(trimmed)) return false;
+  return trimmed;
 }
 
 /**

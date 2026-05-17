@@ -8,6 +8,7 @@ import { buildApiV1Router } from "./routes/api-v1";
 import { buildDashboardApiRouter } from "./routes/dashboard-api";
 import { buildDashboardRouter } from "./routes/dashboard";
 import { buildGitHubRouter } from "./routes/github";
+import { buildInternalRouter } from "./routes/internal";
 import { buildMcpRouter } from "./routes/mcp";
 import { buildOAuthRouter } from "./routes/oauth";
 import { buildOpenApiRouter } from "./routes/openapi";
@@ -152,6 +153,7 @@ export function buildApp() {
   app.route("/", buildWebhookRouter());
   app.route("/", buildAdminRouter());
   app.route("/", buildGitHubRouter());
+  app.route("/", buildInternalRouter());
 
   return app;
 }

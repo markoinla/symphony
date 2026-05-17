@@ -95,6 +95,16 @@ export interface AttachArgs {
   engine: string;
 }
 
+/**
+ * Arguments for `POST /run/start` (engine-push). Extends `RunArgs` with
+ * this worker's ingest base URL and the workflow instance id the ingest
+ * endpoint wakes when the run finishes.
+ */
+export interface StartArgs extends RunArgs {
+  ingestUrl: string;
+  instanceId: string;
+}
+
 export interface RunResult {
   engine: string;
   exit_code: number;
@@ -140,6 +150,21 @@ export type NormalizedEvent =
       branch: string | null;
       pr_url: string | null;
     };
+
+/**
+ * Workflow event the linear-agent ingest endpoint sends to wake a
+ * parked `SessionRunner` instance when an engine-push run finishes
+ * (SYM-386). The runner listens for it via `step.waitForEvent`.
+ */
+export const RUN_TERMINAL_EVENT = "run.terminal" as const;
+
+export interface RunTerminalPayload {
+  exit_code: number;
+  // Engine error detail when exit_code !== 0; null on a clean run.
+  error: string | null;
+  // The run's final assistant message, or null when it produced none.
+  last_assistant: string | null;
+}
 
 export interface DispatcherErrorBody {
   error: string;
@@ -200,6 +225,44 @@ export class DispatcherClient {
     }
 
     return (await res.json()) as RunResult;
+  }
+
+  /**
+   * Engine-push start (SYM-386). POSTs `/run/start`: the dispatcher
+   * sets up the sandbox and launches the forwarder, then returns —
+   * there is no stream to consume. Run events arrive asynchronously at
+   * this worker's `/internal/run-events` endpoint, and the run's
+   * terminal status arrives as a `run.terminal` workflow event. pi only.
+   *
+   * Throws `DispatcherError` on a non-2xx response.
+   */
+  async start(args: StartArgs): Promise<{ ok: boolean; run_id: string }> {
+    const body = JSON.stringify({
+      ...serializeRunArgs(args),
+      ingest_url: args.ingestUrl,
+      instance_id: args.instanceId,
+    });
+    const sig = await computeSignature(this.secret, body);
+    const fetchFn = this.fetchImpl;
+    const res = await fetchFn(`${stripTrailingSlash(this.url)}/run/start`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Symphony-Signature": sig,
+      },
+      body,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      let parsed: DispatcherErrorBody | string;
+      try {
+        parsed = JSON.parse(text) as DispatcherErrorBody;
+      } catch {
+        parsed = text;
+      }
+      throw new DispatcherError(res.status, parsed);
+    }
+    return (await res.json()) as { ok: boolean; run_id: string };
   }
 
   /**

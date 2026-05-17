@@ -137,6 +137,15 @@ export interface SettingRow {
   updated_at: number;
 }
 
+export interface AgentSessionEventRow {
+  id: number;
+  session_id: string;
+  turn: number;
+  ts: number;
+  type: string;
+  body: string | null;
+}
+
 export class FakeD1 {
   // Keyed by `organization_id` for getByOrgId convenience, but we also
   // scan for getByLinearOrgId.
@@ -151,13 +160,25 @@ export class FakeD1 {
   webhookEvents = new Map<string, WebhookEventRow>();
   // Keyed by `${organization_id}:${key}`.
   settings = new Map<string, SettingRow>();
-  // The fake doesn't model the agent_session_events table; this is the
-  // value returned for the re-attach cursor COUNT query. Tests that
-  // exercise the /run/attach path set it > 0.
+  // Re-attach cursor COUNT fallback, used only when no agent_session_events
+  // rows have been inserted. Tests that exercise the /run/attach path
+  // set it > 0; tests that insert real rows get a real count instead.
   agentSessionEventCount = 0;
+  // Modeled agent_session_events table (engine-push ingest). `id` is the
+  // autoincrement primary key, assigned from `agentSessionEventSeq`.
+  agentSessionEvents: AgentSessionEventRow[] = [];
+  agentSessionEventSeq = 0;
 
   prepare(sql: string) {
     return new FakeStatement(this, sql);
+  }
+
+  // D1's batch() — runs each prepared statement in order. The linear-agent
+  // worker only batches INSERTs (AgentSessionEventStore.appendBatch).
+  async batch(statements: FakeStatement[]): Promise<unknown[]> {
+    const out: unknown[] = [];
+    for (const stmt of statements) out.push(await stmt.run());
+    return out;
   }
 }
 
@@ -166,9 +187,15 @@ class FakeStatement {
 
   constructor(private db: FakeD1, private sql: string) {}
 
+  // Real D1's `.bind()` returns a *new* bound statement — the prepared
+  // statement is immutable. `AgentSessionEventStore.appendBatch` relies
+  // on that: it binds one prepared statement N times and expects N
+  // distinct bound statements. Returning `this` (mutating in place)
+  // would collapse them all onto the last binding.
   bind(...values: unknown[]) {
-    this.bindings = values;
-    return this;
+    const next = new FakeStatement(this.db, this.sql);
+    next.bindings = values;
+    return next;
   }
 
   // Drizzle's D1 session calls `.raw()` on prepared selects when it
@@ -502,6 +529,25 @@ class FakeStatement {
       });
       return { success: true, meta: { changes: 1 } };
     }
+    // ── agent_session_events ───────────────────────────────────
+    if (/^INSERT INTO agent_session_events/i.test(sql)) {
+      const [sessionId, turn, ts, type, body] = this.bindings as [
+        string,
+        number,
+        number,
+        string,
+        string | null,
+      ];
+      this.db.agentSessionEvents.push({
+        id: ++this.db.agentSessionEventSeq,
+        session_id: sessionId,
+        turn,
+        ts,
+        type,
+        body,
+      });
+      return { success: true, meta: { changes: 1 } };
+    }
     // ── webhook_sources ────────────────────────────────────────
     if (/^INSERT INTO webhook_sources/i.test(sql)) {
       const [
@@ -762,9 +808,23 @@ class FakeStatement {
     }
 
     if (/FROM agent_session_events/i.test(sql)) {
-      // Re-attach cursor COUNT query. The fake doesn't model the events
-      // table (inserts are swallowed by `safe()` in runTurn); the count
-      // defaults to 0 (fresh run) and is overridable per test.
+      // Most-recent assistant_msg body (lastAssistantBody).
+      if (/type = 'assistant_msg'/i.test(sql)) {
+        const [sid] = this.bindings as [string];
+        const row = this.db.agentSessionEvents
+          .filter((r) => r.session_id === sid && r.type === "assistant_msg")
+          .sort((a, b) => b.id - a.id)[0];
+        return (row ? ({ body: row.body } as unknown as T) : null);
+      }
+      // Re-attach cursor COUNT query. Count real rows once any have been
+      // inserted; otherwise fall back to the per-test override field.
+      if (this.db.agentSessionEvents.length > 0) {
+        const [sid, turn] = this.bindings as [string, number];
+        const n = this.db.agentSessionEvents.filter(
+          (r) => r.session_id === sid && r.turn === turn,
+        ).length;
+        return { n } as unknown as T;
+      }
       return { n: this.db.agentSessionEventCount } as unknown as T;
     }
 
@@ -861,7 +921,11 @@ class FakeStatement {
     }
 
     if (/FROM agent_session_events/i.test(sql)) {
-      return { success: true, results: [] as unknown as T[] };
+      const [sid] = this.bindings as [string];
+      const rows = this.db.agentSessionEvents
+        .filter((r) => r.session_id === sid)
+        .sort((a, b) => a.id - b.id);
+      return { success: true, results: rows as unknown as T[] };
     }
 
     if (/FROM agent_sessions/i.test(sql)) {

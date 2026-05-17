@@ -43,10 +43,12 @@ import type { LinearTokenRefresher } from "../lib/linear-graphql";
 import {
   DispatcherClient,
   DispatcherError,
+  RUN_TERMINAL_EVENT,
   deriveBranchFromIssueIdentifier,
   dispatchBranchForSubject,
   type NormalizedEvent,
   type RunCredentials,
+  type RunTerminalPayload,
 } from "../lib/dispatcher";
 import { mapToActivity } from "../lib/event-mapper";
 import {
@@ -190,7 +192,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
   }> {
     const params = event.payload;
     if (params.mode === "trigger") {
-      return await this.runTriggerMode(params, step);
+      return await this.runTriggerMode(params, step, event.instanceId);
     }
     const webhookEvent = params.event;
     const sessionId = webhookEvent.agentSession.id;
@@ -201,6 +203,11 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         webhookEvent,
         sessionId,
         step,
+        // The workflow instance id — equals `sessionId` for a normal
+        // run, `<sessionId>:rN` for a prompted resume. The engine-push
+        // ingest endpoint wakes this exact instance, so it is threaded
+        // through to the dispatcher rather than assumed.
+        event.instanceId,
       );
     } finally {
       // The dispatcher keys the sandbox by the run id (= session id),
@@ -255,6 +262,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     webhookEvent: AgentSessionEventWebhook,
     sessionId: string,
     step: WorkflowStep,
+    instanceId: string,
   ): Promise<{
     status: string;
     exit_code?: number | null;
@@ -701,42 +709,61 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           },
         );
 
-        const outcome: TurnOutcome = await step.do(
-          turnLabel,
-          {
-            // Retry on eviction: the turn is idempotent now — on retry
-            // `runTurn` re-attaches to the still-running engine process
-            // from a cursor instead of re-dispatching. Constant 2s so a
-            // ~5-min WorkflowInternalError eviction re-attaches promptly;
-            // 20 attempts comfortably cover the 30-min dispatcher cap.
-            retries: { limit: 20, delay: "2 seconds", backoff: "constant" },
-            // Cloudflare Workflows' default step.do timeout is 10 min,
-            // which exactly matches the dispatcher's DEFAULT_TIMEOUT_MS
-            // — long-running engine streams hit the workflow timeout
-            // before the dispatcher's own timeout fires, surfacing as
-            // `workflow_internal_error: WorkflowTimeoutError`. The
-            // dispatcher caps runs at MAX_TIMEOUT_MS = 30 min, so the
-            // step needs comfortable headroom above that for SSE close
-            // and `post-terminal-activity`.
-            timeout: "35 minutes",
-          },
-          async () =>
-            runTurn(this.env, sessionId, token, refreshLinearToken, {
-              scope: resolved.scope,
-              issueId: issueIdentifier,
-              repoUrl: resolved.repoUrl,
-              prompt: captured,
-              engine: resolved.engine,
-              model: resolved.model,
-              githubToken,
-              credentials: linearMcpCredentials,
-              branch: deriveBranchFromIssueIdentifier(issueIdentifier),
-              allowedTools: resolved.allowedTools,
-              disallowedTools: resolved.disallowedTools,
-              permissionMode: resolved.permissionMode,
-              turn,
-            }),
-        );
+        // pi runs its whole agentic loop in one invocation and pushes
+        // events straight to this worker's ingest endpoint — there is
+        // no SSE turn to stream. Start the run, then park on the
+        // terminal event (SYM-386). claude still streams via `runTurn`.
+        const outcome: TurnOutcome =
+          resolved.engine === "pi"
+            ? await runPushTurn(this.env, step, instanceId, {
+                scope: resolved.scope,
+                issueId: issueIdentifier,
+                runId: sessionId,
+                repoUrl: resolved.repoUrl,
+                prompt: captured,
+                engine: resolved.engine,
+                model: resolved.model,
+                githubToken,
+                credentials: linearMcpCredentials,
+                branch: deriveBranchFromIssueIdentifier(issueIdentifier),
+                allowedTools: resolved.allowedTools,
+                disallowedTools: resolved.disallowedTools,
+                permissionMode: resolved.permissionMode,
+                turn,
+              })
+            : await step.do(
+                turnLabel,
+                {
+                  // Retry on eviction: `runTurn` re-attaches to the
+                  // still-running engine process from a cursor instead
+                  // of re-dispatching. Constant 2s so a ~5-min eviction
+                  // re-attaches promptly; 20 attempts cover the 30-min
+                  // dispatcher cap. 35-min timeout clears the
+                  // dispatcher's MAX_TIMEOUT_MS plus SSE-close headroom.
+                  retries: {
+                    limit: 20,
+                    delay: "2 seconds",
+                    backoff: "constant",
+                  },
+                  timeout: "35 minutes",
+                },
+                async () =>
+                  runTurn(this.env, sessionId, token, refreshLinearToken, {
+                    scope: resolved.scope,
+                    issueId: issueIdentifier,
+                    repoUrl: resolved.repoUrl,
+                    prompt: captured,
+                    engine: resolved.engine,
+                    model: resolved.model,
+                    githubToken,
+                    credentials: linearMcpCredentials,
+                    branch: deriveBranchFromIssueIdentifier(issueIdentifier),
+                    allowedTools: resolved.allowedTools,
+                    disallowedTools: resolved.disallowedTools,
+                    permissionMode: resolved.permissionMode,
+                    turn,
+                  }),
+              );
 
         if (outcome.kind === "dispatch_error") {
           batchTerminal = outcome;
@@ -965,6 +992,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
   private async runTriggerMode(
     params: Extract<SessionRunnerParams, { mode: "trigger" }>,
     step: WorkflowStep,
+    instanceId: string,
   ): Promise<{
     status: string;
     exit_code?: number | null;
@@ -972,7 +1000,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
     pr_url?: null;
   }> {
     try {
-      return await this.runTriggerModeInner(params, step);
+      return await this.runTriggerModeInner(params, step, instanceId);
     } finally {
       // Sandbox is keyed by the run id (= session id), not the issue.
       await this.stopSandboxQuiet(step, params.sessionId);
@@ -982,6 +1010,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
   private async runTriggerModeInner(
     params: Extract<SessionRunnerParams, { mode: "trigger" }>,
     step: WorkflowStep,
+    instanceId: string,
   ): Promise<{
     status: string;
     exit_code?: number | null;
@@ -1062,38 +1091,52 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         turnsRun = turn;
         const captured = currentPrompt;
 
-        const outcome: TurnOutcome = await step.do(
-          `trigger-turn-${turn}`,
-          {
-            // Retry on eviction: the turn is idempotent now — on retry
-            // `runTurn` re-attaches to the still-running engine process
-            // from a cursor instead of re-dispatching. Constant 2s so a
-            // ~5-min WorkflowInternalError eviction re-attaches promptly;
-            // 20 attempts comfortably cover the 30-min dispatcher cap.
-            retries: { limit: 20, delay: "2 seconds", backoff: "constant" },
-            // See note on the agent-session turn step above — default
-            // 10-min Workflows step timeout races the dispatcher's
-            // own 10-min default and loses. Cap matches the dispatcher's
-            // MAX_TIMEOUT_MS (30 min) plus headroom.
-            timeout: "35 minutes",
-          },
-          async () =>
-            runTurnHeadless(this.env, sessionId, {
-              scope,
-              issueId: issueIdentifier,
-              repoUrl,
-              prompt: captured,
-              engine,
-              model,
-              githubToken,
-              credentials: null,
-              branch: dispatchBranch,
-              allowedTools: params.workflow.allowed_tools ?? null,
-              disallowedTools: params.workflow.disallowed_tools ?? null,
-              permissionMode: params.workflow.permission_mode ?? null,
-              turn,
-            }),
-        );
+        // pi: engine-push (see runAgentSessionMode). claude: SSE turn.
+        const outcome: TurnOutcome =
+          engine === "pi"
+            ? await runPushTurn(this.env, step, instanceId, {
+                scope,
+                issueId: issueIdentifier,
+                runId: sessionId,
+                repoUrl,
+                prompt: captured,
+                engine,
+                model,
+                githubToken,
+                credentials: null,
+                branch: dispatchBranch,
+                allowedTools: params.workflow.allowed_tools ?? null,
+                disallowedTools: params.workflow.disallowed_tools ?? null,
+                permissionMode: params.workflow.permission_mode ?? null,
+                turn,
+              })
+            : await step.do(
+                `trigger-turn-${turn}`,
+                {
+                  retries: {
+                    limit: 20,
+                    delay: "2 seconds",
+                    backoff: "constant",
+                  },
+                  timeout: "35 minutes",
+                },
+                async () =>
+                  runTurnHeadless(this.env, sessionId, {
+                    scope,
+                    issueId: issueIdentifier,
+                    repoUrl,
+                    prompt: captured,
+                    engine,
+                    model,
+                    githubToken,
+                    credentials: null,
+                    branch: dispatchBranch,
+                    allowedTools: params.workflow.allowed_tools ?? null,
+                    disallowedTools: params.workflow.disallowed_tools ?? null,
+                    permissionMode: params.workflow.permission_mode ?? null,
+                    turn,
+                  }),
+              );
 
         if (outcome.kind === "dispatch_error") {
           terminal = outcome;
@@ -1175,6 +1218,125 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
 
 function normalizeEngineName(engine: string): string {
   return engine === "claude-code" ? "claude" : engine;
+}
+
+/**
+ * Run one pi turn via the engine-push path (SYM-386). Unlike `runTurn`
+ * (SSE), this holds nothing open: `start-run-N` fires the dispatcher's
+ * `/run/start` and returns, then `run-terminal-N` parks on the
+ * `run.terminal` workflow event the ingest endpoint sends when the run
+ * finishes. Workflow eviction during the wait is free — on resume the
+ * step journal replays `start-run-N` and re-enters the wait, so there
+ * is no SSE re-attach.
+ *
+ * pi runs its whole agentic loop in one invocation, so this always
+ * resolves to `done` or `dispatch_error` — never `needs_continuation`.
+ * Events + live Linear activities are handled by the ingest endpoint,
+ * not here.
+ */
+async function runPushTurn(
+  env: Env,
+  step: WorkflowStep,
+  instanceId: string,
+  args: {
+    scope: string;
+    issueId: string;
+    runId: string;
+    repoUrl: string;
+    prompt: string;
+    engine: string;
+    model: string | null;
+    githubToken: string | null;
+    credentials: RunCredentials | null;
+    branch: string | null;
+    allowedTools: string[] | null;
+    disallowedTools: string[] | null;
+    permissionMode: string | null;
+    turn: number;
+  },
+): Promise<TurnOutcome> {
+  const dispatcher = new DispatcherClient(
+    env.DISPATCHER_URL,
+    env.DISPATCH_HMAC_SECRET,
+  );
+
+  const startOutcome = await step.do(
+    `start-run-${args.turn}`,
+    { retries: { limit: 5, delay: "5 seconds", backoff: "exponential" } },
+    async (): Promise<{ ok: true } | { ok: false; message: string }> => {
+      try {
+        await dispatcher.start({
+          scope: args.scope,
+          issueId: args.issueId,
+          runId: args.runId,
+          instanceId,
+          // The dispatcher builds the forwarder's ingest URL from this
+          // worker's own public origin.
+          ingestUrl: env.URL,
+          repoUrl: args.repoUrl,
+          prompt: args.prompt,
+          engine: args.engine,
+          model: args.model,
+          githubToken: args.githubToken,
+          credentials: args.credentials,
+          branch: args.branch,
+          allowedTools: args.allowedTools,
+          disallowedTools: args.disallowedTools,
+          permissionMode: args.permissionMode,
+          turn: args.turn,
+        });
+        return { ok: true };
+      } catch (e) {
+        // A 4xx is a permanent contract/config failure (bad request,
+        // missing baseline) — surface it instead of burning retries.
+        // 5xx / network errors throw on through so step.do retries.
+        if (
+          e instanceof DispatcherError &&
+          e.status >= 400 &&
+          e.status < 500
+        ) {
+          return {
+            ok: false,
+            message: `dispatch_error (${e.status}): ${
+              typeof e.body === "string" ? e.body : e.body.error
+            }`,
+          };
+        }
+        throw e;
+      }
+    },
+  );
+
+  if (!startOutcome.ok) {
+    return { kind: "dispatch_error", message: startOutcome.message };
+  }
+
+  let payload: RunTerminalPayload;
+  try {
+    const ev = await step.waitForEvent<RunTerminalPayload>(
+      `run-terminal-${args.turn}`,
+      { type: RUN_TERMINAL_EVENT, timeout: "35 minutes" },
+    );
+    payload = ev.payload;
+  } catch {
+    // waitForEvent rejects on timeout — the forwarder never reported a
+    // terminal batch (engine hung, sandbox died, or forwarder crashed
+    // before it could POST). Surface it as a clean dispatch error.
+    return { kind: "dispatch_error", message: "run_terminal_timeout" };
+  }
+
+  return {
+    kind: "done",
+    result: {
+      exit_code: payload.exit_code,
+      duration_ms: 0,
+      branch: null,
+      pr_url: null,
+    },
+    lastAssistant: payload.last_assistant,
+    inbandError:
+      payload.exit_code === 0 ? null : payload.error ?? "engine_failed",
+  };
 }
 
 /**

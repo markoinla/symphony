@@ -813,6 +813,23 @@ export class AgentSessionEventStore {
       .first<{ n: number }>();
     return row?.n ?? 0;
   }
+
+  // Body of the most recent assistant_msg row for a session, or null
+  // when the run produced no assistant message. The engine-push ingest
+  // endpoint (SYM-386) reads this on the terminal batch so the
+  // `run.terminal` workflow event can carry the run's final message
+  // without shipping the whole event stream through sendEvent.
+  async lastAssistantBody(sessionId: string): Promise<string | null> {
+    const row = await this.db
+      .prepare(
+        `SELECT body FROM agent_session_events
+         WHERE session_id = ? AND type = 'assistant_msg'
+         ORDER BY id DESC LIMIT 1`,
+      )
+      .bind(sessionId)
+      .first<{ body: string | null }>();
+    return row?.body ?? null;
+  }
 }
 
 // ── webhook_sources ────────────────────────────────────────────────

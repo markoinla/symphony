@@ -3,7 +3,10 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { Env } from "../src/index";
 import { SessionRunner } from "../src/workflows/session-runner";
 import type { AgentSessionEventWebhook } from "../src/types/agent-session";
-import type { NormalizedEvent } from "../src/lib/dispatcher";
+import type {
+  NormalizedEvent,
+  RunTerminalPayload,
+} from "../src/lib/dispatcher";
 import { FakeD1 } from "./helpers/fake-d1";
 
 /**
@@ -98,7 +101,20 @@ function makeEnv(
   };
 }
 
-function makeStep() {
+/**
+ * Hand-rolled `step` stub. `do` runs the callback inline; `waitForEvent`
+ * resolves the engine-push events the runner parks on:
+ *   - `run-terminal-N` → the `run.terminal` payload (`opts.terminal`),
+ *     or rejects when `opts.terminalTimeout` is set.
+ *   - `wait-for-prompted-N` → `opts.followup`, or rejects (no follow-up).
+ */
+function makeStep(
+  opts: {
+    terminal?: RunTerminalPayload;
+    terminalTimeout?: boolean;
+    followup?: AgentSessionEventWebhook;
+  } = {},
+) {
   const ran: string[] = [];
   const step = {
     async do(
@@ -119,8 +135,35 @@ function makeStep() {
     async sleepUntil(_name: string, _timestamp: Date | number) {
       return;
     },
-    async waitForEvent() {
-      throw new Error("waitForEvent not stubbed");
+    async waitForEvent(
+      name: string,
+      _options: { type: string; timeout?: string | number },
+    ) {
+      if (name.startsWith("run-terminal-")) {
+        if (opts.terminalTimeout) {
+          throw new Error("waitForEvent timed out");
+        }
+        return {
+          payload: opts.terminal ?? {
+            exit_code: 0,
+            error: null,
+            last_assistant: null,
+          },
+          timestamp: new Date(),
+          type: "run.terminal",
+        };
+      }
+      if (name.startsWith("wait-for-prompted-")) {
+        if (opts.followup) {
+          return {
+            payload: opts.followup,
+            timestamp: new Date(),
+            type: "linear.prompted",
+          };
+        }
+        throw new Error("waitForEvent timed out");
+      }
+      throw new Error(`waitForEvent not stubbed: ${name}`);
     },
   };
   return { step, ran };
@@ -192,8 +235,12 @@ function installFetchMock(opts: {
   dispatcherEvents?: NormalizedEvent[];
   dispatcherStatus?: number;
   dispatcherErrorBody?: unknown;
-  // When provided, every dispatcher /run or /run/attach call is recorded
-  // here so tests can assert which endpoint the turn hit.
+  // `/run/start` (engine-push) response control. `startStatus` !== 200
+  // returns `startErrorBody` so DispatcherClient.start throws.
+  startStatus?: number;
+  startErrorBody?: unknown;
+  // When provided, every dispatcher call is recorded here so tests can
+  // assert which endpoint the turn hit.
   dispatcherCalls?: Array<{ url: string; body: string }>;
 }): void {
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -205,6 +252,20 @@ function installFetchMock(opts: {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
+    }
+
+    if (url.endsWith("/run/start")) {
+      opts.dispatcherCalls?.push({ url, body: body ?? "" });
+      if (opts.startStatus && opts.startStatus !== 200) {
+        return new Response(JSON.stringify(opts.startErrorBody ?? {}), {
+          status: opts.startStatus,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(
+        JSON.stringify({ ok: true, run_id: "session-1" }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
     }
 
     if (url.endsWith("/run") || url.endsWith("/run/attach")) {
@@ -355,27 +416,23 @@ const baseSession = {
 };
 
 describe("SessionRunner.run — happy path", () => {
-  it("streams assistant_msg and posts thought + response with the last assistant text", async () => {
+  it("starts the run and posts thought + response from the run.terminal event", async () => {
     const kv = new FakeKV();
     const db = seededDb();
-    installFetchMock({
-      dispatcherEvents: [
-        { type: "assistant_msg", text: "Looking at this." },
-        { type: "assistant_msg", text: "Done — opened PR #123." },
-        { type: "turn_end", turn: 1, reason: "completed" },
-        {
-          type: "result",
-          exit_code: 0,
-          duration_ms: 4567,
-          branch: null,
-          pr_url: null,
-        },
-      ],
-    });
+    const dispatcherCalls: Array<{ url: string; body: string }> = [];
+    installFetchMock({ dispatcherCalls });
 
     const env = makeEnv(kv, {}, db);
     const runner = buildRunner(env);
-    const { step, ran } = makeStep();
+    // pi pushes its events to the ingest endpoint; the workflow parks
+    // until the `run.terminal` event carries the outcome.
+    const { step, ran } = makeStep({
+      terminal: {
+        exit_code: 0,
+        error: null,
+        last_assistant: "Done — opened PR #123.",
+      },
+    });
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
@@ -402,66 +459,23 @@ describe("SessionRunner.run — happy path", () => {
       "mint-github-token",
       "record-session-start",
       "resolve-linear-mcp-token-1",
-      "turn-1",
+      "start-run-1",
       "post-terminal-activity",
       "update-final-plan",
       "record-session-end",
       "stop-sandbox",
     ]);
+    // The dispatcher was hit at the fire-and-forget /run/start, never
+    // the streaming /run.
+    expect(dispatcherCalls).toHaveLength(1);
+    expect(dispatcherCalls[0]!.url).toMatch(/\/run\/start$/);
+    // The workflow posts only the initial thought + terminal response;
+    // per-event timeline activities are the ingest endpoint's job now.
     expect(linearCalls.map((c) => c.content.type)).toEqual([
       "thought",
       "response",
     ]);
     expect(linearCalls[1]?.content.body).toBe("Done — opened PR #123.");
-  });
-
-  it("posts tool_call as an action activity in the timeline", async () => {
-    const kv = new FakeKV();
-    const db = seededDb();
-    installFetchMock({
-      dispatcherEvents: [
-        {
-          type: "tool_call",
-          tool: "read_file",
-          args: { path: "README.md" },
-          tool_id: "call_1",
-        },
-        { type: "assistant_msg", text: "All done." },
-        { type: "turn_end", turn: 1, reason: "completed" },
-        {
-          type: "result",
-          exit_code: 0,
-          duration_ms: 1000,
-          branch: null,
-          pr_url: null,
-        },
-      ],
-    });
-
-    const runner = buildRunner(makeEnv(kv, {}, db));
-    const { step } = makeStep();
-
-    const event: AgentSessionEventWebhook = {
-      type: "AgentSessionEvent",
-      organizationId: LINEAR_ORG_ID,
-      action: "created",
-      webhookId: "wh-tool",
-      agentSession: baseSession,
-      promptContext: baseSession.promptContext,
-    };
-
-    await runner.run(makeEvent(event), step as never);
-
-    expect(linearCalls.map((c) => c.content.type)).toEqual([
-      "thought",
-      "action",
-      "response",
-    ]);
-    expect(linearCalls[1]?.content).toMatchObject({
-      type: "action",
-      action: "read_file",
-    });
-    expect(linearCalls[1]?.content.parameter).toContain("README.md");
   });
 });
 
@@ -573,15 +587,12 @@ describe("SessionRunner.run — abort branches", () => {
 });
 
 describe("SessionRunner.run — dispatch failures", () => {
-  it("posts thought + error when the dispatcher returns a non-2xx response", async () => {
+  it("posts thought + error when /run/start returns a non-2xx response", async () => {
     const kv = new FakeKV();
     const db = seededDb();
     installFetchMock({
-      dispatcherStatus: 412,
-      dispatcherErrorBody: {
-        error: "missing_auth_backup",
-        scope: "default",
-      },
+      startStatus: 412,
+      startErrorBody: { error: "missing_baseline", engine: "pi" },
     });
 
     const runner = buildRunner(makeEnv(kv, {}, db));
@@ -611,7 +622,7 @@ describe("SessionRunner.run — dispatch failures", () => {
       "mint-github-token",
       "record-session-start",
       "resolve-linear-mcp-token-1",
-      "turn-1",
+      "start-run-1",
       "post-terminal-activity",
       "update-final-plan",
       "record-session-end",
@@ -621,29 +632,23 @@ describe("SessionRunner.run — dispatch failures", () => {
       "thought",
       "error",
     ]);
-    expect(linearCalls[1]?.content.body).toContain("Dispatcher error (412)");
-    expect(linearCalls[1]?.content.body).toContain("missing_auth_backup");
+    expect(linearCalls[1]?.content.body).toContain("412");
+    expect(linearCalls[1]?.content.body).toContain("missing_baseline");
   });
 
-  it("posts thought + error when the engine result frame has non-zero exit", async () => {
+  it("posts thought + error when the run.terminal event reports a non-zero exit", async () => {
     const kv = new FakeKV();
     const db = seededDb();
-    installFetchMock({
-      dispatcherEvents: [
-        { type: "error", message: "ENOENT: codex auth missing" },
-        { type: "turn_end", turn: 1, reason: "completed" },
-        {
-          type: "result",
-          exit_code: 2,
-          duration_ms: 100,
-          branch: null,
-          pr_url: null,
-        },
-      ],
-    });
+    installFetchMock({});
 
     const runner = buildRunner(makeEnv(kv, {}, db));
-    const { step } = makeStep();
+    const { step } = makeStep({
+      terminal: {
+        exit_code: 2,
+        error: "ENOENT: pi auth missing",
+        last_assistant: null,
+      },
+    });
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
@@ -661,29 +666,26 @@ describe("SessionRunner.run — dispatch failures", () => {
       turns: 1,
       pr_url: null,
     });
-    // SSE in-band error becomes a live `error` activity in the timeline
-    // AND drives the terminal error post.
+    // The workflow posts the initial thought + a terminal error built
+    // from the run.terminal payload. Live per-event error activities
+    // are posted by the ingest endpoint, not here.
     expect(linearCalls.map((c) => c.content.type)).toEqual([
       "thought",
       "error",
-      "error",
     ]);
-    expect(linearCalls[2]?.content.body).toContain("Engine exited with code 2");
-    expect(linearCalls[2]?.content.body).toContain("ENOENT");
+    expect(linearCalls[1]?.content.body).toContain("Engine exited with code 2");
+    expect(linearCalls[1]?.content.body).toContain("ENOENT");
   });
 
-  it("posts thought + error when the stream closes without a result frame", async () => {
+  it("posts thought + error when the run never reports a terminal event", async () => {
     const kv = new FakeKV();
     const db = seededDb();
-    installFetchMock({
-      // Stream closes after the assistant_msg without a turn_end / result.
-      dispatcherEvents: [
-        { type: "assistant_msg", text: "interrupted" },
-      ],
-    });
+    installFetchMock({});
 
     const runner = buildRunner(makeEnv(kv, {}, db));
-    const { step } = makeStep();
+    // The forwarder never POSTs a terminal batch — runPushTurn's
+    // waitForEvent times out.
+    const { step } = makeStep({ terminalTimeout: true });
 
     const event: AgentSessionEventWebhook = {
       type: "AgentSessionEvent",
@@ -705,184 +707,16 @@ describe("SessionRunner.run — dispatch failures", () => {
       "thought",
       "error",
     ]);
-    expect(linearCalls[1]?.content.body).toContain(
-      "stream_closed_without_result_frame",
-    );
+    expect(linearCalls[1]?.content.body).toContain("run_terminal_timeout");
   });
 });
 
 
-describe("SessionRunner.run — multi-turn loop", () => {
-  it("re-dispatches when a turn ends with needs_continuation", async () => {
-    const kv = new FakeKV();
-    const db = seededDb();
-
-    // Two dispatcher calls expected: turn 1 needs continuation, turn 2
-    // completes. The fetch mock returns a different SSE script per
-    // call by counting invocations.
-    let runCalls = 0;
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = typeof input === "string" ? input : (input as Request).url;
-      const body = init?.body as string | undefined;
-
-      if (url === "https://api.linear.app/graphql") {
-        return new Response(routeLinearGraphql(body), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      if (url.endsWith("/run")) {
-        runCalls++;
-        const events: NormalizedEvent[] =
-          runCalls === 1
-            ? [
-                { type: "assistant_msg", text: "Partial work done." },
-                { type: "turn_end", turn: 1, reason: "needs_continuation" },
-                {
-                  type: "result",
-                  exit_code: 0,
-                  duration_ms: 1000,
-                  branch: null,
-                  pr_url: null,
-                },
-              ]
-            : [
-                { type: "assistant_msg", text: "All done." },
-                { type: "turn_end", turn: 2, reason: "completed" },
-                {
-                  type: "result",
-                  exit_code: 0,
-                  duration_ms: 2000,
-                  branch: null,
-                  pr_url: null,
-                },
-              ];
-        return new Response(buildSseBodyStream(events), {
-          status: 200,
-          headers: { "Content-Type": "text/event-stream" },
-        });
-      }
-      throw new Error(`unexpected fetch in test: ${url}`);
-    });
-
-    const runner = buildRunner(makeEnv(kv, {}, db));
-    const { step, ran } = makeStep();
-
-    const event: AgentSessionEventWebhook = {
-      type: "AgentSessionEvent",
-      organizationId: LINEAR_ORG_ID,
-      action: "created",
-      webhookId: "wh-multi",
-      agentSession: baseSession,
-      promptContext: baseSession.promptContext,
-    };
-
-    const result = await runner.run(makeEvent(event), step as never);
-    expect(result).toEqual({
-      status: "ok",
-      exit_code: 0,
-      turns: 2,
-      pr_url: null,
-    });
-    expect(ran).toContain("turn-1");
-    expect(ran).toContain("turn-2");
-    expect(runCalls).toBe(2);
-    // The final response should reflect the LAST assistant message.
-    const lastCall = linearCalls[linearCalls.length - 1];
-    expect(lastCall?.content.type).toBe("response");
-    expect(lastCall?.content.body).toBe("All done.");
-  });
-
-  it("stops at max_turns and uses the last assistant message", async () => {
-    const kv = new FakeKV();
-
-    // Always returns needs_continuation; we cap at 2.
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
-      const url = typeof input === "string" ? input : (input as Request).url;
-      const body = init?.body as string | undefined;
-
-      if (url === "https://api.linear.app/graphql") {
-        return new Response(routeLinearGraphql(body), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      if (url.endsWith("/run")) {
-        return new Response(
-          buildSseBodyStream([
-            { type: "assistant_msg", text: "still going" },
-            { type: "turn_end", turn: 1, reason: "needs_continuation" },
-            { type: "result", exit_code: 0, duration_ms: 500, branch: null, pr_url: null },
-          ]),
-          { status: 200, headers: { "Content-Type": "text/event-stream" } },
-        );
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-
-    const db = new FakeD1();
-    db.linearAgentInstalls.set(ORG_ID, {
-      id: "install-uuid-1",
-      organization_id: ORG_ID,
-      linear_organization_id: LINEAR_ORG_ID,
-      access_token: "fake-token",
-      refresh_token: null,
-      scopes: "read,write",
-      installed_by_user_id: "user-1",
-      status: "active",
-      installed_at: NOW_SEC(),
-      refreshed_at: NOW_SEC(),
-      expires_at: null,
-    });
-    db.projects.set(`${ORG_ID}:team-abc`, {
-      id: "project-uuid-1",
-      organization_id: ORG_ID,
-      linear_team_id: "team-abc",
-      linear_team_name: "",
-      repo_url: "https://github.com/markoinla/symphony.git",
-      default_branch: "main",
-      engine: "pi",
-      model: null,
-      // max_turns on the project row is no longer consulted by the
-      // runner — see session-runner.ts resolve-inputs. Keep the
-      // column populated so the fixture stays valid; the effective
-      // cap below comes from the settings row.
-      max_turns: 10,
-      scope: null,
-      system_prompt_override: null,
-      created_at: NOW_SEC(),
-      updated_at: NOW_SEC(),
-    });
-    db.settings.set(`${ORG_ID}:agent.max_turns`, {
-      id: "setting-max-turns",
-      organization_id: ORG_ID,
-      key: "agent.max_turns",
-      value: "2",
-      created_at: NOW_SEC(),
-      updated_at: NOW_SEC(),
-    });
-    const env = makeEnv(kv, {}, db);
-    const runner = buildRunner(env);
-    const { step } = makeStep();
-
-    const event: AgentSessionEventWebhook = {
-      type: "AgentSessionEvent",
-      organizationId: LINEAR_ORG_ID,
-      action: "created",
-      webhookId: "wh-max",
-      agentSession: baseSession,
-      promptContext: baseSession.promptContext,
-    };
-
-    const result = await runner.run(makeEvent(event), step as never);
-    expect(result.turns).toBe(2);
-    const lastCall = linearCalls[linearCalls.length - 1];
-    expect(lastCall?.content.type).toBe("error");
-    expect(lastCall?.content.body).toContain("max_turns_reached");
-  });
-});
+// The engine-driven `needs_continuation` multi-turn tests were removed
+// in SYM-386: pi runs its whole agentic loop in one invocation and
+// never reports `needs_continuation`, so for pi a session is exactly
+// one turn. The `linear.prompted` follow-up loop is exercised by the
+// happy-path tests (each ends by parking on `wait-for-prompted-1`).
 
 // Resolution chain assertions: workflow_overrides > settings > env.
 // We capture the dispatcher `/run` request body to read which model
@@ -1018,60 +852,10 @@ describe("SessionRunner.run — model resolution", () => {
 // Capture dispatcher `/run` POST bodies for resolution-chain
 // assertions. Mirrors installFetchMock but pushes the parsed body
 // into the provided sink instead of just returning canned events.
-describe("SessionRunner.run — re-attach", () => {
-  it("re-attaches to the running engine when the turn already has persisted events", async () => {
-    const kv = new FakeKV();
-    const db = seededDb();
-    // A prior (evicted) attempt already streamed 4 events for turn 1.
-    db.agentSessionEventCount = 4;
-    const dispatcherCalls: Array<{ url: string; body: string }> = [];
-    installFetchMock({
-      dispatcherEvents: [
-        { type: "assistant_msg", text: "resumed after eviction" },
-        { type: "turn_end", turn: 1, reason: "completed" },
-        {
-          type: "result",
-          exit_code: 0,
-          duration_ms: 50,
-          branch: null,
-          pr_url: null,
-        },
-      ],
-      dispatcherCalls,
-    });
-
-    const env = makeEnv(kv, {}, db);
-    const runner = buildRunner(env);
-    const { step } = makeStep();
-
-    const event: AgentSessionEventWebhook = {
-      type: "AgentSessionEvent",
-      organizationId: LINEAR_ORG_ID,
-      action: "created",
-      webhookId: "wh-1",
-      agentSession: baseSession,
-      promptContext: baseSession.promptContext,
-    };
-
-    const result = await runner.run(makeEvent(event), step as never);
-    expect(result.status).toBe("ok");
-
-    // The turn resumed via /run/attach carrying the cursor, and never
-    // dispatched a fresh /run.
-    const attach = dispatcherCalls.find((c) => c.url.endsWith("/run/attach"));
-    expect(attach).toBeDefined();
-    expect(JSON.parse(attach!.body)).toMatchObject({
-      issue_id: "SYM-1",
-      // Re-attach must carry the run id so it derives the same
-      // sandbox/process the original /run created.
-      run_id: "session-1",
-      turn: 1,
-      cursor: 4,
-      engine: "pi",
-    });
-    expect(dispatcherCalls.some((c) => c.url.endsWith("/run"))).toBe(false);
-  });
-});
+// The SSE re-attach test was removed in SYM-386: pi no longer streams
+// over SSE, so there is no cursor to re-attach from. Workflow eviction
+// during an engine-push run is handled by the step journal — on resume
+// `start-run-N` replays and `run-terminal-N` re-enters its wait.
 
 function captureDispatcherRunBodies(
   sink: Record<string, unknown>[],
@@ -1087,7 +871,7 @@ function captureDispatcherRunBodies(
       });
     }
 
-    if (url.endsWith("/run")) {
+    if (url.endsWith("/run/start")) {
       if (body) {
         try {
           sink.push(JSON.parse(body) as Record<string, unknown>);
@@ -1096,18 +880,8 @@ function captureDispatcherRunBodies(
         }
       }
       return new Response(
-        buildSseBodyStream([
-          { type: "assistant_msg", text: "done" },
-          { type: "turn_end", turn: 1, reason: "completed" },
-          {
-            type: "result",
-            exit_code: 0,
-            duration_ms: 100,
-            branch: null,
-            pr_url: null,
-          },
-        ]),
-        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+        JSON.stringify({ ok: true, run_id: "session-1" }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
 
@@ -1224,6 +998,13 @@ function installFetchMockCapturing(opts: {
       }
       return new Response(
         JSON.stringify({ data: { agentActivityCreate: { success: true } } }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+
+    if (url.endsWith("/run/start")) {
+      return new Response(
+        JSON.stringify({ ok: true, run_id: "session-1" }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
