@@ -810,7 +810,7 @@ describe("POST /webhook prompted follow-ups", () => {
     expect(sessionRunner.get).toHaveBeenCalledWith("session-running");
     expect(instance.sendEvent).toHaveBeenCalledTimes(1);
     expect(instance.sendEvent).toHaveBeenCalledWith({
-      type: "linear.prompted",
+      type: "linear-prompted",
       payload: event,
     });
     expect(sessionRunner.create).not.toHaveBeenCalled();

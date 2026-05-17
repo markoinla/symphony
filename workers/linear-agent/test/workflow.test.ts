@@ -150,7 +150,7 @@ function makeStep(
             last_assistant: null,
           },
           timestamp: new Date(),
-          type: "run.terminal",
+          type: "run-terminal",
         };
       }
       if (name.startsWith("wait-for-prompted-")) {
@@ -158,7 +158,7 @@ function makeStep(
           return {
             payload: opts.followup,
             timestamp: new Date(),
-            type: "linear.prompted",
+            type: "linear-prompted",
           };
         }
         throw new Error("waitForEvent timed out");

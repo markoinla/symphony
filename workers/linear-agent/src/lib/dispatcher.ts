@@ -155,8 +155,12 @@ export type NormalizedEvent =
  * Workflow event the linear-agent ingest endpoint sends to wake a
  * parked `SessionRunner` instance when an engine-push run finishes
  * (SYM-386). The runner listens for it via `step.waitForEvent`.
+ *
+ * Must stay dot-free: Cloudflare Workflows event types only allow
+ * letters, digits, `-`, and `_`; a `.` makes `sendEvent` throw
+ * `workflow.invalid_event_type`.
  */
-export const RUN_TERMINAL_EVENT = "run.terminal" as const;
+export const RUN_TERMINAL_EVENT = "run-terminal" as const;
 
 export interface RunTerminalPayload {
   exit_code: number;

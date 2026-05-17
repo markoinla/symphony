@@ -669,7 +669,10 @@ async function handlePromptedFollowUp(
     (liveStatus === "running" || liveStatus === "waiting")
   ) {
     try {
-      await instance.sendEvent({ type: "linear.prompted", payload: event });
+      // Event type must be dot-free — Workflows rejects `.` with
+      // `workflow.invalid_event_type`. Must match the `waitForEvent`
+      // type in session-runner.ts (`wait-for-prompted-*`).
+      await instance.sendEvent({ type: "linear-prompted", payload: event });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error("session_runner_send_event_failed", sessionId, msg);

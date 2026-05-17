@@ -838,7 +838,9 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
         try {
           const event = await step.waitForEvent<AgentSessionEventWebhook>(
             `wait-for-prompted-${turnsRun}`,
-            { type: "linear.prompted", timeout: "25 minutes" },
+            // Dot-free type — Workflows rejects `.`. Must match the
+            // `sendEvent` type in webhook.ts.
+            { type: "linear-prompted", timeout: "25 minutes" },
           );
           followup = event.payload as AgentSessionEventWebhook;
         } catch {

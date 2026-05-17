@@ -289,7 +289,7 @@ describe("POST /internal/run-events/:sessionId — terminal", () => {
     ]);
     expect(sr.get).toHaveBeenCalledWith("session-1");
     expect(sr.sendEvent).toHaveBeenCalledWith({
-      type: "run.terminal",
+      type: "run-terminal",
       payload: {
         exit_code: 0,
         error: null,
@@ -312,7 +312,7 @@ describe("POST /internal/run-events/:sessionId — terminal", () => {
       makeExecCtx(),
     );
     expect(sr.sendEvent).toHaveBeenCalledWith({
-      type: "run.terminal",
+      type: "run-terminal",
       payload: {
         exit_code: 1,
         error: "pi: fatal error",
