@@ -320,6 +320,7 @@ export async function dispatchTrigger(
   // the field so the runner falls through to settings/env. Only
   // string values are real overrides.
   const workflowOverrides: {
+    name: string;
     engine: string;
     model?: string;
     max_turns: number;
@@ -327,6 +328,7 @@ export async function dispatchTrigger(
     disallowed_tools?: string[];
     permission_mode?: string;
   } = {
+    name: workflow.name,
     engine: workflow.engine,
     max_turns: workflow.max_turns,
   };

@@ -78,6 +78,8 @@ import type { Workflow } from "../schemas/workflow";
 // then to env.DEFAULT_*. Frozen at dispatch time — edits to the
 // workflow row mid-run don't perturb in-flight sessions.
 export interface WorkflowOverrides {
+  // Resolved workflow name, surfaced in the initial Linear thought.
+  name?: string;
   engine?: string;
   // Omit `model` when the workflow row's model is NULL ("inherit").
   // A present value is always an explicit override; `null` should
@@ -337,10 +339,13 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
 
     await step.do("post-initial-thought", async () => {
       const linear = buildActivityClient(token, refreshLinearToken);
+      const workflowName = workflowOverrides?.name;
       await postThought(
         linear,
         sessionId,
-        "Picked this up — preparing the sandbox. Cold-starts can take ~30–60s before tool activity begins streaming.",
+        workflowName
+          ? `Picked this up with workflow **${workflowName}**.`
+          : "Picked this up.",
       );
     });
 
