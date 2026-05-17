@@ -16,6 +16,7 @@ function sessionSummaryRow(s: AgentSessionRecord) {
   const config = parseConfigSnapshot(s.config_snapshot);
   return {
     id: s.id,
+    project_id: s.project_id,
     linear_issue_id: s.linear_issue_id,
     linear_issue_identifier: s.linear_issue_identifier,
     linear_issue_title: s.linear_issue_title,

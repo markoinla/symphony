@@ -99,7 +99,7 @@ export function SessionByIdView() {
         <div className="mx-auto max-w-3xl space-y-1">
           {messages.length === 0 ? (
             <div className="px-6 py-20 text-center text-sm text-th-text-3">
-              {isRunning ? 'Waiting for first event…' : 'No captured messages.'}
+              {isRunning ? 'No captured events in the latest snapshot.' : 'No captured messages.'}
             </div>
           ) : (
             messages.map((m, i) => <SessionEventCard key={i} entry={m} />)
@@ -153,7 +153,7 @@ function SessionEventCard({ entry }: { entry: SessionDebugMessage }) {
       <div className="flex items-center gap-2 mb-1.5">
         <div className="h-1.5 w-1.5 rounded-full bg-th-accent/60 shrink-0" />
         <span className="text-xs text-th-text-4">
-          {titleCase(type)} · {formatClock(timestamp) || 'live'}
+          {titleCase(type)} · {formatClock(timestamp) || 'timestamp unavailable'}
         </span>
       </div>
       <div className="whitespace-pre-wrap break-words pl-3.5 text-sm leading-7 text-th-text-2">

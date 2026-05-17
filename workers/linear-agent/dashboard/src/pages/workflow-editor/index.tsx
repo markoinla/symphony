@@ -436,26 +436,6 @@ function BasicsTab({
           value={draft.description}
         />
       </Field>
-      <Field
-        label="Scope"
-        hint="Team and User scopes are coming soon — workflows are organization-wide for now."
-      >
-        <Select disabled value="organization">
-          <SelectTrigger className="w-full max-w-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="organization">Organization</SelectItem>
-            <SelectItem disabled value="team">
-              Team (coming soon)
-            </SelectItem>
-            <SelectItem disabled value="user">
-              User (coming soon)
-            </SelectItem>
-          </SelectContent>
-        </Select>
-      </Field>
-
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Engine">
           <Select

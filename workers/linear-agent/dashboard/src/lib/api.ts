@@ -3,10 +3,9 @@
 // This file preserves the export surface of the original Symphony API
 // client (so the ported pages compile unchanged) but routes every call
 // to the Worker's `/dashboard/api/*` and `/oauth/*` endpoints. Where the
-// Worker has no equivalent yet (settings KV, in-flight orchestrator
-// state, per-session SSE timeline, Linear project search, GitHub repo
-// search, proxy flow) the function returns a benign empty/disabled
-// shape and logs a one-time `console.warn` so unimplemented surfaces are
+// Worker has no equivalent yet (Linear project search, GitHub repo
+// search, proxy flow) the function returns a benign empty/disabled shape
+// and logs a one-time `console.warn` so unimplemented surfaces are
 // visible in the browser console as we wire them up.
 //
 // Worker route reference:
@@ -175,7 +174,6 @@ const warned = new Set<string>()
 function warnUnimplemented(name: string) {
   if (warned.has(name)) return
   warned.add(name)
-  // eslint-disable-next-line no-console
   console.warn(`[linear-agent dashboard] TODO: ${name} — Worker route not yet wired`)
 }
 
@@ -294,23 +292,59 @@ export async function changePassword(current: string, next: string) {
   return { ok: true }
 }
 
-// ── Orchestrator state (no Worker equivalent yet) ───────────────────
+// ── Orchestrator state ──────────────────────────────────────────────
 
-export function getState(): Promise<StatePayload> {
-  warnUnimplemented('getState')
-  return Promise.resolve({
-    generated_at: new Date().toISOString(),
-    counts: { running: 0, retrying: 0 },
-    running: [],
-    retrying: [],
-    engine_totals: { input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0 },
+export async function getState(): Promise<StatePayload> {
+  const raw = await requestJson<{ sessions: WorkerSessionRow[] }>(
+    '/dashboard/api/sessions?status=running&limit=100',
+  )
+  const now = Date.now()
+  const running = raw.sessions.map((s) => {
+    const startedAt = s.started_at
+    const startedMs = startedAt ? Date.parse(startedAt) : NaN
+    const secondsRunning = Number.isFinite(startedMs)
+      ? Math.max(0, Math.floor((now - startedMs) / 1000))
+      : 0
+
+    return {
+      issue_id: s.linear_issue_id ?? s.id,
+      issue_identifier: s.linear_issue_identifier ?? s.id,
+      project_id: s.project_id ? stableHash(s.project_id) : null,
+      project_name: s.team,
+      workflow_name: s.workflow_name ?? s.triggered_by ?? (s.source === 'api' ? 'API invocation' : undefined),
+      state: s.status,
+      worker_host: null,
+      workspace_path: null,
+      session_id: s.id,
+      turn_count: 0,
+      last_event: 'Running',
+      last_message: s.linear_issue_title,
+      started_at: startedAt,
+      last_event_at: startedAt,
+      tokens: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      seconds_running: secondsRunning,
+    }
   })
+
+  return {
+    generated_at: new Date(now).toISOString(),
+    counts: { running: running.length, retrying: 0 },
+    running,
+    retrying: [],
+    engine_totals: {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      seconds_running: running.reduce((total, entry) => total + entry.seconds_running, 0),
+    },
+  }
 }
 
 // ── Sessions ────────────────────────────────────────────────────────
 
 type WorkerSessionRow = {
   id: string
+  project_id?: string | null
   linear_issue_id: string | null
   linear_issue_identifier: string | null
   linear_issue_title: string | null
