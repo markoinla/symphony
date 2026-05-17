@@ -273,13 +273,10 @@ function RunningSessionCard({
   index: number
   now: number
 }) {
-  return (
-    <Link
-      className="session-card group w-[280px] shrink-0 rounded-xl border border-th-border bg-th-surface p-5 transition-all duration-150 hover:border-th-border-muted hover:shadow-sm sm:w-[320px]"
-      params={{ issueIdentifier: entry.issue_identifier }}
-      style={{ animationDelay: `${index * 40}ms` }}
-      to="/session/$issueIdentifier"
-    >
+  const cardClassName =
+    'session-card group w-[280px] shrink-0 rounded-xl border border-th-border bg-th-surface p-5 transition-all duration-150 hover:border-th-border-muted hover:shadow-sm sm:w-[320px]'
+  const body = (
+    <>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -304,7 +301,28 @@ function RunningSessionCard({
         <span className="tabular-nums">{formatNumber(entry.tokens.total_tokens)} tok</span>
         {entry.worker_host ? <span>{entry.worker_host}</span> : null}
       </div>
-    </Link>
+    </>
+  )
+
+  // Session detail is keyed by the agent session UUID. A running entry
+  // should always carry one; fall back to a non-link card if it doesn't.
+  if (entry.session_id) {
+    return (
+      <Link
+        className={cardClassName}
+        params={{ sessionId: entry.session_id }}
+        style={{ animationDelay: `${index * 40}ms` }}
+        to="/sessions/$sessionId"
+      >
+        {body}
+      </Link>
+    )
+  }
+
+  return (
+    <div className={cardClassName} style={{ animationDelay: `${index * 40}ms` }}>
+      {body}
+    </div>
   )
 }
 
@@ -315,12 +333,12 @@ function RetrySessionCard({
   entry: RetryEntry
   index: number
 }) {
+  // Retry entries are not yet bound to an agent session UUID, so this
+  // card is informational only — there is no session detail to link to.
   return (
-    <Link
-      className="session-card group w-[280px] shrink-0 rounded-xl border border-th-border bg-th-surface p-5 transition-all duration-150 hover:border-th-border-muted hover:shadow-sm sm:w-[320px]"
-      params={{ issueIdentifier: entry.issue_identifier }}
+    <div
+      className="session-card group w-[280px] shrink-0 rounded-xl border border-th-border bg-th-surface p-5 transition-all duration-150 sm:w-[320px]"
       style={{ animationDelay: `${index * 40}ms` }}
-      to="/session/$issueIdentifier"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -345,7 +363,7 @@ function RetrySessionCard({
         <span className="tabular-nums">{formatDateTime(entry.due_at)}</span>
         {entry.worker_host ? <span>{entry.worker_host}</span> : null}
       </div>
-    </Link>
+    </div>
   )
 }
 
@@ -405,14 +423,9 @@ export function HistoryCard({ index, session }: { index: number; session: Sessio
     </div>
   )
 
-  if (issueIdentifier) {
-    return (
-      <Link params={{ issueIdentifier }} to="/session/$issueIdentifier">
-        {content}
-      </Link>
-    )
-  }
-
+  // Session detail is keyed by the agent session UUID — a single Linear
+  // issue can have many sessions, so the identifier alone can't address
+  // one run.
   if (detailSessionId) {
     return (
       <Link params={{ sessionId: detailSessionId }} to="/sessions/$sessionId">

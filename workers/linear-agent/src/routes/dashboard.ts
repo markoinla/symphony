@@ -165,8 +165,8 @@ export function buildDashboardRouter() {
     // before the failure. Fall back to the legacy `messages` JSON blob
     // on `agent_sessions` so historical sessions from before the
     // 0005 migration still render. Shape: `{ type, timestamp, body }`
-    // matches the dashboard's existing translator in
-    // dashboard/src/lib/api.ts:toTimelineSession.
+    // matches the dashboard's `SessionDebugMessage` type and the
+    // `normalizeEntry` translator in dashboard/src/pages/session-by-id.tsx.
     const eventStore = new AgentSessionEventStore(c.env.DB);
     const eventRows = await eventStore.listBySessionId(session.id);
     const messages =

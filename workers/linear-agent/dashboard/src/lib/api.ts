@@ -70,34 +70,6 @@ export type SettingsPayload = {
   agent_defaults: AgentSettingsDefaults
 }
 
-export type TimelineMessage = {
-  id: number | string
-  timestamp: string | null
-  type: string
-  content: string
-  metadata: Record<string, unknown>
-}
-
-export type TimelineSession = {
-  id: number | null
-  issue_identifier: string | null
-  issue_title: string | null
-  session_id: string
-  status: string
-  started_at: string | null
-  ended_at: string | null
-  turn_count: number | null
-  input_tokens: number | null
-  output_tokens: number | null
-  total_tokens: number | null
-  worker_host: string | null
-  error: string | null
-  error_category: string | null
-  workflow_name: string | null
-  live: boolean
-  messages: TimelineMessage[]
-}
-
 export type SessionsPayload = {
   sessions: Array<{
     id: number
@@ -120,43 +92,6 @@ export type SessionsPayload = {
     github_repo: string | null
     project_name: string | null
   }>
-}
-
-export type MessagesPayload = {
-  issue_identifier: string
-  issue_id: string | null
-  issue_title: string | null
-  status: string
-  active_session_id: string | null
-  sessions: TimelineSession[]
-}
-
-export type IssuePayload = {
-  issue_identifier: string
-  issue_id: string
-  status: string
-  workspace: { path: string | null; host: string | null }
-  attempts: { restart_count: number; current_retry_attempt: number }
-  running: {
-    worker_host: string | null
-    workspace_path: string | null
-    session_id: string | null
-    turn_count: number
-    state: string
-    started_at: string | null
-    last_event: string | null
-    last_message: string | null
-    last_event_at: string | null
-    tokens: { input_tokens: number; output_tokens: number; total_tokens: number }
-  } | null
-  retry: {
-    attempt: number
-    due_at: string | null
-    error: string | null
-    worker_host: string | null
-    workspace_path: string | null
-  } | null
-  recent_events: Array<{ at: string | null; event: string | null; message: string | null }>
 }
 
 export type LoadedWorkflow = { name: string; display_name: string }
@@ -371,11 +306,6 @@ export function getState(): Promise<StatePayload> {
   })
 }
 
-export function getIssue(_issueIdentifier: string): Promise<IssuePayload | null> {
-  warnUnimplemented('getIssue')
-  return Promise.resolve(null)
-}
-
 // ── Sessions ────────────────────────────────────────────────────────
 
 type WorkerSessionRow = {
@@ -394,33 +324,20 @@ type WorkerSessionRow = {
 }
 
 export async function getSessions(params?: {
-  issueIdentifier?: string
   limit?: number
   projectId?: number
 }): Promise<SessionsPayload> {
   const search = new URLSearchParams()
   if (params?.limit) search.set('limit', String(params.limit))
-  // The Worker doesn't yet filter by issue_identifier or project_id; the
-  // results below get filtered client-side as a fallback so callers
-  // still see the right rows.
+  // The Worker doesn't yet filter by project_id; project narrowing in
+  // the History page is applied client-side by the caller.
   const query = search.toString()
   const raw = await requestJson<{ sessions: WorkerSessionRow[] }>(
     `/dashboard/api/sessions${query ? `?${query}` : ''}`,
   )
 
-  let sessions = raw.sessions
-  if (params?.issueIdentifier) {
-    const wanted = params.issueIdentifier
-    sessions = sessions.filter(
-      (s) =>
-        s.linear_issue_identifier === wanted ||
-        s.linear_issue_id === wanted ||
-        s.id === wanted,
-    )
-  }
-
   return {
-    sessions: sessions.map((s) => ({
+    sessions: raw.sessions.map((s) => ({
       id: stableHash(s.id),
       issue_identifier: s.linear_issue_identifier,
       issue_title: s.linear_issue_title,
@@ -478,86 +395,6 @@ export function getSessionDebug(sessionId: string): Promise<WorkerSessionDebug> 
   return requestJson<WorkerSessionDebug>(
     `/dashboard/api/sessions/${encodeURIComponent(sessionId)}/debug`,
   )
-}
-
-export async function getSessionTimeline(issueIdentifier: string): Promise<MessagesPayload> {
-  // Worker only exposes `/dashboard/api/sessions/:sessionId/debug`. The
-  // Symphony route takes an issue identifier and returns all sessions
-  // for that issue. We approximate: list sessions, filter to that
-  // issue, hydrate each via the debug endpoint.
-  const all = await getSessions({ issueIdentifier })
-  const sessions = await Promise.all(
-    all.sessions.map(async (s) => hydrateSession(s.session_id ?? '', s)),
-  )
-
-  return {
-    issue_identifier: issueIdentifier,
-    issue_id: sessions[0]?.id != null ? String(sessions[0].id) : null,
-    issue_title: sessions[0]?.issue_title ?? null,
-    status: sessions[0]?.status ?? 'unknown',
-    active_session_id: sessions.find((s) => s.live)?.session_id ?? null,
-    sessions,
-  }
-}
-
-async function hydrateSession(
-  sessionId: string,
-  base: SessionsPayload['sessions'][number],
-): Promise<TimelineSession> {
-  if (!sessionId) {
-    return toTimelineSession(base, [], false)
-  }
-  try {
-    const debug = await requestJson<WorkerSessionDebug>(
-      `/dashboard/api/sessions/${encodeURIComponent(sessionId)}/debug`,
-    )
-    const live = debug.status === 'running'
-    return toTimelineSession(base, debug.messages ?? [], live, debug.error)
-  } catch {
-    return toTimelineSession(base, [], false)
-  }
-}
-
-function toTimelineSession(
-  base: SessionsPayload['sessions'][number],
-  rawMessages: WorkerSessionDebug['messages'],
-  live: boolean,
-  error: string | null = null,
-): TimelineSession {
-  const messages: TimelineMessage[] = rawMessages.map((m, i) => {
-    if (typeof m === 'string') {
-      return { id: i, timestamp: null, type: 'message', content: m, metadata: {} }
-    }
-    const modern = m as { type?: string; body?: string | null; timestamp?: string }
-    const legacy = m as { role?: string; content?: string; timestamp?: string }
-    return {
-      id: i,
-      timestamp: modern.timestamp ?? legacy.timestamp ?? null,
-      type: modern.type ?? legacy.role ?? 'message',
-      content: modern.body ?? legacy.content ?? '',
-      metadata: {},
-    }
-  })
-
-  return {
-    id: base.id,
-    issue_identifier: base.issue_identifier,
-    issue_title: base.issue_title,
-    session_id: base.session_id ?? '',
-    status: base.status,
-    started_at: base.started_at,
-    ended_at: base.ended_at,
-    turn_count: null,
-    input_tokens: null,
-    output_tokens: null,
-    total_tokens: null,
-    worker_host: base.worker_host,
-    error,
-    error_category: null,
-    workflow_name: base.workflow_name,
-    live,
-    messages,
-  }
 }
 
 // ── Projects ────────────────────────────────────────────────────────
@@ -970,65 +807,6 @@ export function pollLinearProxyOAuth(): Promise<ProxyPollResponse> {
 
 export function pollGitHubProxyOAuth(): Promise<ProxyPollResponse> {
   return Promise.resolve({ status: 'complete' })
-}
-
-// ── Timeline merge helpers (preserved verbatim) ─────────────────────
-
-export function mergeTimelineMessage(payload: MessagesPayload, incoming: TimelineMessage) {
-  const sessions = [...payload.sessions]
-  const activeIndex = sessions.findIndex((session) => session.live)
-
-  if (activeIndex === -1) {
-    const fallbackSessionId = payload.active_session_id ?? 'live'
-
-    sessions.push({
-      id: null,
-      issue_identifier: payload.issue_identifier,
-      issue_title: payload.issue_title,
-      session_id: fallbackSessionId,
-      status: 'running',
-      started_at: incoming.timestamp,
-      ended_at: null,
-      turn_count: null,
-      input_tokens: null,
-      output_tokens: null,
-      total_tokens: null,
-      worker_host: null,
-      error: null,
-      error_category: null,
-      workflow_name: null,
-      live: true,
-      messages: [incoming],
-    })
-  } else {
-    const session = sessions[activeIndex]
-    sessions[activeIndex] = { ...session, messages: [...session.messages, incoming] }
-  }
-
-  return { ...payload, sessions }
-}
-
-export function updateTimelineMessage(payload: MessagesPayload, incoming: TimelineMessage) {
-  const sessions = payload.sessions.map((session) => {
-    if (!session.live) {
-      return session
-    }
-
-    const nextMessages = [...session.messages]
-    const lastIndex = nextMessages.findLastIndex(
-      (message) => String(message.id) === String(incoming.id),
-    )
-
-    if (lastIndex >= 0) {
-      nextMessages[lastIndex] = incoming
-    } else {
-      nextMessages.push(incoming)
-    }
-
-    return { ...session, messages: nextMessages }
-  })
-
-  return { ...payload, sessions }
 }
 
 export function emptyProject(): ProjectBody {

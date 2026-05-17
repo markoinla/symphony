@@ -55,6 +55,25 @@ export function SessionByIdView() {
           </Badge>
         </div>
 
+        {isRunning ? (
+          <div className="flex items-start gap-2 rounded-md border border-th-border bg-th-muted/40 px-3 py-2 text-xs text-th-text-3">
+            <svg
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 text-th-text-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              viewBox="0 0 24 24"
+            >
+              <path d="M12 8v4l3 3" strokeLinecap="round" strokeLinejoin="round" />
+              <circle cx="12" cy="12" r="9" />
+            </svg>
+            <span>
+              This is a point-in-time snapshot, not a live stream. It refreshes
+              automatically every 5s while the session is running.
+            </span>
+          </div>
+        ) : null}
+
         <div className="min-w-0 space-y-1">
           {session.linear_issue_title ? (
             <div className="break-words text-sm font-semibold text-th-text-1">

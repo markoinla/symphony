@@ -60,7 +60,6 @@ import {
   router,
   rootRoute,
   dashboardRoute,
-  sessionRoute,
   sessionByIdRoute,
   historyRoute,
   webhooksRoute,
@@ -75,7 +74,6 @@ import {
 } from './router'
 
 import { DashboardView } from './pages/dashboard'
-import { SessionView } from './pages/session'
 import { SessionByIdView } from './pages/session-by-id'
 import { HistoryView } from './pages/history'
 import { WebhooksView } from './pages/webhooks'
@@ -122,7 +120,6 @@ queryClient.getQueryCache().subscribe((event) => {
 // Bind components to routes
 rootRoute.update({ component: RootLayout, notFoundComponent: NotFoundView })
 dashboardRoute.update({ component: DashboardView })
-sessionRoute.update({ component: SessionView })
 sessionByIdRoute.update({ component: SessionByIdView })
 historyRoute.update({ component: HistoryView })
 webhooksRoute.update({ component: WebhooksView })

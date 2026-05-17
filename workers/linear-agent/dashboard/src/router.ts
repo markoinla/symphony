@@ -15,11 +15,6 @@ export const dashboardRoute = createRoute({
   path: '/',
 })
 
-export const sessionRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/session/$issueIdentifier',
-})
-
 // Session detail keyed by session UUID. This is the URL we post into
 // Linear's AgentSession `externalUrls` ("Open in Symphony") — Linear
 // only knows the session id, not the per-issue identifier, so we
@@ -82,7 +77,6 @@ export const createOrganizationRoute = createRoute({
 
 export const routeTree = rootRoute.addChildren([
   dashboardRoute,
-  sessionRoute,
   sessionByIdRoute,
   historyRoute,
   webhooksRoute,

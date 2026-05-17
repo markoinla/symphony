@@ -8,9 +8,8 @@ import { useEffect, useEffectEvent } from 'react'
 // incoming event as a "state changed" signal and let TanStack Query
 // re-fetch from the snapshot endpoints.
 //
-// The Worker doesn't currently expose a per-session timeline SSE, so
-// `useSessionStream` is a no-op until that route lands. Callers still
-// receive an unsubscribe to keep React happy.
+// The session detail page (session-by-id) is a snapshot/poll view — it
+// has no SSE stream, so there is no per-session timeline hook here.
 
 export function useDashboardStream(
   onStateChanged: () => void,
@@ -43,16 +42,4 @@ export function useDashboardStream(
       stream.close()
     }
   }, [enabled])
-}
-
-export function useSessionStream(
-  _issueId: string | null | undefined,
-  _onMessage: (payload: unknown) => void,
-  _onMessageUpdate: (payload: unknown) => void,
-) {
-  // TODO: wire to a Worker SSE timeline once /dashboard/api/sessions/:id/stream
-  // exists. For now the session view will fall back to a one-shot fetch.
-  useEffect(() => {
-    return () => {}
-  }, [])
 }
