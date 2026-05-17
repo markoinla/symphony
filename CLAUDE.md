@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **Repository layout — two stacks in one repo.** This repo contains two distinct codebases:
+>
+> 1. **Elixir/Phoenix app** (repo root: `lib/`, `dashboard/`, `config/`, `test/`, `mix.exs`, the `WORKFLOW.md` family) — the original Symphony orchestrator. **This `CLAUDE.md` documents the Elixir app.**
+> 2. **Cloudflare Workers** (`workers/linear-agent`, `workers/sandbox-dispatcher`, `workers/oauth-proxy`) — TypeScript. `linear-agent` is the in-progress **replacement** for the Elixir `Orchestrator` + `Tracker` + `Linear.*` modules (migration SYM-386); new orchestration work belongs there, not in the Elixir app.
+>
+> Each worker directory has its own `CLAUDE.md` with its stack, commands, and conventions. **When working under `workers/`, follow that file — not this one.** The Elixir conventions below (mix, `@spec`, Ecto, `WORKFLOW.md` front matter) do **not** apply to the TypeScript workers.
+
 ## Project Overview
 
 Symphony is an Elixir/OTP agent orchestration service that polls Linear for issues, creates per-issue workspaces, and runs Codex in app-server mode. It includes a React dashboard for observability.
