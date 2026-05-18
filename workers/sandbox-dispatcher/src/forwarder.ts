@@ -6,7 +6,7 @@
  *
  *   /tmp/symphony-forwarder.mjs  — FORWARDER_SCRIPT (this module)
  *   /tmp/symphony-engine.sh      — the `pi --print --mode json …` command
- *   /tmp/symphony-ingest.json    — { url, token, instanceId }
+ *   /tmp/symphony-ingest.json    — { url, token, instanceId, timeoutMs }
  *
  * The forwarder spawns the engine, batches its NDJSON stdout, and POSTs
  * each batch — HMAC-signed with the per-run token — to the linear-agent
@@ -34,6 +34,9 @@ export interface IngestConfig {
   token: string;
   // Workflow instance id to wake on the terminal batch.
   instanceId: string;
+  // Engine timeout. The forwarder owns this timeout so it can kill the
+  // child process and still POST the terminal timeout batch.
+  timeoutMs: number;
 }
 
 export const FORWARDER_SCRIPT = String.raw`
@@ -46,6 +49,7 @@ const ENGINE_CMD_PATH = "/tmp/symphony-engine.sh";
 
 const BATCH_MAX_LINES = 50;
 const BATCH_INTERVAL_MS = 1000;
+const HEARTBEAT_INTERVAL_MS = 60000;
 const STDERR_TAIL_BYTES = 4000;
 const POST_RETRIES = 4;
 
@@ -59,9 +63,7 @@ function sleep(ms) {
   return new Promise(function (resolve) { setTimeout(resolve, ms); });
 }
 
-async function postBatch(lines, exit) {
-  const payload = { instance_id: cfg.instanceId, lines: lines };
-  if (exit) payload.exit = exit;
+async function postPayload(payload) {
   const body = JSON.stringify(payload);
   const sig = sign(body);
   let lastErr = "";
@@ -81,6 +83,12 @@ async function postBatch(lines, exit) {
   }
   console.error("[forwarder] ingest POST failed: " + lastErr);
   return false;
+}
+
+async function postBatch(lines, exit) {
+  const payload = { instance_id: cfg.instanceId, lines: lines };
+  if (exit) payload.exit = exit;
+  return postPayload(payload);
 }
 
 let pending = [];
@@ -109,11 +117,74 @@ function onLine(line) {
 }
 
 async function main() {
-  const child = spawn("bash", [ENGINE_CMD_PATH], { stdio: ["ignore", "pipe", "pipe"] });
+  const timeoutMs = Number.isFinite(cfg.timeoutMs) && cfg.timeoutMs > 0 ? cfg.timeoutMs : 0;
+  const startedAt = Date.now();
+  let stdoutBytes = 0;
+  let stderrBytes = 0;
+  let lastStdoutAt = null;
+  let lastStderrAt = null;
+  const child = spawn("bash", [ENGINE_CMD_PATH], {
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let timedOut = false;
+  let killTimer = null;
+  let timeoutTimer = null;
+  let heartbeatTimer = null;
+
+  function heartbeatPayload(phase) {
+    return {
+      instance_id: cfg.instanceId,
+      heartbeat: {
+        phase: phase,
+        pid: child.pid,
+        elapsed_ms: Date.now() - startedAt,
+        timeout_ms: timeoutMs,
+        stdout_bytes: stdoutBytes,
+        stderr_bytes: stderrBytes,
+        last_stdout_at: lastStdoutAt,
+        last_stderr_at: lastStderrAt,
+        pending_lines: pending.length
+      }
+    };
+  }
+
+  function scheduleHeartbeat() {
+    heartbeatTimer = setInterval(function () {
+      postPayload(heartbeatPayload(timedOut ? "timed_out" : "engine_running")).catch(function () {});
+    }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  function killProcessGroup(signal) {
+    try {
+      process.kill(-child.pid, signal);
+    } catch (_) {
+      try { child.kill(signal); } catch (_) {}
+    }
+  }
+
+  if (timeoutMs > 0) {
+    timeoutTimer = setTimeout(function () {
+      timedOut = true;
+      stderrTail = (
+        stderrTail +
+        "\n[forwarder] engine timed out after " +
+        timeoutMs +
+        "ms"
+      ).slice(-STDERR_TAIL_BYTES);
+      killProcessGroup("SIGTERM");
+      killTimer = setTimeout(function () {
+        killProcessGroup("SIGKILL");
+      }, 5000);
+    }, timeoutMs);
+  }
+  scheduleHeartbeat();
 
   let stdoutBuf = "";
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", function (chunk) {
+    stdoutBytes += Buffer.byteLength(chunk);
+    lastStdoutAt = Date.now();
     stdoutBuf += chunk;
     let nl;
     while ((nl = stdoutBuf.indexOf("\n")) !== -1) {
@@ -125,14 +196,23 @@ async function main() {
   let stderrTail = "";
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", function (chunk) {
+    stderrBytes += Buffer.byteLength(chunk);
+    lastStderrAt = Date.now();
     stderrTail = (stderrTail + chunk).slice(-STDERR_TAIL_BYTES);
   });
 
   const exitCode = await new Promise(function (resolve) {
     child.on("close", function (code, signal) {
-      resolve(code == null ? (signal ? 1 : 0) : code);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (killTimer) clearTimeout(killTimer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      if (timedOut) resolve(124);
+      else resolve(code == null ? (signal ? 1 : 0) : code);
     });
     child.on("error", function (e) {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (killTimer) clearTimeout(killTimer);
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
       stderrTail = (stderrTail + "\n[forwarder] spawn error: " + e).slice(-STDERR_TAIL_BYTES);
       resolve(1);
     });
@@ -140,6 +220,7 @@ async function main() {
 
   if (stdoutBuf.length > 0) onLine(stdoutBuf.replace(/\r$/, ""));
 
+  await postPayload(heartbeatPayload("posting_terminal"));
   await flush({ code: exitCode, stderr_tail: stderrTail });
   await postChain;
 }

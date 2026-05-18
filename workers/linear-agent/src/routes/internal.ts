@@ -50,12 +50,25 @@ const TOKEN_REFRESH_WINDOW_MS = 10 * 60 * 1000;
 interface IngestBody {
   instance_id?: unknown;
   lines?: unknown;
+  heartbeat?: unknown;
   exit?: unknown;
 }
 
 interface ParsedExit {
   code: number;
   stderrTail: string;
+}
+
+interface ParsedHeartbeat {
+  phase: string;
+  pid: number | null;
+  elapsed_ms: number;
+  timeout_ms: number | null;
+  stdout_bytes: number;
+  stderr_bytes: number;
+  last_stdout_at: number | null;
+  last_stderr_at: number | null;
+  pending_lines: number;
 }
 
 export function buildInternalRouter() {
@@ -108,6 +121,11 @@ export function buildInternalRouter() {
       return c.json({ error: "invalid_exit" }, 400);
     }
 
+    const heartbeat = parseHeartbeat(body.heartbeat);
+    if (heartbeat === "invalid") {
+      return c.json({ error: "invalid_heartbeat" }, 400);
+    }
+
     const session = await new AgentSessionStore(c.env.DB).get(sessionId);
     if (!session) {
       return c.json({ error: "unknown_session" }, 404);
@@ -115,6 +133,15 @@ export function buildInternalRouter() {
 
     const eventStore = new AgentSessionEventStore(c.env.DB);
     const now = Date.now();
+
+    if (heartbeat) {
+      await eventStore.append(sessionId, {
+        turn: 1,
+        ts: now,
+        type: "heartbeat",
+        body: JSON.stringify(heartbeat),
+      });
+    }
 
     // Normalize the raw pi NDJSON into timeline events and persist them.
     const events: NormalizedEvent[] = [];
@@ -140,7 +167,12 @@ export function buildInternalRouter() {
     }
 
     if (!exit) {
-      return c.json({ ok: true, ingested: events.length, terminal: false });
+      return c.json({
+        ok: true,
+        ingested: events.length,
+        heartbeat: heartbeat !== null,
+        terminal: false,
+      });
     }
 
     // Terminal batch: record a synthetic `result` row, then wake the
@@ -186,6 +218,7 @@ export function buildInternalRouter() {
     return c.json({
       ok: true,
       ingested: events.length,
+      heartbeat: heartbeat !== null,
       terminal: true,
       woke,
     });
@@ -270,4 +303,66 @@ function parseExit(value: unknown): ParsedExit | undefined | "invalid" {
     code: Math.trunc(exit.code),
     stderrTail: typeof exit.stderr_tail === "string" ? exit.stderr_tail : "",
   };
+}
+
+function parseHeartbeat(value: unknown): ParsedHeartbeat | null | "invalid" {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "object" || Array.isArray(value)) return "invalid";
+  const record = value as Record<string, unknown>;
+  const phase = parseNonEmptyString(record.phase);
+  const elapsedMs = parseNonNegativeNumber(record.elapsed_ms);
+  const stdoutBytes = parseNonNegativeNumber(record.stdout_bytes);
+  const stderrBytes = parseNonNegativeNumber(record.stderr_bytes);
+  const pendingLines = parseNonNegativeNumber(record.pending_lines);
+  if (
+    phase === null ||
+    elapsedMs === null ||
+    stdoutBytes === null ||
+    stderrBytes === null ||
+    pendingLines === null
+  ) {
+    return "invalid";
+  }
+  const pid = parseNullableNonNegativeNumber(record.pid);
+  const timeoutMs = parseNullableNonNegativeNumber(record.timeout_ms);
+  const lastStdoutAt = parseNullableNonNegativeNumber(record.last_stdout_at);
+  const lastStderrAt = parseNullableNonNegativeNumber(record.last_stderr_at);
+  if (
+    pid === "invalid" ||
+    timeoutMs === "invalid" ||
+    lastStdoutAt === "invalid" ||
+    lastStderrAt === "invalid"
+  ) {
+    return "invalid";
+  }
+
+  return {
+    phase,
+    pid,
+    elapsed_ms: elapsedMs,
+    timeout_ms: timeoutMs,
+    stdout_bytes: stdoutBytes,
+    stderr_bytes: stderrBytes,
+    last_stdout_at: lastStdoutAt,
+    last_stderr_at: lastStderrAt,
+    pending_lines: pendingLines,
+  };
+}
+
+function parseNonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function parseNonNegativeNumber(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  return Math.floor(value);
+}
+
+function parseNullableNonNegativeNumber(
+  value: unknown,
+): number | null | "invalid" {
+  if (value === undefined || value === null) return null;
+  return parseNonNegativeNumber(value) ?? "invalid";
 }

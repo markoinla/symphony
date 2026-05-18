@@ -49,6 +49,7 @@ import type { EngineAdapter, NormalizedEvent } from "./engines/types";
 
 const DEFAULT_TIMEOUT_MS = 35 * 60 * 1000;
 const MAX_TIMEOUT_MS = 35 * 60 * 1000;
+const FORWARDER_TIMEOUT_GRACE_MS = 60 * 1000;
 
 // Poll cadence for tailing a detached engine process's log. Starts at
 // POLL_MIN_MS and backs off toward POLL_MAX_MS while no new output
@@ -384,6 +385,7 @@ export function buildRunRouter() {
         `/internal/run-events/${encodeURIComponent(parsed.runId)}`,
       token,
       instanceId: parsed.instanceId,
+      timeoutMs: parsed.timeoutMs,
     };
 
     try {
@@ -407,7 +409,7 @@ export function buildRunRouter() {
       // Keep the process record + logs after exit so a late retry of
       // the caller's `startRun` step still observes `already_running`.
       autoCleanup: false,
-      timeout: parsed.timeoutMs,
+      timeout: parsed.timeoutMs + FORWARDER_TIMEOUT_GRACE_MS,
     });
 
     return c.json({ ok: true, run_id: parsed.runId });

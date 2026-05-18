@@ -742,15 +742,15 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
                   // Retry on eviction: `runTurn` re-attaches to the
                   // still-running engine process from a cursor instead
                   // of re-dispatching. Constant 2s so a ~5-min eviction
-                  // re-attaches promptly; 20 attempts cover the 30-min
-                  // dispatcher cap. 35-min timeout clears the
+                  // re-attaches promptly; 20 attempts cover the 35-min
+                  // dispatcher cap. 40-min timeout clears the
                   // dispatcher's MAX_TIMEOUT_MS plus SSE-close headroom.
                   retries: {
                     limit: 20,
                     delay: "2 seconds",
                     backoff: "constant",
                   },
-                  timeout: "35 minutes",
+                  timeout: "40 minutes",
                 },
                 async () =>
                   runTurn(this.env, sessionId, token, refreshLinearToken, {
@@ -1125,7 +1125,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
                     delay: "2 seconds",
                     backoff: "constant",
                   },
-                  timeout: "35 minutes",
+                  timeout: "40 minutes",
                 },
                 async () =>
                   runTurnHeadless(this.env, sessionId, {
@@ -1322,7 +1322,7 @@ async function runPushTurn(
   try {
     const ev = await step.waitForEvent<RunTerminalPayload>(
       `run-terminal-${args.turn}`,
-      { type: RUN_TERMINAL_EVENT, timeout: "35 minutes" },
+      { type: RUN_TERMINAL_EVENT, timeout: "40 minutes" },
     );
     payload = ev.payload;
   } catch {

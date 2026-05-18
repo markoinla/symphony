@@ -217,6 +217,59 @@ describe("POST /internal/run-events/:sessionId — ingest", () => {
     expect(db.agentSessionEvents[1]!.body).toBe("All done.");
   });
 
+  it("persists forwarder heartbeat rows without posting Linear activity", async () => {
+    const db = new FakeD1();
+    seedSession(db, { linear_issue_id: "issue-1" });
+    const res = await buildApp().fetch(
+      await ingestRequest("session-1", {
+        instance_id: "session-1",
+        heartbeat: {
+          phase: "engine_running",
+          pid: 123,
+          elapsed_ms: 60_000,
+          timeout_ms: 2_100_000,
+          stdout_bytes: 42,
+          stderr_bytes: 7,
+          last_stdout_at: 1_800_000_000_000,
+          last_stderr_at: null,
+          pending_lines: 0,
+        },
+      }),
+      makeEnv(db, makeSessionRunner().runner),
+      makeExecCtx(),
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({
+      ok: true,
+      ingested: 0,
+      heartbeat: true,
+      terminal: false,
+    });
+    expect(db.agentSessionEvents).toHaveLength(1);
+    expect(db.agentSessionEvents[0]).toMatchObject({
+      type: "heartbeat",
+      body: expect.stringContaining('"phase":"engine_running"'),
+    });
+    expect(createAgentActivityMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed heartbeat payloads", async () => {
+    const db = new FakeD1();
+    seedSession(db);
+    const res = await buildApp().fetch(
+      await ingestRequest("session-1", {
+        instance_id: "session-1",
+        heartbeat: { phase: "", elapsed_ms: -1 },
+      }),
+      makeEnv(db, makeSessionRunner().runner),
+      makeExecCtx(),
+    );
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "invalid_heartbeat" });
+  });
+
   it("skips Linear activity posts for headless (no linear_issue_id) sessions", async () => {
     const db = new FakeD1();
     seedSession(db, { linear_issue_id: null });

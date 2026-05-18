@@ -219,12 +219,14 @@ describe("POST /run/start", () => {
       url: string;
       token: string;
       instanceId: string;
+      timeoutMs: number;
     };
     expect(cfg.url).toBe(
       "https://linear-agent.example/internal/run-events/sess-1",
     );
     expect(cfg.token).toBe(await computeSignature(SECRET, "sess-1"));
     expect(cfg.instanceId).toBe("sess-1:r9");
+    expect(cfg.timeoutMs).toBe(35 * 60 * 1000);
 
     // Forwarder launched as a detached process; sandbox NOT destroyed.
     expect(sandbox.startProcessCalls).toHaveLength(1);
@@ -235,7 +237,30 @@ describe("POST /run/start", () => {
       runProcessId("sess-1", 1),
     );
     expect(sandbox.startProcessCalls[0]!.autoCleanup).toBe(false);
+    expect(sandbox.startProcessCalls[0]!.timeout).toBe(36 * 60 * 1000);
     expect(sandbox.destroyed).toBe(false);
+  });
+
+  it("threads custom timeout_ms to the forwarder and adds process grace", async () => {
+    const db = new FakeD1();
+    seedBaseline(db, "pi");
+    const sandbox = new FakeSandbox(runSandboxId("sess-1"));
+    sandboxHandles[runSandboxId("sess-1")] = sandbox;
+
+    const res = await buildApp().fetch(
+      await signedRequest(JSON.stringify({ ...BASE_BODY, timeout_ms: 12_345 })),
+      makeEnv(db),
+    );
+
+    expect(res.status).toBe(200);
+    const byPath = new Map(
+      sandbox.writeFileCalls.map((w) => [w.path, w.content]),
+    );
+    const cfg = JSON.parse(byPath.get(INGEST_CONFIG_PATH)!) as {
+      timeoutMs: number;
+    };
+    expect(cfg.timeoutMs).toBe(12_345);
+    expect(sandbox.startProcessCalls[0]!.timeout).toBe(72_345);
   });
 
   it("is idempotent — a retry with the process already running skips setup", async () => {
