@@ -9,10 +9,12 @@
 // alongside each curated setting.
 
 import type { Env } from "../index";
+import { thinkingLevelSchema } from "../schemas/workflow";
 
 export interface AgentDefaults {
   default_engine: string;
   default_model: string | null;
+  thinking_level: string | null;
   max_turns: number;
 }
 
@@ -26,6 +28,7 @@ export function buildAgentDefaults(env: Env): AgentDefaults {
   return {
     default_engine: env.DEFAULT_ENGINE || "pi",
     default_model: env.DEFAULT_MODEL || null,
+    thinking_level: env.DEFAULT_THINKING_LEVEL || null,
     max_turns: maxTurns,
   };
 }
@@ -43,6 +46,11 @@ export function validateSettingValue(key: string, value: string): string | null 
     case "agent.default_model":
       if (value.trim().length === 0) {
         return "Model must be a non-empty string.";
+      }
+      return null;
+    case "agent.thinking_level":
+      if (!thinkingLevelSchema.safeParse(value).success) {
+        return "Thinking level must be one of: off, minimal, low, medium, high, xhigh.";
       }
       return null;
     case "agent.max_turns": {

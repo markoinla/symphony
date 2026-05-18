@@ -85,6 +85,7 @@ export interface WorkflowOverrides {
   // A present value is always an explicit override; `null` should
   // never be sent.
   model?: string;
+  thinking_level?: string;
   max_turns?: number;
   allowed_tools?: string[];
   disallowed_tools?: string[];
@@ -125,6 +126,7 @@ export type SessionRunnerParams =
       prompt: string;
       engine: string;
       model: string | null;
+      thinkingLevel: string | null;
       maxTurns: number;
       scope: string;
       issueIdentifier: string;
@@ -143,6 +145,7 @@ type ResolvedInputs =
       prompt: string;
       engine: string;
       model: string | null;
+      thinkingLevel: string | null;
       maxTurns: number;
       scope: string;
       allowedTools: string[] | null;
@@ -528,6 +531,12 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           modelFromSettings ??
           (this.env.DEFAULT_MODEL || null);
 
+        const thinkingLevelFromSettings = settingByKey.get("agent.thinking_level");
+        const thinkingLevel =
+          workflowOverrides?.thinking_level ??
+          thinkingLevelFromSettings ??
+          (this.env.DEFAULT_THINKING_LEVEL || null);
+
         const maxTurnsFromSettings = settingByKey.get("agent.max_turns");
         const maxTurns =
           workflowOverrides?.max_turns ??
@@ -547,6 +556,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           prompt,
           engine,
           model,
+          thinkingLevel,
           maxTurns,
           scope,
           allowedTools: workflowOverrides?.allowed_tools ?? null,
@@ -635,6 +645,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
           prompt: resolved.prompt,
           configSnapshot: {
             model: resolved.model,
+            thinking_level: resolved.thinkingLevel,
             max_turns: resolved.maxTurns,
             engine: resolved.engine,
             allowed_tools: resolved.allowedTools,
@@ -728,6 +739,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
                 prompt: captured,
                 engine: resolved.engine,
                 model: resolved.model,
+                thinkingLevel: resolved.thinkingLevel,
                 githubToken,
                 credentials: linearMcpCredentials,
                 branch: deriveBranchFromIssueIdentifier(issueIdentifier),
@@ -760,6 +772,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
                     prompt: captured,
                     engine: resolved.engine,
                     model: resolved.model,
+                    thinkingLevel: resolved.thinkingLevel,
                     githubToken,
                     credentials: linearMcpCredentials,
                     branch: deriveBranchFromIssueIdentifier(issueIdentifier),
@@ -1029,6 +1042,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
       organizationId,
       repoUrl,
       model,
+      thinkingLevel,
       maxTurns,
       scope,
       issueIdentifier,
@@ -1109,6 +1123,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
                 prompt: captured,
                 engine,
                 model,
+                thinkingLevel,
                 githubToken,
                 credentials: null,
                 branch: dispatchBranch,
@@ -1135,6 +1150,7 @@ export class SessionRunner extends WorkflowEntrypoint<Env, SessionRunnerParams> 
                     prompt: captured,
                     engine,
                     model,
+                    thinkingLevel,
                     githubToken,
                     credentials: null,
                     branch: dispatchBranch,
@@ -1253,6 +1269,7 @@ async function runPushTurn(
     prompt: string;
     engine: string;
     model: string | null;
+    thinkingLevel: string | null;
     githubToken: string | null;
     credentials: RunCredentials | null;
     branch: string | null;
@@ -1284,6 +1301,7 @@ async function runPushTurn(
           prompt: args.prompt,
           engine: args.engine,
           model: args.model,
+          thinkingLevel: args.thinkingLevel,
           githubToken: args.githubToken,
           credentials: args.credentials,
           branch: args.branch,
@@ -1366,6 +1384,7 @@ async function runTurn(
     prompt: string;
     engine: string;
     model: string | null;
+    thinkingLevel: string | null;
     githubToken: string | null;
     credentials: RunCredentials | null;
     branch: string | null;
@@ -1409,6 +1428,7 @@ async function runTurn(
           prompt: args.prompt,
           engine: args.engine,
           model: args.model,
+          thinkingLevel: args.thinkingLevel,
           githubToken: args.githubToken,
           credentials: args.credentials,
           branch: args.branch,
@@ -1499,6 +1519,7 @@ async function runTurnHeadless(
     prompt: string;
     engine: string;
     model: string | null;
+    thinkingLevel: string | null;
     githubToken: string | null;
     credentials: RunCredentials | null;
     branch: string | null;
@@ -1538,6 +1559,7 @@ async function runTurnHeadless(
           prompt: args.prompt,
           engine: args.engine,
           model: args.model,
+          thinkingLevel: args.thinkingLevel,
           githubToken: args.githubToken,
           credentials: args.credentials,
           branch: args.branch,

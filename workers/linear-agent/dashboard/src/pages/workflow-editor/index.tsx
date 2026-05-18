@@ -54,6 +54,9 @@ import { formatQueryError } from '@/lib/helpers'
 import { TriggerRow } from './trigger-row'
 import { PromptEditor } from './prompt-editor'
 
+const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
+const INHERIT_THINKING_LEVEL = '__inherit__'
+
 // MVP — the Tools & sandbox tab stays hidden until we have a focused
 // editor for the supported policy subset. The API currently accepts
 // and dispatches allowed_tools, disallowed_tools, and permission_mode;
@@ -70,6 +73,7 @@ type Draft = {
   description: string
   engine: string
   model: string
+  thinking_level: string
   max_turns: number
   max_continuations: number
   allowed_tools: string[]
@@ -91,6 +95,7 @@ function workflowToDraft(workflow: Workflow): Draft {
     description: workflow.description ?? '',
     engine: workflow.engine,
     model: workflow.model ?? '',
+    thinking_level: workflow.thinking_level ?? '',
     max_turns: workflow.max_turns,
     max_continuations: workflow.max_continuations ?? 0,
     allowed_tools: workflow.allowed_tools ?? [],
@@ -114,11 +119,13 @@ function draftToBody(draft: Draft): WorkflowUpdateBody {
     const trimmed = s.trim()
     return trimmed === '' ? null : trimmed
   }
+  const thinkingLevel = nullable(draft.thinking_level) as WorkflowUpdateBody['thinking_level']
   return {
     name: draft.name,
     description: nullable(draft.description),
     engine: draft.engine,
     model: nullable(draft.model),
+    thinking_level: thinkingLevel,
     max_turns: draft.max_turns,
     max_continuations: draft.max_continuations,
     allowed_tools: draft.allowed_tools,
@@ -474,6 +481,31 @@ function BasicsTab({
             placeholder={modelPlaceholder}
             value={draft.model}
           />
+        </Field>
+        <Field
+          label="Thinking level"
+          hint="Leave blank to inherit the org default or Pi default. Passed to pi as --thinking."
+        >
+          <Select
+            onValueChange={(value) =>
+              patchDraft({
+                thinking_level: value === INHERIT_THINKING_LEVEL ? '' : value,
+              })
+            }
+            value={draft.thinking_level || INHERIT_THINKING_LEVEL}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={INHERIT_THINKING_LEVEL}>Inherit</SelectItem>
+              {THINKING_LEVELS.map((level) => (
+                <SelectItem key={level} value={level}>
+                  {level}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Field>
         <Field
           label="Re-prompt budget"

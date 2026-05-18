@@ -68,7 +68,7 @@ test/             # vitest suites
 - **D1 migrations:** schema changes go in `migrations/` as a new numbered `.sql` file.
   Apply with `wrangler d1 migrations apply symphony-linear-agent --local` (dev) or
   `--remote` (prod).
-- **`engine` / `model` / `max_turns`** resolve through a precedence chain (workflow
+- **`engine` / `model` / `thinking_level` / `max_turns`** resolve through a precedence chain (workflow
   overrides → org `settings` → `wrangler.jsonc` env defaults → baked-in literals). The
   `projects` table's `engine`/`model`/`max_turns` columns are **dead** — the runner does
   not read them. Full table in `README.md`.

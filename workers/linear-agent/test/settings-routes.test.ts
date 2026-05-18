@@ -222,6 +222,7 @@ describe("GET /dashboard/api/settings", () => {
       agent_defaults: {
         default_engine: "pi",
         default_model: "anthropic/claude-sonnet-4-6",
+        thinking_level: null,
         max_turns: 15,
       },
     });

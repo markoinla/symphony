@@ -31,6 +31,7 @@ import {
   engineSchema,
   mcpServerSchema as serverMcpServerSchema,
   permissionModeSchema,
+  thinkingLevelSchema,
   workflowStatusSchema,
   type McpServer as ServerMcpServer,
   type Workflow as ServerWorkflow,
@@ -54,6 +55,7 @@ export {
   WorkflowUpdateSchema,
   engineSchema,
   permissionModeSchema,
+  thinkingLevelSchema,
   workflowStatusSchema,
 }
 

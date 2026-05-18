@@ -178,6 +178,7 @@ function makeEvent(
         workflow_overrides?: {
           engine?: string;
           model?: string;
+          thinking_level?: string;
           max_turns?: number;
           allowed_tools?: string[];
           disallowed_tools?: string[];
@@ -810,6 +811,46 @@ describe("SessionRunner.run — model resolution", () => {
       step as never,
     );
     expect(capturedBodies[0]?.model).toBe("workflow-explicit-model");
+  });
+
+  it("resolves thinking level through env, settings, and workflow overrides", async () => {
+    const kv = new FakeKV();
+    const db = seededDb();
+    db.settings.set(`${ORG_ID}:agent.thinking_level`, {
+      id: "s-thinking",
+      organization_id: ORG_ID,
+      key: "agent.thinking_level",
+      value: "low",
+      created_at: NOW_SEC(),
+      updated_at: NOW_SEC(),
+    });
+    const capturedBodies: Record<string, unknown>[] = [];
+    captureDispatcherRunBodies(capturedBodies);
+
+    const runner = buildRunner(makeEnv(kv, { DEFAULT_THINKING_LEVEL: "minimal" }, db));
+    const { step } = makeStep();
+
+    const event: AgentSessionEventWebhook = {
+      type: "AgentSessionEvent",
+      organizationId: LINEAR_ORG_ID,
+      action: "created",
+      webhookId: "wh-resolution-thinking",
+      agentSession: baseSession,
+      promptContext: baseSession.promptContext,
+    };
+
+    await runner.run(makeEvent(event), step as never);
+    expect(capturedBodies[0]?.thinking_level).toBe("low");
+
+    await runner.run(
+      makeEvent({
+        mode: "agent_session",
+        event: { ...event, webhookId: "wh-resolution-thinking-workflow" },
+        workflow_overrides: { thinking_level: "high" },
+      }),
+      step as never,
+    );
+    expect(capturedBodies[1]?.thinking_level).toBe("high");
   });
 
   it("passes workflow policy overrides through to the dispatcher request", async () => {

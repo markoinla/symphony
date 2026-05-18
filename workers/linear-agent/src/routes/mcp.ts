@@ -189,6 +189,7 @@ const McpWorkflowCreateSchema = WorkflowCreateSchema.pick({
   description: true,
   engine: true,
   model: true,
+  thinking_level: true,
   max_turns: true,
   prompt_template: true,
 });
@@ -198,6 +199,7 @@ const McpWorkflowUpdateSchema = WorkflowUpdateSchema.pick({
   description: true,
   engine: true,
   model: true,
+  thinking_level: true,
   max_turns: true,
   prompt_template: true,
 });
@@ -211,6 +213,7 @@ const McpWorkflowSchema = z.object({
   description: z.string().nullable().optional(),
   engine: engineSchema,
   model: z.string().nullable().optional(),
+  thinking_level: z.string().nullable().optional(),
   max_turns: z.number().int().positive(),
   prompt_template: z.string(),
   version: z.number().int().positive(),
@@ -346,7 +349,7 @@ const TOOLS: Tool[] = [
   {
     name: "workflows.create",
     description:
-      "Create a new draft workflow scoped to the calling token's organization. Only the user-visible fields are accepted: `name`, `description`, `engine`, `model`, `max_turns`, `prompt_template`. Hidden sandbox / hook columns are not yet wired through the engine and cannot be set from this surface. Returns the created workflow (status `draft`, version `1`).",
+      "Create a new draft workflow scoped to the calling token's organization. Only the user-visible fields are accepted: `name`, `description`, `engine`, `model`, `thinking_level`, `max_turns`, `prompt_template`. Hidden sandbox / hook columns are not yet wired through the engine and cannot be set from this surface. Returns the created workflow (status `draft`, version `1`).",
     scope: "write",
     annotations: {
       title: "Create workflow",
@@ -363,7 +366,7 @@ const TOOLS: Tool[] = [
   {
     name: "workflows.update",
     description:
-      "Partially update a workflow. Only the user-visible fields can be patched (`name`, `description`, `engine`, `model`, `max_turns`, `prompt_template`); omitted fields are unchanged. Works on draft AND published workflows — edits to a published workflow take effect immediately without bumping `version`. Call `workflows.publish` afterward if you want to snapshot the new content as a versioned checkpoint. Returns 404 if not found.",
+      "Partially update a workflow. Only the user-visible fields can be patched (`name`, `description`, `engine`, `model`, `thinking_level`, `max_turns`, `prompt_template`); omitted fields are unchanged. Works on draft AND published workflows — edits to a published workflow take effect immediately without bumping `version`. Call `workflows.publish` afterward if you want to snapshot the new content as a versioned checkpoint. Returns 404 if not found.",
     scope: "write",
     annotations: {
       title: "Update workflow",

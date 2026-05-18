@@ -22,6 +22,7 @@ interface WorkflowRow {
   description: string | null;
   engine: string;
   model: string | null;
+  thinking_level: string | null;
   max_turns: number;
   max_continuations: number | null;
   allowed_tools: string | null;
@@ -99,6 +100,7 @@ class MockResolverDB {
       description: w.description ?? null,
       engine: w.engine ?? "pi",
       model: w.model ?? null,
+      thinking_level: w.thinking_level ?? null,
       max_turns: w.max_turns ?? 10,
       max_continuations: w.max_continuations ?? null,
       allowed_tools: w.allowed_tools ?? null,
@@ -268,6 +270,7 @@ class MockStatement {
       w_description: w.description,
       w_engine: w.engine,
       w_model: w.model,
+      w_thinking_level: w.thinking_level,
       w_max_turns: w.max_turns,
       w_max_continuations: w.max_continuations,
       w_allowed_tools: w.allowed_tools,

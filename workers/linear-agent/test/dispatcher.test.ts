@@ -132,6 +132,7 @@ describe("DispatcherClient.run", () => {
           prompt: "do a thing",
           engine: "pi",
           model: "anthropic/claude-sonnet-4-6",
+          thinking_level: "high",
           turn: 1,
         });
 
@@ -166,6 +167,7 @@ describe("DispatcherClient.run", () => {
       prompt: "do a thing",
       engine: "pi",
       model: "anthropic/claude-sonnet-4-6",
+      thinkingLevel: "high",
     });
 
     expect(result).toEqual({

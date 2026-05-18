@@ -79,6 +79,7 @@ interface WorkflowRow {
   description: string | null;
   engine: string;
   model: string | null;
+  thinking_level: string | null;
   max_turns: number;
   max_continuations: number | null;
   allowed_tools: string | null;
@@ -133,7 +134,7 @@ interface TriggerRow {
 }
 
 const WORKFLOW_COLS =
-  "id, organization_id, team_id, user_id, name, description, engine, model, max_turns, max_continuations, allowed_tools, disallowed_tools, allowed_domains, mcp_servers, permission_mode, additional_read_paths, additional_write_paths, hook_after_create, hook_before_remove, hook_timeout_ms, prompt_template, version, status, published_at, created_at, updated_at";
+  "id, organization_id, team_id, user_id, name, description, engine, model, thinking_level, max_turns, max_continuations, allowed_tools, disallowed_tools, allowed_domains, mcp_servers, permission_mode, additional_read_paths, additional_write_paths, hook_after_create, hook_before_remove, hook_timeout_ms, prompt_template, version, status, published_at, created_at, updated_at";
 
 const TRIGGER_COLS =
   "id, workflow_id, event_type, to_state, from_state, label_name, comment_match, external_id_filter, payload_match, team_filter, project_filter, label_filter, skip_label_filter, assignee_filter, repo_filter, branch_filter, base_filter, draft_filter, author_filter, sentry_project_filter, level_filter, fingerprint_filter, environment_filter, release_filter, action, action_params, priority, enabled, created_at, updated_at";
@@ -181,6 +182,7 @@ function serializeWorkflow(row: WorkflowRow): Record<string, unknown> {
     description: row.description,
     engine: row.engine,
     model: row.model,
+    thinking_level: row.thinking_level as Workflow["thinking_level"],
     max_turns: row.max_turns,
     max_continuations: row.max_continuations,
     allowed_tools: asJsonArray(row.allowed_tools),
@@ -507,14 +509,14 @@ export function buildApiV1Router() {
     await c.env.DB.prepare(
       `INSERT INTO workflows (
          id, organization_id, team_id, user_id, name, description,
-         engine, model, max_turns, max_continuations,
+         engine, model, thinking_level, max_turns, max_continuations,
          allowed_tools, disallowed_tools, allowed_domains, mcp_servers,
          permission_mode, additional_read_paths, additional_write_paths,
          hook_after_create, hook_before_remove, hook_timeout_ms,
          prompt_template, version, status, created_at, updated_at
        ) VALUES (
          ?, ?, NULL, NULL, ?, ?,
-         ?, ?, ?, ?,
+         ?, ?, ?, ?, ?,
          ?, ?, ?, ?,
          ?, ?, ?,
          ?, ?, ?,
@@ -528,6 +530,7 @@ export function buildApiV1Router() {
         input.description ?? null,
         input.engine,
         input.model ?? null,
+        input.thinking_level ?? null,
         input.max_turns,
         input.max_continuations ?? null,
         jsonOrNull(input.allowed_tools),
@@ -631,6 +634,8 @@ export function buildApiV1Router() {
       set("description", input.description ?? null);
     if (input.engine !== undefined) set("engine", input.engine);
     if (input.model !== undefined) set("model", input.model ?? null);
+    if (input.thinking_level !== undefined)
+      set("thinking_level", input.thinking_level ?? null);
     if (input.max_turns !== undefined) set("max_turns", input.max_turns);
     if (input.max_continuations !== undefined)
       set("max_continuations", input.max_continuations ?? null);
@@ -739,14 +744,14 @@ export function buildApiV1Router() {
     await c.env.DB.prepare(
       `INSERT INTO workflows (
          id, organization_id, team_id, user_id, name, description,
-         engine, model, max_turns, max_continuations,
+         engine, model, thinking_level, max_turns, max_continuations,
          allowed_tools, disallowed_tools, allowed_domains, mcp_servers,
          permission_mode, additional_read_paths, additional_write_paths,
          hook_after_create, hook_before_remove, hook_timeout_ms,
          prompt_template, version, status, created_at, updated_at
        ) VALUES (
          ?, ?, ?, ?, ?, ?,
-         ?, ?, ?, ?,
+         ?, ?, ?, ?, ?,
          ?, ?, ?, ?,
          ?, ?, ?,
          ?, ?, ?,
@@ -762,6 +767,7 @@ export function buildApiV1Router() {
         src.description,
         src.engine,
         src.model,
+        src.thinking_level,
         src.max_turns,
         src.max_continuations,
         src.allowed_tools,
@@ -1734,6 +1740,7 @@ function hydrateWorkflowFromRow(row: WorkflowRow): Workflow {
     description: row.description,
     engine: row.engine,
     model: row.model,
+    thinking_level: row.thinking_level as Workflow["thinking_level"],
     max_turns: row.max_turns,
     max_continuations: row.max_continuations,
     allowed_tools: asJsonArray(row.allowed_tools) as string[] | null,

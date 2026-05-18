@@ -110,6 +110,7 @@ const SELECT_SQL = `
     w.description              AS w_description,
     w.engine                   AS w_engine,
     w.model                    AS w_model,
+    w.thinking_level           AS w_thinking_level,
     w.max_turns                AS w_max_turns,
     w.max_continuations        AS w_max_continuations,
     w.allowed_tools            AS w_allowed_tools,
@@ -340,6 +341,7 @@ function hydrateWorkflow(raw: RawJoinedRow): Workflow {
     description: raw.w_description ?? null,
     engine: raw.w_engine,
     model: raw.w_model ?? null,
+    thinking_level: raw.w_thinking_level as Workflow["thinking_level"],
     max_turns: raw.w_max_turns,
     max_continuations: raw.w_max_continuations ?? null,
     allowed_tools: parseJsonOrNull<string[]>(raw.w_allowed_tools),
@@ -443,6 +445,7 @@ interface RawJoinedRow {
   w_description: string | null;
   w_engine: string;
   w_model: string | null;
+  w_thinking_level: string | null;
   w_max_turns: number;
   w_max_continuations: number | null;
   w_allowed_tools: string | null;

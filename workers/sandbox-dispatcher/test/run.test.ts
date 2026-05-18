@@ -177,6 +177,7 @@ describe("POST /run (engine: pi)", () => {
       prompt: "Add today's date to README.md.",
       engine: "pi",
       model: "anthropic/claude-sonnet-4-6",
+      thinking_level: "high",
     });
 
     const sandbox = new FakeSandbox(runSandboxId("SYM-162"));
@@ -209,6 +210,7 @@ describe("POST /run (engine: pi)", () => {
     const piCall = sandbox.execCalls[3];
     expect(piCall?.cmd).toContain("pi --print --mode json");
     expect(piCall?.cmd).toContain("--model 'anthropic/claude-sonnet-4-6'");
+    expect(piCall?.cmd).toContain("--thinking 'high'");
     expect(piCall?.cmd).toContain("'Add today'\\''s date to README.md.'");
     expect(piCall?.opts?.timeout).toBe(35 * 60 * 1000);
 
