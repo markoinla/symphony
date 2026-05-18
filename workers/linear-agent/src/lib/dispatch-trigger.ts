@@ -212,6 +212,7 @@ export async function dispatchTrigger(
           prompt,
           engine: workflow.engine,
           model: workflow.model,
+          thinkingLevel: workflow.thinking_level ?? null,
           maxTurns: workflow.max_turns,
           scope,
           issueIdentifier:
@@ -323,6 +324,7 @@ export async function dispatchTrigger(
     name: string;
     engine: string;
     model?: string;
+    thinking_level?: string;
     max_turns: number;
     allowed_tools?: string[];
     disallowed_tools?: string[];
@@ -334,6 +336,9 @@ export async function dispatchTrigger(
   };
   if (workflow.model !== null && workflow.model !== "") {
     workflowOverrides.model = workflow.model;
+  }
+  if (workflow.thinking_level !== null && workflow.thinking_level !== undefined) {
+    workflowOverrides.thinking_level = workflow.thinking_level;
   }
   if (workflow.allowed_tools && workflow.allowed_tools.length > 0) {
     workflowOverrides.allowed_tools = workflow.allowed_tools;

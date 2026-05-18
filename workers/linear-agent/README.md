@@ -101,16 +101,16 @@ Tables (v1 multi-tenant schema in `0002_multi_tenant.sql`):
 | `settings` | Org-scoped key/value settings. Backs the Agent tab on the dashboard. See `0004_settings.sql`. |
 | `webhook_sources` | Registered inbound webhook sources such as GitHub. Each row owns a copy-once HMAC secret and powers `POST /webhook/source/:id`. |
 
-## Engine / model / max_turns resolution
+## Engine / model / thinking_level / max_turns resolution
 
-Every agent session resolves three runtime fields — `engine`, `model`,
-`max_turns` — through the same precedence chain. Higher entries win.
+Every agent session resolves four runtime fields — `engine`, `model`,
+`thinking_level`, `max_turns` — through the same precedence chain. Higher entries win.
 
 | Source | When it applies | Notes |
 |---|---|---|
-| `workflow_overrides` on the runner params | Trigger-fired runs only | `dispatch-trigger.ts` snapshots `workflow.engine` / `.model` / `.max_turns` plus dispatcher-supported runtime policy (`allowed_tools`, `disallowed_tools`, `permission_mode`) from the resolved workflow row onto the session params at queue time. Frozen at dispatch — edits to the workflow row mid-run don't perturb in-flight sessions. NULL on `workflow.model` means "inherit", so dispatch-trigger omits the field in that case. |
-| `settings('agent.default_engine')` / `('agent.default_model')` / `('agent.max_turns')` | All runs | Per-org overrides set via the Agent tab on the dashboard. Stored in the `settings` D1 table; one row per `(organization_id, key)`. |
-| `env.DEFAULT_ENGINE` / `DEFAULT_MODEL` / `DEFAULT_MAX_TURNS` | All runs | Worker-wide floor configured in `wrangler.jsonc`. |
+| `workflow_overrides` on the runner params | Trigger-fired runs only | `dispatch-trigger.ts` snapshots `workflow.engine` / `.model` / `.thinking_level` / `.max_turns` plus dispatcher-supported runtime policy (`allowed_tools`, `disallowed_tools`, `permission_mode`) from the resolved workflow row onto the session params at queue time. Frozen at dispatch — edits to the workflow row mid-run don't perturb in-flight sessions. NULL on `workflow.model` or `workflow.thinking_level` means "inherit", so dispatch-trigger omits those fields in that case. |
+| `settings('agent.default_engine')` / `('agent.default_model')` / `('agent.thinking_level')` / `('agent.max_turns')` | All runs | Per-org overrides set via the Agent tab on the dashboard. Stored in the `settings` D1 table; one row per `(organization_id, key)`. |
+| `env.DEFAULT_ENGINE` / `DEFAULT_MODEL` / `DEFAULT_THINKING_LEVEL` / `DEFAULT_MAX_TURNS` | All runs | Worker-wide floor configured in `wrangler.jsonc`. |
 | Baked-in literal | Last resort | `engine = "pi"`, `model = null`, `max_turns = 10`. |
 
 The `projects` table's `engine` / `model` / `max_turns` columns are
@@ -143,6 +143,7 @@ Curated key validation (server-side):
 - `agent.default_engine` — must equal `pi` or `claude` (`claude-code`
   is accepted for compatibility and normalized to `claude` at dispatch)
 - `agent.default_model` — non-empty trimmed string
+- `agent.thinking_level` — one of `off`, `minimal`, `low`, `medium`, `high`, `xhigh`; passed to Pi as `--thinking <level>`
 - `agent.max_turns` — positive integer in `[1, 100]`
 
 Other keys (e.g. `tracker.api_key`, `proxy.enabled`, `domain`) are

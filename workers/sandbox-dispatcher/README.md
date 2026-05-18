@@ -32,7 +32,7 @@ stored in R2 + D1. Baselines contain the engine binary and base toolchain
 2. Restore baseline into a fresh per-issue sandbox.
 3. Clone repo using the `GITHUB_TOKEN`-authed URL from `credentials`.
 4. Write per-tenant env vars + MCP config from `credentials`.
-5. Execute the engine command.
+5. Execute the engine command. For `engine: "pi"`, optional `thinking_level` values (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`) are passed as `pi --thinking <level>`.
 6. Destroy the sandbox.
 
 ## Deploy

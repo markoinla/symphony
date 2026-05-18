@@ -37,6 +37,7 @@ interface WorkflowRow {
   description: string | null;
   engine: string;
   model: string | null;
+  thinking_level: string | null;
   max_turns: number;
   max_continuations: number | null;
   allowed_tools: string | null;
@@ -154,11 +155,11 @@ class ApiStatement {
     const sql = norm(this.sql);
 
     if (/^INSERT INTO workflows/i.test(sql)) {
-      // The route's INSERT has 21 placeholders. `team_id` and `user_id`
+      // The route's INSERT has 22 placeholders. `team_id` and `user_id`
       // are literal NULL in the SQL on the POST path; the duplicate
       // route binds them explicitly. We detect by count.
       const b = this.bindings;
-      const hasScopedColumns = b.length === 23;
+      const hasScopedColumns = b.length === 24;
       let idx = 0;
       const next = () => b[idx++];
       const id = next() as string;
@@ -169,6 +170,7 @@ class ApiStatement {
       const description = (next() ?? null) as string | null;
       const engine = next() as string;
       const model = (next() ?? null) as string | null;
+      const thinking_level = (next() ?? null) as string | null;
       const max_turns = next() as number;
       const max_continuations = (next() ?? null) as number | null;
       const allowed_tools = (next() ?? null) as string | null;
@@ -194,6 +196,7 @@ class ApiStatement {
         description,
         engine,
         model,
+        thinking_level,
         max_turns,
         max_continuations,
         allowed_tools,
@@ -752,6 +755,7 @@ function applyWorkflowColumn(row: WorkflowRow, col: string, v: unknown) {
     case "description":        row.description = (v ?? null) as string | null; break;
     case "engine":             row.engine = v as string; break;
     case "model":              row.model = (v ?? null) as string | null; break;
+    case "thinking_level":     row.thinking_level = (v ?? null) as string | null; break;
     case "max_turns":          row.max_turns = v as number; break;
     case "max_continuations":  row.max_continuations = (v ?? null) as number | null; break;
     case "allowed_tools":      row.allowed_tools = (v ?? null) as string | null; break;
@@ -2133,6 +2137,7 @@ function baseWorkflow(overrides: Partial<WorkflowRow> & { id: string }): Workflo
     description: null,
     engine: "pi",
     model: null,
+    thinking_level: null,
     max_turns: 10,
     max_continuations: null,
     allowed_tools: null,

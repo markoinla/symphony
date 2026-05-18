@@ -65,13 +65,14 @@ import { Field } from '../components/field'
 type AgentSettingKey =
   | 'agent.default_engine'
   | 'agent.default_model'
+  | 'agent.thinking_level'
   | 'agent.max_turns'
 
 type AgentSettingDefinition = {
   key: AgentSettingKey
   label: string
   description: string
-  input: 'engine_select' | 'model_text' | 'integer'
+  input: 'engine_select' | 'model_text' | 'thinking_level_select' | 'integer'
   defaultValueKey: keyof AgentSettingsDefaults
 }
 
@@ -93,6 +94,14 @@ const agentSettingDefinitions: AgentSettingDefinition[] = [
     defaultValueKey: 'default_model',
   },
   {
+    key: 'agent.thinking_level',
+    label: 'Thinking level',
+    description:
+      'Pi reasoning budget passed as `--thinking <level>` when no workflow override is in effect.',
+    input: 'thinking_level_select',
+    defaultValueKey: 'thinking_level',
+  },
+  {
     key: 'agent.max_turns',
     label: 'Max turns',
     description:
@@ -103,10 +112,12 @@ const agentSettingDefinitions: AgentSettingDefinition[] = [
 ]
 
 const SUPPORTED_ENGINES = ['pi'] as const
+const THINKING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'] as const
 
 const fallbackAgentSettings: AgentSettingsDefaults = {
   default_engine: 'pi',
   default_model: null,
+  thinking_level: null,
   max_turns: 10,
 }
 
@@ -155,6 +166,11 @@ function validateAgentSettingDraft(
       return null
     case 'model_text':
       if (trimmed.length === 0) return 'Model must not be empty.'
+      return null
+    case 'thinking_level_select':
+      if (!THINKING_LEVELS.includes(trimmed as (typeof THINKING_LEVELS)[number])) {
+        return 'Select a supported thinking level.'
+      }
       return null
     case 'integer':
       if (!isPositiveInteger(trimmed)) return 'Enter a whole number greater than 0.'
@@ -310,6 +326,24 @@ function AgentSettingsSection() {
                       ))}
                     </SelectContent>
                   </Select>
+                ) : setting.input === 'thinking_level_select' ? (
+                  <Select
+                    value={draftValue}
+                    onValueChange={(value) => {
+                      setDrafts((current) => ({ ...current, [setting.key]: value }))
+                    }}
+                  >
+                    <SelectTrigger className="w-36">
+                      <SelectValue placeholder={defaultValue || 'Select…'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {THINKING_LEVELS.map((level) => (
+                        <SelectItem key={level} value={level}>
+                          {level}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 ) : setting.input === 'model_text' ? (
                   <Input
                     className="w-72 font-mono text-xs"
@@ -428,6 +462,7 @@ function AdvancedSettingsSection() {
     'github_oauth.expires_at',
     'agent.default_engine',
     'agent.default_model',
+    'agent.thinking_level',
     'agent.max_turns',
   ])
 

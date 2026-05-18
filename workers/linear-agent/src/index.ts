@@ -47,6 +47,7 @@ export interface Env {
   DEFAULT_SCOPE: string;
   DEFAULT_MODEL: string;
   DEFAULT_ENGINE: string;
+  DEFAULT_THINKING_LEVEL?: string;
   // Max turns per session. Project rows override this. Defaults to 10
   // when neither is present.
   DEFAULT_MAX_TURNS?: string;

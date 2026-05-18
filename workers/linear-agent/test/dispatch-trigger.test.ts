@@ -174,6 +174,7 @@ describe("dispatchTrigger", () => {
       description: null,
       engine: "pi",
       model: "model-from-workflow",
+      thinking_level: "high",
       max_turns: 3,
       max_continuations: null,
       allowed_tools: ["Read", "Bash"],
@@ -247,8 +248,10 @@ describe("dispatchTrigger", () => {
       params: expect.objectContaining({
         mode: "agent_session",
         workflow_overrides: {
+          name: "Policy workflow",
           engine: "pi",
           model: "model-from-workflow",
+          thinking_level: "high",
           max_turns: 3,
           allowed_tools: ["Read", "Bash"],
           disallowed_tools: ["WebFetch"],

@@ -62,6 +62,7 @@ export type Setting = {
 export type AgentSettingsDefaults = {
   default_engine: string
   default_model: string | null
+  thinking_level: string | null
   max_turns: number
 }
 

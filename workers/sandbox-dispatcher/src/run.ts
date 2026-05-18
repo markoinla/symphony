@@ -62,6 +62,7 @@ const PRELUDE_PREFIX = "__SYMPHONY_EVENT__ ";
 
 const SUPPORTED_ENGINES = new Set(["pi", "claude"] as const);
 type Engine = "pi" | "claude";
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"] as const);
 
 interface RunBody {
   issue_id?: unknown;
@@ -69,6 +70,7 @@ interface RunBody {
   prompt?: unknown;
   engine?: unknown;
   model?: unknown;
+  thinking_level?: unknown;
   timeout_ms?: unknown;
   max_turns?: unknown;
   permission_mode?: unknown;
@@ -133,6 +135,7 @@ interface ParsedRun {
   prompt: string;
   engine: Engine;
   model: string | null;
+  thinkingLevel: string | null;
   permissionMode: string | null;
   appendSystemPrompt: string | null;
   allowedTools: string[] | null;
@@ -995,6 +998,9 @@ function parseRun(body: RunBody): ParsedRun | string {
 
   const model = typeof body.model === "string" && body.model.length > 0 ? body.model : null;
 
+  const thinkingLevel = parseThinkingLevel(body.thinking_level);
+  if (thinkingLevel === false) return "invalid_thinking_level";
+
   const permissionMode =
     typeof body.permission_mode === "string" && body.permission_mode.length > 0
       ? body.permission_mode
@@ -1041,6 +1047,7 @@ function parseRun(body: RunBody): ParsedRun | string {
     prompt: body.prompt,
     engine: body.engine as Engine,
     model,
+    thinkingLevel,
     permissionMode,
     appendSystemPrompt,
     allowedTools,
@@ -1053,6 +1060,15 @@ function parseRun(body: RunBody): ParsedRun | string {
     ingestUrl,
     instanceId,
   };
+}
+
+
+function parseThinkingLevel(value: unknown): string | null | false {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return null;
+  return THINKING_LEVELS.has(trimmed as never) ? trimmed : false;
 }
 
 /**
@@ -1263,6 +1279,9 @@ function buildEngineCommand(parsed: ParsedRun, workspaceDir: string): string {
       const flags = ["--print", "--mode", "json"];
       if (parsed.model) {
         flags.push("--model", shellQuote(parsed.model));
+      }
+      if (parsed.thinkingLevel) {
+        flags.push("--thinking", shellQuote(parsed.thinkingLevel));
       }
       const parts = buildEngineEnvironment(parsed);
       parts.push(

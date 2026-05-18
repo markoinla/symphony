@@ -68,6 +68,7 @@ export const projects = sqliteTable(
     defaultBranch: text("default_branch").notNull().default("main"),
     engine: text("engine").notNull().default("pi"),
     model: text("model"),
+    thinkingLevel: text("thinking_level"),
     maxTurns: integer("max_turns").notNull().default(10),
     scope: text("scope"),
     systemPromptOverride: text("system_prompt_override"),
@@ -152,6 +153,7 @@ export const workflows = sqliteTable(
 
     engine: text("engine").notNull().default("pi"),
     model: text("model"),
+    thinkingLevel: text("thinking_level"),
     maxTurns: integer("max_turns").notNull().default(10),
     maxContinuations: integer("max_continuations"),
 

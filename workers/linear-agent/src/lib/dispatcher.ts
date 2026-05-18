@@ -63,6 +63,7 @@ export interface RunArgs {
   prompt: string;
   engine: string;
   model?: string | null;
+  thinkingLevel?: string | null;
   permissionMode?: string | null;
   appendSystemPrompt?: string | null;
   allowedTools?: string[] | null;
@@ -549,6 +550,7 @@ function serializeRunArgs(
     prompt: args.prompt,
     engine: args.engine,
     ...(args.model ? { model: args.model } : {}),
+    ...(args.thinkingLevel ? { thinking_level: args.thinkingLevel } : {}),
     ...(args.permissionMode ? { permission_mode: args.permissionMode } : {}),
     ...(args.appendSystemPrompt
       ? { append_system_prompt: args.appendSystemPrompt }

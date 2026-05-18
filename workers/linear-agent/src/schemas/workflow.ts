@@ -22,6 +22,16 @@ export type WorkflowStatus = z.infer<typeof workflowStatusSchema>;
 export const engineSchema = z.string().min(1);
 export type Engine = z.infer<typeof engineSchema>;
 
+export const thinkingLevelSchema = z.enum([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+]);
+export type ThinkingLevel = z.infer<typeof thinkingLevelSchema>;
+
 // Permission mode — kept open-string (not a closed enum) to match how
 // Codex / Claude Code engines extend the surface; bad values fail at
 // the dispatcher.
@@ -54,6 +64,7 @@ export const WorkflowSchema = z
 
     engine: engineSchema,
     model: z.string().nullable().optional(),
+    thinking_level: thinkingLevelSchema.nullable().optional(),
     max_turns: z.number().int().positive(),
     max_continuations: z.number().int().nonnegative().nullable().optional(),
 
@@ -103,6 +114,7 @@ const workflowFieldShapes = {
 
   engine: engineSchema,
   model: z.string().nullable().optional(),
+  thinking_level: thinkingLevelSchema.nullable().optional(),
   max_turns: z.number().int().positive(),
   max_continuations: z.number().int().nonnegative().nullable().optional(),
 
