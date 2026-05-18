@@ -27,7 +27,12 @@ import {
   DispatcherError,
   type NormalizedEvent,
 } from "../lib/dispatcher";
-import { LinearAgentInstallStore, ProjectStore } from "../lib/store";
+import {
+  AgentSessionEventStore,
+  AgentSessionStore,
+  LinearAgentInstallStore,
+  ProjectStore,
+} from "../lib/store";
 
 const AUTH_HEADER = "authorization";
 
@@ -138,6 +143,53 @@ export function buildAdminRouter() {
         refreshed_at: number;
       }>();
     return c.json({ installations: result.results });
+  });
+
+  /**
+   * Operator session debug endpoint. Mirrors the dashboard's session
+   * detail payload but is gated by ADMIN_TOKEN instead of Better Auth,
+   * so local tooling can inspect production runs without browser
+   * cookies or direct D1 account access.
+   */
+  app.get("/admin/sessions/:id/debug", async (c) => {
+    const session = await new AgentSessionStore(c.env.DB).get(c.req.param("id"));
+    if (!session) return c.json({ error: "not_found" }, 404);
+
+    const events = await new AgentSessionEventStore(c.env.DB).listBySessionId(
+      session.id,
+    );
+    const messages =
+      events.length > 0
+        ? events.map((row) => ({
+            id: row.id,
+            turn: row.turn,
+            type: row.type,
+            timestamp: new Date(row.ts).toISOString(),
+            body: row.body,
+          }))
+        : parseJson(session.messages, []);
+
+    return c.json({
+      id: session.id,
+      organization_id: session.organization_id,
+      project_id: session.project_id,
+      linear_issue_id: session.linear_issue_id,
+      linear_issue_identifier: session.linear_issue_identifier,
+      linear_issue_title: session.linear_issue_title,
+      status: session.status,
+      started_at: normalizeEpochSeconds(session.started_at),
+      completed_at: normalizeEpochSeconds(session.completed_at),
+      triggered_by: session.triggered_by,
+      team: session.team,
+      repo: session.repo,
+      prompt: session.prompt,
+      config_snapshot: parseJson(session.config_snapshot, null),
+      stderr: session.stderr,
+      dispatcher_logs: parseJson(session.dispatcher_logs, []),
+      messages,
+      event_count: events.length,
+      error: session.error,
+    });
   });
 
   /**
@@ -256,8 +308,71 @@ export function buildAdminRouter() {
     return c.json({ ok: true, run_id: runId });
   });
 
+  /**
+   * Inspect the dispatcher's per-run sandbox/process/log tail.
+   *
+   * Body: { "run_id": "<session-uuid>", "turn": 1, "tail_bytes": 16384 }
+   */
+  app.post("/admin/sandbox/debug", async (c) => {
+    const body = (await c.req.json().catch(() => null)) as
+      | {
+          issue_id?: unknown;
+          run_id?: unknown;
+          turn?: unknown;
+          tail_bytes?: unknown;
+        }
+      | null;
+    const pick = (v: unknown): string | null =>
+      typeof v === "string" && v.length > 0 ? v : null;
+    const runId = body ? (pick(body.run_id) ?? pick(body.issue_id)) : null;
+    if (!runId) {
+      return c.json({ error: "invalid_run_id" }, 400);
+    }
+    const dispatcher = new DispatcherClient(
+      c.env.DISPATCHER_URL,
+      c.env.DISPATCH_HMAC_SECRET,
+    );
+    try {
+      const debug = await dispatcher.debugRun({
+        runId,
+        turn:
+          body && typeof body.turn === "number" && Number.isFinite(body.turn)
+            ? body.turn
+            : undefined,
+        tailBytes:
+          body &&
+          typeof body.tail_bytes === "number" &&
+          Number.isFinite(body.tail_bytes)
+            ? body.tail_bytes
+            : undefined,
+      });
+      return c.json(debug);
+    } catch (e) {
+      const message =
+        e instanceof DispatcherError
+          ? `dispatcher_${e.status}: ${typeof e.body === "string" ? e.body : e.body.error}`
+          : e instanceof Error
+            ? e.message
+            : "unknown_error";
+      return c.json({ ok: false, error: message }, 502);
+    }
+  });
+
   return app;
 }
 
 // Re-export so consumers can read installation tokens for tests etc.
 export { LinearAgentInstallStore };
+
+function normalizeEpochSeconds(value: number | null): string | null {
+  return value === null ? null : new Date(value * 1000).toISOString();
+}
+
+function parseJson<T>(raw: string | null, fallback: T): unknown | T {
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return fallback;
+  }
+}

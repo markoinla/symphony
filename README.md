@@ -1,11 +1,10 @@
 # Symphony Elixir
 
-This directory contains the current Elixir/OTP implementation of Symphony, based on
-[`SPEC.md`](../SPEC.md) at the repository root.
+This directory contains the current Elixir/OTP implementation of Symphony.
 
 > [!WARNING]
 > Symphony Elixir is prototype software intended for evaluation only and is presented as-is.
-> We recommend implementing your own hardened version based on `SPEC.md`.
+> We recommend treating this implementation as a reference and hardening it for your environment before production use.
 
 ## Screenshot
 

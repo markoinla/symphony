@@ -155,12 +155,33 @@ scripts/deploy-workers.sh dispatcher      # just sandbox-dispatcher
 scripts/deploy-workers.sh linear-agent    # just linear-agent
 scripts/rotate-dispatch-secret.sh         # recover from a 401 storm (rotates + verifies)
 scripts/smoke-dispatch.sh                 # standalone HMAC + SSE wire check
+scripts/debug-session.sh <session-id>     # fetch linear-agent session row + event timeline
+scripts/debug-sandbox.sh <run-id> [turn]  # inspect dispatcher sandbox/process/log tail
 ```
 
 The smoke check needs the linear-agent's `ADMIN_TOKEN`. Either
 `export LINEAR_AGENT_ADMIN_TOKEN=…` or write it to `.secrets/admin-token`
 (gitignored). Without it the smoke step skips with a warning rather
 than failing the deploy.
+
+The debug scripts also use the same `ADMIN_TOKEN` source. Prefer them
+over direct `wrangler d1 execute` when debugging production runs:
+
+```bash
+# Session-level view: issue, status, config snapshot, error, stderr,
+# dispatcher logs, and persisted normalized engine events.
+scripts/debug-session.sh 1d32217a-3a90-4714-9def-63cbdbd6a270
+
+# Dispatcher-level view: derived sandbox id, process id, process
+# metadata, and stdout/stderr tails if the sandbox/process still exists.
+scripts/debug-sandbox.sh 1d32217a-3a90-4714-9def-63cbdbd6a270 1
+```
+
+Start with `debug-session` for any failed run. If the session is still
+running, stuck, or ended with `run_terminal_timeout`, immediately run
+`debug-sandbox` before cleanup/idle GC removes the process logs. A
+missing sandbox on an old failed session is expected; use the persisted
+session events to diagnose the historical run.
 
 Full failure-mode postmortem: `docs/cloudflare_sandbox_integration.md:486-501`.
 
@@ -200,7 +221,6 @@ Auth tunnels through Cloudflare account creds — no public port. Requirements:
 - All public functions (`def`) must have an adjacent `@spec`. Private (`defp`) specs are optional. `@impl` callbacks are exempt.
 - Runtime config is loaded from `WORKFLOW.md` YAML front matter via `SymphonyElixir.Workflow` and `SymphonyElixir.Config`. Prefer `SymphonyElixir.Config` over ad-hoc env reads.
 - Follow `docs/logging.md`: include `issue_id`, `issue_identifier`, and `session_id` context fields in logs.
-- Keep the implementation aligned with `docs/SPEC.md` — must not conflict, update spec if behavior changes.
 - Tests use `SymphonyElixir.TestSupport` (via `use`). Test helpers live in `test/support/`.
 - PR bodies must follow `.github/pull_request_template.md`. Validate with `mix pr_body.check --file <path>`.
 

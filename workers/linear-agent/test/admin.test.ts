@@ -82,6 +82,71 @@ describe("/admin guard", () => {
   });
 });
 
+describe("/admin/sessions/:id/debug", () => {
+  it("returns session debug payload with event rows", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    const startedAt = nowSec();
+    db.agentSessions.set("session-1", {
+      id: "session-1",
+      organization_id: "org-1",
+      project_id: "project-1",
+      linear_issue_id: "issue-1",
+      linear_issue_identifier: "SYM-1",
+      linear_issue_title: "Debug issue",
+      status: "running",
+      started_at: startedAt,
+      completed_at: null,
+      triggered_by: "agent_session",
+      team: "team-1",
+      repo: "https://github.com/acme/repo.git",
+      prompt: "debug this",
+      config_snapshot: JSON.stringify({ engine: "pi", model: "m" }),
+      stderr: null,
+      dispatcher_logs: null,
+      messages: null,
+      error: null,
+    });
+    db.agentSessionEvents.push({
+      id: 1,
+      session_id: "session-1",
+      turn: 1,
+      ts: startedAt * 1000,
+      type: "thought",
+      body: "working",
+    });
+
+    const res = await app.fetch(
+      authed(new Request("https://agent.example/admin/sessions/session-1/debug")),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as {
+      id: string;
+      event_count: number;
+      config_snapshot: { engine: string };
+      messages: Array<{ type: string; body: string }>;
+    };
+    expect(json.id).toBe("session-1");
+    expect(json.event_count).toBe(1);
+    expect(json.config_snapshot.engine).toBe("pi");
+    expect(json.messages[0]).toMatchObject({ type: "thought", body: "working" });
+  });
+
+  it("returns 404 for an unknown session", async () => {
+    const app = buildApp();
+    const db = new FakeD1();
+    const res = await app.fetch(
+      authed(new Request("https://agent.example/admin/sessions/missing/debug")),
+      makeEnv(db),
+      makeExecCtx(),
+    );
+    expect(res.status).toBe(404);
+  });
+});
+
 describe("/admin/projects CRUD", () => {
   it("POST validates required fields", async () => {
     const app = buildApp();

@@ -47,8 +47,8 @@ import type { EngineAdapter, NormalizedEvent } from "./engines/types";
  * arrive via the `credentials` block on each `/run` request.
  */
 
-const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
-const MAX_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_TIMEOUT_MS = 35 * 60 * 1000;
+const MAX_TIMEOUT_MS = 35 * 60 * 1000;
 
 // Poll cadence for tailing a detached engine process's log. Starts at
 // POLL_MIN_MS and backs off toward POLL_MAX_MS while no new output
@@ -283,6 +283,49 @@ export function buildRunRouter() {
     const sandbox = getSandbox(c.env.Sandbox, runSandboxId(runId));
     await safeDestroy(sandbox);
     return c.json({ ok: true, run_id: runId });
+  });
+
+  // Inspect a per-run sandbox/process without attaching to the event
+  // stream. Operator/debug endpoint used through linear-agent's
+  // ADMIN_TOKEN-gated proxy.
+  app.post("/run/debug", async (c) => {
+    const body = await readJsonBody<{
+      issue_id?: unknown;
+      run_id?: unknown;
+      turn?: unknown;
+      tail_bytes?: unknown;
+    }>(c.req.raw);
+    const runId = parseIssueId(body.run_id) ?? parseIssueId(body.issue_id);
+    if (!runId) {
+      return c.json({ error: "invalid_run_id" }, 400);
+    }
+
+    const turn = parseTurn(body.turn);
+    const tailBytes = parseTailBytes(body.tail_bytes);
+    const sandboxId = runSandboxId(runId);
+    const processId = runProcessId(runId, turn);
+    const sandbox = getSandbox(c.env.Sandbox, sandboxId);
+    const process = await getProcessOrNull(sandbox, processId);
+    const logs = await getProcessLogsOrNull(sandbox, processId);
+
+    return c.json({
+      ok: true,
+      run_id: runId,
+      turn,
+      sandbox_id: sandboxId,
+      process_id: processId,
+      process_exists: process !== null,
+      process,
+      logs:
+        logs === null
+          ? null
+          : {
+              stdout_length: logs.stdout.length,
+              stderr_length: logs.stderr.length,
+              stdout_tail: tailString(logs.stdout, tailBytes),
+              stderr_tail: tailString(logs.stderr, tailBytes),
+            },
+    });
   });
 
   // `/run/start` — engine-push start (SYM-386). Runs the same setup as
@@ -1119,6 +1162,16 @@ function parseCursor(value: unknown): number {
   return Math.floor(value);
 }
 
+function parseTailBytes(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 16_384;
+  return Math.max(0, Math.min(Math.floor(value), 128 * 1024));
+}
+
+function tailString(value: string, bytes: number): string {
+  if (bytes === 0 || value.length <= bytes) return value;
+  return value.slice(value.length - bytes);
+}
+
 const CREDENTIAL_ENV_MAP: Array<{
   field: keyof CredentialsBody;
   envName: string;
@@ -1493,4 +1546,3 @@ async function readJsonBody<T>(req: Request): Promise<T> {
     return {} as T;
   }
 }
-

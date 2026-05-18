@@ -105,6 +105,13 @@ export interface StartArgs extends RunArgs {
   instanceId: string;
 }
 
+export interface DebugRunArgs {
+  issueId?: string;
+  runId?: string;
+  turn?: number;
+  tailBytes?: number;
+}
+
 export interface RunResult {
   engine: string;
   exit_code: number;
@@ -316,6 +323,36 @@ export class DispatcherClient {
       }
       throw new DispatcherError(res.status, parsed);
     }
+  }
+
+  async debugRun(args: DebugRunArgs): Promise<unknown> {
+    const body = JSON.stringify({
+      ...(args.issueId ? { issue_id: args.issueId } : {}),
+      ...(args.runId ? { run_id: args.runId } : {}),
+      ...(args.turn ? { turn: args.turn } : {}),
+      ...(args.tailBytes ? { tail_bytes: args.tailBytes } : {}),
+    });
+    const sig = await computeSignature(this.secret, body);
+    const fetchFn = this.fetchImpl;
+    const res = await fetchFn(`${stripTrailingSlash(this.url)}/run/debug`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Symphony-Signature": sig,
+      },
+      body,
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      let parsed: DispatcherErrorBody | string;
+      try {
+        parsed = JSON.parse(text) as DispatcherErrorBody;
+      } catch {
+        parsed = text;
+      }
+      throw new DispatcherError(res.status, parsed);
+    }
+    return await res.json();
   }
 
   async *runStream(args: RunArgs): AsyncIterable<NormalizedEvent> {

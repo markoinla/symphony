@@ -39,7 +39,7 @@ All commits are on PR #136 against `main`.
 | D1 schema                           | `workers/sandbox-dispatcher/migrations/0001_init.sql` |
 | Container image                     | `docker.io/cloudflare/sandbox:0.10.0` (referenced directly in `wrangler.jsonc`; **no local Dockerfile** — see gotcha "Direct Docker Hub image" below) |
 | Wrangler config                     | `workers/sandbox-dispatcher/wrangler.jsonc` |
-| Spec doc (workflow config schema)   | `docs/SPEC.md` (`worker.backend` field documented) |
+| Workflow config                     | `WORKFLOW.md` front matter (`worker.backend` field) |
 
 ## Pre-flight before any deploy works
 

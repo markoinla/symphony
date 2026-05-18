@@ -210,7 +210,7 @@ describe("POST /run (engine: pi)", () => {
     expect(piCall?.cmd).toContain("pi --print --mode json");
     expect(piCall?.cmd).toContain("--model 'anthropic/claude-sonnet-4-6'");
     expect(piCall?.cmd).toContain("'Add today'\\''s date to README.md.'");
-    expect(piCall?.opts?.timeout).toBe(10 * 60 * 1000);
+    expect(piCall?.opts?.timeout).toBe(35 * 60 * 1000);
 
     expect(sandbox.destroyed).toBe(true);
   });
@@ -462,7 +462,7 @@ describe("POST /run (engine: pi)", () => {
 
     expect(res.status).toBe(200);
     const piCall = sandbox.execCalls.find((c) => c.cmd.includes("pi --print"));
-    expect(piCall?.opts?.timeout).toBe(30 * 60 * 1000);
+    expect(piCall?.opts?.timeout).toBe(35 * 60 * 1000);
   });
 });
 

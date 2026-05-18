@@ -13,7 +13,7 @@ defmodule SymphonyElixir.Linear.OAuth.Refresher do
       `:reconnect_required`; transient errors retry with backoff inside
       Linear's 30-minute network grace window.
 
-  See `docs/SPEC.md` and Linear's OAuth docs for the contract.
+  See Linear's OAuth docs for the external token refresh contract.
   """
 
   use GenServer
