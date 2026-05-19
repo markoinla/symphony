@@ -3,6 +3,21 @@ import { describe, expect, it } from "vitest";
 import { parsePiLine, summarizeEvent } from "../src/lib/engine-pi";
 
 describe("parsePiLine", () => {
+  it("passes through dispatcher prelude events", () => {
+    expect(
+      parsePiLine(
+        `__SYMPHONY_EVENT__ ${JSON.stringify({
+          type: "thought",
+          text: "Cloning markoinla/symphony…",
+        })}`,
+      ),
+    ).toEqual([{ type: "thought", text: "Cloning markoinla/symphony…" }]);
+  });
+
+  it("drops malformed dispatcher prelude events", () => {
+    expect(parsePiLine("__SYMPHONY_EVENT__ not json")).toEqual([]);
+  });
+
   it("maps tool_execution_start to a tool_call", () => {
     expect(
       parsePiLine(
