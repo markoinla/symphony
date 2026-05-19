@@ -39,6 +39,7 @@ import { computeHmacSignature, verifyHmacSignature } from "../lib/signature";
 import {
   AgentSessionEventStore,
   AgentSessionStore,
+  LinearAgentInstallStore,
   type AgentSessionRecord,
 } from "../lib/store";
 
@@ -237,7 +238,13 @@ async function postActivities(
     session.organization_id,
     TOKEN_REFRESH_WINDOW_MS,
   );
-  if (!refreshed) {
+  const fallbackInstall = refreshed
+    ? null
+    : await new LinearAgentInstallStore(env.DB).getByOrgId(
+        session.organization_id,
+      );
+  const accessToken = refreshed?.accessToken ?? fallbackInstall?.access_token;
+  if (!accessToken) {
     console.warn(
       "ingest_activities_no_token",
       JSON.stringify({ session_id: session.id }),
@@ -245,7 +252,7 @@ async function postActivities(
     return;
   }
 
-  let token = refreshed.accessToken;
+  let token = accessToken;
   const linear = buildActivityClient(token, async () => {
     const r = await refreshInstallToken(env, session.organization_id);
     if (r) token = r.accessToken;
