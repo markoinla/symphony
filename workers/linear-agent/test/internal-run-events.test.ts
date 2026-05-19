@@ -316,6 +316,48 @@ describe("POST /internal/run-events/:sessionId — ingest", () => {
       content: expect.objectContaining({ type: "action", action: "bash" }),
     });
   });
+
+  it("falls back to the stored install token when proactive refresh cannot run", async () => {
+    const db = new FakeD1();
+    seedSession(db, { linear_issue_id: "issue-1" });
+    db.linearAgentInstalls.set("org-1", {
+      id: "install-1",
+      organization_id: "org-1",
+      linear_organization_id: "lin-org-1",
+      access_token: "tok",
+      refresh_token: null,
+      scopes: "",
+      installed_by_user_id: "u",
+      status: "active",
+      installed_at: 1_700_000_000,
+      refreshed_at: 1_700_000_000,
+      // Legacy/unknown expiry makes refreshInstallTokenIfNeeded try a
+      // proactive refresh. With no refresh token available, ingest should
+      // still post activities using the stored token, matching the initial
+      // "picked up" activity path in SessionRunner.
+      expires_at: null,
+    });
+
+    await buildApp().fetch(
+      await ingestRequest("session-1", {
+        instance_id: "session-1",
+        lines: [
+          `__SYMPHONY_EVENT__ ${JSON.stringify({
+            type: "thought",
+            text: "Spinning up a sandbox…",
+          })}`,
+        ],
+      }),
+      makeEnv(db, makeSessionRunner().runner),
+      makeExecCtx(),
+    );
+
+    expect(createAgentActivityMock).toHaveBeenCalledTimes(1);
+    expect(createAgentActivityMock).toHaveBeenCalledWith({
+      agentSessionId: "session-1",
+      content: { type: "thought", body: "Spinning up a sandbox…" },
+    });
+  });
 });
 
 describe("POST /internal/run-events/:sessionId — terminal", () => {
