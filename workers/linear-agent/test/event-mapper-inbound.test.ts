@@ -61,8 +61,11 @@ describe("mapIssueUpdateToEvent", () => {
     );
 
     expect(result?.summary).toBe("SYM-1 → In Progress");
-    expect(result?.event.from_state).toBeNull();
-    expect(result?.event.to_state).toBe("In Progress");
+    expect(result?.event).toMatchObject({
+      event_type: "state_entered",
+      from_state: null,
+      to_state: "In Progress",
+    });
   });
 
   it("falls back to ids when optional names and relation objects are missing", () => {
