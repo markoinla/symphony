@@ -22,10 +22,10 @@ npm test
 npm run typecheck
 ```
 
-Deploy from the repository root with the shared helper, not `npm run deploy` directly:
+Deploy with the shared helper, not `npm run deploy` directly:
 
 ```bash
-scripts/deploy-workers.sh dispatcher
+workers/scripts/deploy-workers.sh dispatcher
 ```
 
 The helper deploys this worker with `linear-agent` coordination and runs the HMAC smoke gate that prevents shared secret drift.
@@ -63,9 +63,9 @@ test/                 # vitest suites
 `DISPATCH_HMAC_SECRET` is shared with `linear-agent`. This worker verifies dispatch requests; `linear-agent` signs them. If secrets drift, Linear sessions fail with `invalid_signature`.
 
 - Never run `wrangler secret put DISPATCH_HMAC_SECRET` for this worker alone.
-- Rotate with `scripts/rotate-dispatch-secret.sh` from the repository root.
-- Smoke-check with `scripts/smoke-dispatch.sh` when needed.
-- Deploy with `scripts/deploy-workers.sh dispatcher` from the repository root.
+- Rotate with `workers/scripts/rotate-dispatch-secret.sh`.
+- Smoke-check with `workers/scripts/smoke-dispatch.sh` when needed.
+- Deploy with `workers/scripts/deploy-workers.sh dispatcher`.
 
 Interactive baseline editing is driven by root Elixir mix tasks:
 

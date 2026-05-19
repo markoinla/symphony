@@ -2,13 +2,13 @@
 # Fetch an ADMIN_TOKEN-gated linear-agent session debug payload.
 #
 # Usage:
-#   scripts/debug-session.sh <session-id>
-#   LINEAR_AGENT_URL=https://... LINEAR_AGENT_ADMIN_TOKEN=... scripts/debug-session.sh <session-id>
+#   workers/scripts/debug-session.sh <session-id>
+#   LINEAR_AGENT_URL=https://... LINEAR_AGENT_ADMIN_TOKEN=... workers/scripts/debug-session.sh <session-id>
 set -euo pipefail
 
 session_id="${1:-}"
 if [[ -z "$session_id" ]]; then
-  echo "usage: scripts/debug-session.sh <session-id>" >&2
+  echo "usage: workers/scripts/debug-session.sh <session-id>" >&2
   exit 2
 fi
 

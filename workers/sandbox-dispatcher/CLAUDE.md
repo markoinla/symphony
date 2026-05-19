@@ -2,7 +2,7 @@
 
 > **This is a TypeScript Cloudflare Worker, not the Elixir app.** The repo root is an
 > Elixir/Phoenix codebase with its own toolchain and conventions; the root `CLAUDE.md`
-> does **not** apply here. See the "Repository layout" banner in `../../CLAUDE.md`.
+> does **not** apply here. See the "Repository layout" banner in `../CLAUDE.md`.
 
 ## What this is
 
@@ -29,12 +29,12 @@ npm test            # vitest run
 npm run typecheck   # tsc --noEmit
 ```
 
-**Deploy via the repo-root helper, not `npm run deploy` directly** — the helper pushes
+**Deploy via the shared helper, not `npm run deploy` directly** — the helper pushes
 this worker and `linear-agent` together and runs an HMAC smoke gate, which is what keeps
 the shared secret from drifting:
 
 ```bash
-scripts/deploy-workers.sh dispatcher     # run from repo root
+workers/scripts/deploy-workers.sh dispatcher
 ```
 
 ## Layout
@@ -61,7 +61,7 @@ test/                 # vitest suites
 - **`DISPATCH_HMAC_SECRET` is shared with `linear-agent`.** This worker *verifies*
   signatures; the agent *signs*. If the two secrets drift, every Linear session 401s with
   `invalid_signature`. Never `wrangler secret put` it on one worker alone — rotate with
-  `scripts/rotate-dispatch-secret.sh` from the repo root.
+  `workers/scripts/rotate-dispatch-secret.sh`.
 - HMAC is enforced in dev too — every route except `/health` requires a valid signature.
 - Baseline snapshots hold engine binaries + base toolchain (git, gh, jq) but **no
   credentials**; per-run secrets arrive in the `/run` request's `credentials` block.

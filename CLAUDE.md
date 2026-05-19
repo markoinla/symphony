@@ -150,13 +150,13 @@ Always go through the helper scripts — they bake in `--env=""`, push
 to both Workers in one shot, and run a smoke gate after every deploy:
 
 ```bash
-scripts/deploy-workers.sh                 # deploy both + smoke gate (use instead of `npm run deploy`)
-scripts/deploy-workers.sh dispatcher      # just sandbox-dispatcher
-scripts/deploy-workers.sh linear-agent    # just linear-agent
-scripts/rotate-dispatch-secret.sh         # recover from a 401 storm (rotates + verifies)
-scripts/smoke-dispatch.sh                 # standalone HMAC + SSE wire check
-scripts/debug-session.sh <session-id>     # fetch linear-agent session row + event timeline
-scripts/debug-sandbox.sh <run-id> [turn]  # inspect dispatcher sandbox/process/log tail
+workers/scripts/deploy-workers.sh                 # deploy both + smoke gate (use instead of `npm run deploy`)
+workers/scripts/deploy-workers.sh dispatcher      # just sandbox-dispatcher
+workers/scripts/deploy-workers.sh linear-agent    # just linear-agent
+workers/scripts/rotate-dispatch-secret.sh         # recover from a 401 storm (rotates + verifies)
+workers/scripts/smoke-dispatch.sh                 # standalone HMAC + SSE wire check
+workers/scripts/debug-session.sh <session-id>     # fetch linear-agent session row + event timeline
+workers/scripts/debug-sandbox.sh <run-id> [turn]  # inspect dispatcher sandbox/process/log tail
 ```
 
 The smoke check needs the linear-agent's `ADMIN_TOKEN`. Either
@@ -170,11 +170,11 @@ over direct `wrangler d1 execute` when debugging production runs:
 ```bash
 # Session-level view: issue, status, config snapshot, error, stderr,
 # dispatcher logs, and persisted normalized engine events.
-scripts/debug-session.sh 1d32217a-3a90-4714-9def-63cbdbd6a270
+workers/scripts/debug-session.sh 1d32217a-3a90-4714-9def-63cbdbd6a270
 
 # Dispatcher-level view: derived sandbox id, process id, process
 # metadata, and stdout/stderr tails if the sandbox/process still exists.
-scripts/debug-sandbox.sh 1d32217a-3a90-4714-9def-63cbdbd6a270 1
+workers/scripts/debug-sandbox.sh 1d32217a-3a90-4714-9def-63cbdbd6a270 1
 ```
 
 Start with `debug-session` for any failed run. If the session is still
@@ -183,7 +183,7 @@ running, stuck, or ended with `run_terminal_timeout`, immediately run
 missing sandbox on an old failed session is expected; use the persisted
 session events to diagnose the historical run.
 
-Full failure-mode postmortem: `docs/cloudflare_sandbox_integration.md:486-501`.
+Full failure-mode postmortem: `workers/docs/cloudflare_sandbox_integration.md:486-501`.
 
 ### Editing an engine baseline snapshot
 

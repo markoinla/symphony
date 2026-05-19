@@ -3,7 +3,7 @@
 > **This is a TypeScript Cloudflare Worker, not the Elixir app.** The repo root is an
 > Elixir/Phoenix codebase with its own toolchain and conventions; the root `CLAUDE.md`
 > does **not** apply here (no mix, no `@spec`, no Ecto, no `WORKFLOW.md`). See the
-> "Repository layout" banner in `../../CLAUDE.md` for how the two stacks relate.
+> "Repository layout" banner in `../CLAUDE.md` for how the workers stack is organized.
 
 ## What this is
 
@@ -35,12 +35,12 @@ npm run typecheck   # tsc --noEmit
 npm run build       # build dashboard + dry-run wrangler bundle into dist/
 ```
 
-**Deploy via the repo-root helper, not `npm run deploy` directly** — the helper pushes
+**Deploy via the shared helper, not `npm run deploy` directly** — the helper pushes
 this worker and `sandbox-dispatcher` together and runs an HMAC smoke gate, which is what
 keeps the shared secret from drifting:
 
 ```bash
-scripts/deploy-workers.sh linear-agent     # run from repo root
+workers/scripts/deploy-workers.sh linear-agent
 ```
 
 ## Layout
@@ -64,7 +64,7 @@ test/             # vitest suites
 - **`DISPATCH_HMAC_SECRET` is shared with `sandbox-dispatcher`.** This worker *signs*
   dispatch requests; the dispatcher *verifies* them. If the two secrets drift, every
   Linear session 401s with `invalid_signature`. Never `wrangler secret put` it on one
-  worker alone — rotate with `scripts/rotate-dispatch-secret.sh` from the repo root.
+  worker alone — rotate with `workers/scripts/rotate-dispatch-secret.sh`.
 - **D1 migrations:** schema changes go in `migrations/` as a new numbered `.sql` file.
   Apply with `wrangler d1 migrations apply symphony-linear-agent --local` (dev) or
   `--remote` (prod).
