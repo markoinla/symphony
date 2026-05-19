@@ -28,6 +28,8 @@
 import type { NormalizedEvent } from "./dispatcher";
 import { truncate } from "./session-helpers";
 
+const PRELUDE_PREFIX = "__SYMPHONY_EVENT__ ";
+
 interface PiContent {
   type?: string;
   text?: string;
@@ -64,6 +66,14 @@ interface PiMessageEvent {
 export function parsePiLine(line: string): NormalizedEvent[] {
   const trimmed = line.trim();
   if (trimmed.length === 0) return [];
+
+  if (trimmed.startsWith(PRELUDE_PREFIX)) {
+    try {
+      return [JSON.parse(trimmed.slice(PRELUDE_PREFIX.length)) as NormalizedEvent];
+    } catch {
+      return [];
+    }
+  }
 
   let event: PiMessageEvent;
   try {
