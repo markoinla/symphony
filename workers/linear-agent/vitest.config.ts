@@ -5,6 +5,19 @@ export default defineConfig({
   test: {
     globals: false,
     environment: "node",
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json-summary"],
+      reportsDirectory: "coverage",
+      include: ["src/**/*.ts"],
+      exclude: [
+        "dashboard/**",
+        "dist/**",
+        "migrations/**",
+        "test/**",
+        "src/db/schema.ts",
+      ],
+    },
   },
   resolve: {
     alias: {
