@@ -2,13 +2,13 @@
 # Fetch dispatcher sandbox/process/log-tail debug data through linear-agent.
 #
 # Usage:
-#   scripts/debug-sandbox.sh <run-id> [turn]
+#   workers/scripts/debug-sandbox.sh <run-id> [turn]
 set -euo pipefail
 
 run_id="${1:-}"
 turn="${2:-1}"
 if [[ -z "$run_id" ]]; then
-  echo "usage: scripts/debug-sandbox.sh <run-id> [turn]" >&2
+  echo "usage: workers/scripts/debug-sandbox.sh <run-id> [turn]" >&2
   exit 2
 fi
 

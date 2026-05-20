@@ -26,10 +26,10 @@ npm run build
 
 `npm run build` builds the dashboard and performs a dry-run Wrangler bundle into `dist/`.
 
-Deploy from the repository root with the shared helper, not `npm run deploy` directly:
+Deploy with the shared helper, not `npm run deploy` directly:
 
 ```bash
-scripts/deploy-workers.sh linear-agent
+workers/scripts/deploy-workers.sh linear-agent
 ```
 
 The helper deploys this worker with `sandbox-dispatcher` coordination and runs the HMAC smoke gate that prevents shared secret drift.
@@ -65,6 +65,6 @@ test/             # vitest suites
 `DISPATCH_HMAC_SECRET` is shared with `sandbox-dispatcher`. This worker signs dispatch requests; `sandbox-dispatcher` verifies them. If secrets drift, Linear sessions fail with `invalid_signature`.
 
 - Never run `wrangler secret put DISPATCH_HMAC_SECRET` for this worker alone.
-- Rotate with `scripts/rotate-dispatch-secret.sh` from the repository root.
-- Smoke-check with `scripts/smoke-dispatch.sh` when needed.
+- Rotate with `workers/scripts/rotate-dispatch-secret.sh`.
+- Smoke-check with `workers/scripts/smoke-dispatch.sh` when needed.
 - Use `README.md` for the deeper reference on setup, D1 schema, engine resolution, and settings API.

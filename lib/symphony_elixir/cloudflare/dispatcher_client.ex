@@ -7,9 +7,10 @@ defmodule SymphonyElixir.Cloudflare.DispatcherClient do
   `acquire`/`exec`/`release` calls.
 
   Every request is HMAC-SHA256 signed over the raw body using the
-  `DISPATCH_HMAC_SECRET` shared with the Worker (see
-  `workers/sandbox-dispatcher/src/hmac.ts`). The signature is sent as
-  lowercase hex in the `X-Symphony-Signature` header.
+  `DISPATCH_HMAC_SECRET` shared with the Worker (verified by the
+  `computeSignature` helper in the `sandbox-dispatcher` Worker's
+  `hmac.ts`). The signature is sent as lowercase hex in the
+  `X-Symphony-Signature` header.
 
   Configuration is sourced from the environment so the tasks work without
   pulling Symphony's full runtime stack:

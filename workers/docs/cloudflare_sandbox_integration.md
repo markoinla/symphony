@@ -491,9 +491,9 @@ prod Worker stop matching the previously-set `DISPATCH_HMAC_SECRET`.
 Diagnostic: every signed request 401s with `{"error":"invalid_signature"}`
 even though `wrangler secret list` claims the secret is set.
 
-Mitigation (automated): use `scripts/deploy-workers.sh` instead of running
+Mitigation (automated): use `workers/scripts/deploy-workers.sh` instead of running
 `npm run deploy` directly. It deploys the targeted Worker(s), waits
-for edge propagation, and runs `scripts/smoke-dispatch.sh` as a gate — a
+for edge propagation, and runs `workers/scripts/smoke-dispatch.sh` as a gate — a
 post-deploy 401 storm fails the script loudly instead of being
 discovered by the next user-triggered Linear session.
 
@@ -501,13 +501,13 @@ When drift is detected (the smoke check returns
 `connect_error: dispatcher_401: invalid_signature`), recover with:
 
 ```bash
-scripts/rotate-dispatch-secret.sh                     # generate fresh value, push to both workers
-scripts/rotate-dispatch-secret.sh "<known value>"     # or set a specific value (e.g. matching Symphony Elixir)
+workers/scripts/rotate-dispatch-secret.sh                     # generate fresh value, push to both workers
+workers/scripts/rotate-dispatch-secret.sh "<known value>"     # or set a specific value (e.g. matching Symphony Elixir)
 ```
 
 The script bakes in `--env=""` and pushes to both workers in one shot
 so the "set on one but not the other" failure mode is impossible. It
-runs `scripts/smoke-dispatch.sh` afterwards as a verification gate.
+runs `workers/scripts/smoke-dispatch.sh` afterwards as a verification gate.
 
 The smoke script needs `LINEAR_AGENT_ADMIN_TOKEN` set (matches the
 `ADMIN_TOKEN` secret on the linear-agent Worker). Either export it or

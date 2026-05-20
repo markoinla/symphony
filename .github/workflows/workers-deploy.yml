@@ -5,8 +5,6 @@ on:
     branches: [main]
     paths:
       - 'workers/**'
-      - 'scripts/deploy-workers.sh'
-      - 'scripts/smoke-dispatch.sh'
       - '.github/workflows/workers-deploy.yml'
 
 concurrency:
@@ -86,4 +84,4 @@ jobs:
         run: npm ci
 
       - name: Deploy workers + smoke gate
-        run: ./scripts/deploy-workers.sh
+        run: ./workers/scripts/deploy-workers.sh

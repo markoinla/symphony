@@ -6,8 +6,8 @@
 # the bogus scope, but the wire works → sse_wire_ok=true).
 #
 # Usage:
-#   LINEAR_AGENT_ADMIN_TOKEN=xxx scripts/smoke-dispatch.sh
-#   scripts/smoke-dispatch.sh                          # reads .secrets/admin-token if present
+#   LINEAR_AGENT_ADMIN_TOKEN=xxx workers/scripts/smoke-dispatch.sh
+#   workers/scripts/smoke-dispatch.sh                  # reads .secrets/admin-token if present
 #
 # Exits 0 if HMAC + SSE round-trip is healthy, 1 otherwise. The exit
 # code is consumable by deploy scripts as a gate.
@@ -49,7 +49,7 @@ for engine in pi claude; do
   if [[ "$err" == *"invalid_signature"* ]]; then
     echo "" >&2
     echo "  → DISPATCH_HMAC_SECRET drift detected. Recover with:" >&2
-    echo "    scripts/rotate-dispatch-secret.sh" >&2
+    echo "    workers/scripts/rotate-dispatch-secret.sh" >&2
   fi
   exit 1
 done

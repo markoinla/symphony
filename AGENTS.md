@@ -96,26 +96,26 @@ The TypeScript workers have their own instructions:
 - `workers/sandbox-dispatcher/CLAUDE.md`
 - `workers/oauth-proxy/CLAUDE.md`
 
-For the `linear-agent` and `sandbox-dispatcher` HMAC pair, use the repo-root helper scripts instead of deploying or rotating secrets one worker at a time:
+For the `linear-agent` and `sandbox-dispatcher` HMAC pair, use the helper scripts under `workers/scripts/` instead of deploying or rotating secrets one worker at a time:
 
 ```bash
-scripts/deploy-workers.sh
-scripts/deploy-workers.sh dispatcher
-scripts/deploy-workers.sh linear-agent
-scripts/rotate-dispatch-secret.sh
-scripts/smoke-dispatch.sh
-scripts/debug-session.sh <session-id>
-scripts/debug-sandbox.sh <run-id> [turn]
+workers/scripts/deploy-workers.sh
+workers/scripts/deploy-workers.sh dispatcher
+workers/scripts/deploy-workers.sh linear-agent
+workers/scripts/rotate-dispatch-secret.sh
+workers/scripts/smoke-dispatch.sh
+workers/scripts/debug-session.sh <session-id>
+workers/scripts/debug-sandbox.sh <run-id> [turn]
 ```
 
-`scripts/smoke-dispatch.sh`, `scripts/debug-session.sh`, and
-`scripts/debug-sandbox.sh` need the `linear-agent` `ADMIN_TOKEN`. Export
+`workers/scripts/smoke-dispatch.sh`, `workers/scripts/debug-session.sh`, and
+`workers/scripts/debug-sandbox.sh` need the `linear-agent` `ADMIN_TOKEN`. Export
 `LINEAR_AGENT_ADMIN_TOKEN` or put the token in `.secrets/admin-token`.
 
 For a failed or stuck Worker-backed agent run, start with:
 
 ```bash
-scripts/debug-session.sh <session-id>
+workers/scripts/debug-session.sh <session-id>
 ```
 
 This returns the `linear-agent` session metadata, issue fields, config
@@ -124,7 +124,7 @@ normalized engine events. If the run is still active or failed with
 `run_terminal_timeout`, also run:
 
 ```bash
-scripts/debug-sandbox.sh <session-id> 1
+workers/scripts/debug-sandbox.sh <session-id> 1
 ```
 
 The sandbox debug command returns the derived dispatcher sandbox id,
