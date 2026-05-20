@@ -34,6 +34,6 @@ Secrets (`wrangler secret put`): `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`,
 
 ## Note
 
-This worker is **not** part of the `linear-agent` ↔ `sandbox-dispatcher` HMAC pair — it
-does not use `DISPATCH_HMAC_SECRET`. `workers/scripts/deploy-workers.sh` does not cover
-it; deploy with `wrangler deploy` from this directory.
+This worker is **not** part of the `linear-agent` ↔ `sandbox-dispatcher` HMAC pair
+(those Workers live in [`markoinla/linear-agent`](https://github.com/markoinla/linear-agent)
+and use `DISPATCH_HMAC_SECRET`). Deploy with `wrangler deploy` from this directory.

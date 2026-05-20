@@ -1,9 +1,0 @@
-# Copy this file to `.dev.vars` for local `wrangler dev`. Real values go
-# in production via `wrangler secret put`.
-
-LINEAR_CLIENT_ID=your-linear-oauth-app-client-id
-LINEAR_CLIENT_SECRET=your-linear-oauth-app-client-secret
-LINEAR_WEBHOOK_SECRET=your-linear-oauth-app-webhook-signing-secret
-
-# Must match the dispatcher worker's secret of the same name.
-DISPATCH_HMAC_SECRET=test-secret-do-not-use-in-prod

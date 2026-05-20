@@ -1,11 +1,8 @@
 # Symphony
 
-This repository contains two distinct stacks:
+This repository contains the **Elixir/Phoenix Symphony app** at the repo root (`lib/`, `dashboard/`, `config/`, `test/`, `mix.exs`, `WORKFLOW.md` files), plus the **`workers/oauth-proxy`** Cloudflare Worker (TypeScript) used for OAuth brokering. The Worker has its own `CLAUDE.md`; Elixir conventions (`mix`, `@spec`, Ecto, `WORKFLOW.md` front matter) do not apply there.
 
-1. **Elixir/Phoenix app** at the repo root (`lib/`, `dashboard/`, `config/`, `test/`, `mix.exs`, `WORKFLOW.md` files). These instructions apply to the Elixir app.
-2. **Cloudflare Workers** under `workers/linear-agent`, `workers/sandbox-dispatcher`, and `workers/oauth-proxy`. Each worker has its own `CLAUDE.md`; follow that file when working inside that worker. Root Elixir conventions (`mix`, `@spec`, Ecto, `WORKFLOW.md` front matter) do not apply there.
-
-`workers/linear-agent` is the in-progress replacement for the Elixir `Orchestrator`, `Tracker`, and `Linear.*` modules (migration SYM-386). New orchestration work should usually go there instead of the Elixir app.
+`linear-agent` and `sandbox-dispatcher` have moved to [`markoinla/linear-agent`](https://github.com/markoinla/linear-agent). The migration replaces the Elixir `Orchestrator`, `Tracker`, and `Linear.*` modules (SYM-386); new orchestration work belongs in that repo.
 
 ## Environment
 
@@ -30,7 +27,7 @@ This repository contains two distinct stacks:
 - `SymphonyElixir.Linear.*` contains the Linear GraphQL client, OAuth, webhooks, state transitions, labels, and comments.
 - `SymphonyElixir.Tracker` is the tracker abstraction with Linear and memory implementations.
 - `SymphonyElixir.Worker.*` supports remote SSH workers.
-- `SymphonyElixir.Cloudflare.DispatcherClient` calls the `workers/sandbox-dispatcher` Worker for sandboxed runs.
+- `SymphonyElixir.Cloudflare.DispatcherClient` calls the `sandbox-dispatcher` Worker ([`markoinla/linear-agent`](https://github.com/markoinla/linear-agent)) for sandboxed runs. Shared `DISPATCH_HMAC_SECRET`.
 
 `WORKFLOW.md` is the primary workflow config. Sibling root workflows include `ENRICHMENT.md`, `EPIC_SPLITTER.md`, `MENTION.md`, `MERGING.md`, `REVIEW.md`, and `TRIAGE.md`. Multiple paths or a directory may be passed with `--workflows <dir>`.
 
@@ -90,50 +87,14 @@ SYMPHONY_RUN_LIVE_E2E=1 mix test test/symphony_elixir/live_e2e_test.exs
 
 ## Cloudflare Workers Notes
 
-The TypeScript workers have their own instructions:
+`oauth-proxy` (the only Worker left in this repo) has its own instructions in
+`workers/oauth-proxy/CLAUDE.md`. It is deployed from its own directory and is
+unrelated to the `linear-agent` / `sandbox-dispatcher` HMAC pair.
 
-- `workers/linear-agent/CLAUDE.md`
-- `workers/sandbox-dispatcher/CLAUDE.md`
-- `workers/oauth-proxy/CLAUDE.md`
-
-For the `linear-agent` and `sandbox-dispatcher` HMAC pair, use the helper scripts under `workers/scripts/` instead of deploying or rotating secrets one worker at a time:
-
-```bash
-workers/scripts/deploy-workers.sh
-workers/scripts/deploy-workers.sh dispatcher
-workers/scripts/deploy-workers.sh linear-agent
-workers/scripts/rotate-dispatch-secret.sh
-workers/scripts/smoke-dispatch.sh
-workers/scripts/debug-session.sh <session-id>
-workers/scripts/debug-sandbox.sh <run-id> [turn]
-```
-
-`workers/scripts/smoke-dispatch.sh`, `workers/scripts/debug-session.sh`, and
-`workers/scripts/debug-sandbox.sh` need the `linear-agent` `ADMIN_TOKEN`. Export
-`LINEAR_AGENT_ADMIN_TOKEN` or put the token in `.secrets/admin-token`.
-
-For a failed or stuck Worker-backed agent run, start with:
-
-```bash
-workers/scripts/debug-session.sh <session-id>
-```
-
-This returns the `linear-agent` session metadata, issue fields, config
-snapshot, session-level error, stderr, dispatcher logs, and persisted
-normalized engine events. If the run is still active or failed with
-`run_terminal_timeout`, also run:
-
-```bash
-workers/scripts/debug-sandbox.sh <session-id> 1
-```
-
-The sandbox debug command returns the derived dispatcher sandbox id,
-process id, process metadata, and stdout/stderr tails when the
-sandbox/process still exists. Historical sessions may report no process
-or logs after cleanup; in that case use the persisted session events
-from `debug-session`.
-
-`oauth-proxy` is not part of that HMAC pair and is deployed from its own directory.
+For deploys, secret rotation, smoke checks, and session/sandbox debugging of
+the `linear-agent` and `sandbox-dispatcher` Workers, see the
+[`markoinla/linear-agent`](https://github.com/markoinla/linear-agent) repo
+(`workers/CLAUDE.md` and `workers/scripts/*`).
 
 ## Linear
 

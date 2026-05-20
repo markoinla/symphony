@@ -6,8 +6,9 @@ defmodule SymphonyElixir.Cloudflare.DispatcherClientTest do
   describe "sign/2" do
     test "matches the Worker's HMAC-SHA256 hex encoding (lowercase)" do
       # Cross-checked against the same body+secret hashed by the
-      # `computeSignature` helper in the sandbox-dispatcher Worker's
-      # `hmac.ts`. The Worker uses crypto.subtle.sign('HMAC', SHA-256)
+      # `computeSignature` helper in the sandbox-dispatcher Worker
+      # (see the `markoinla/linear-agent` repo). The Worker uses
+      # crypto.subtle.sign('HMAC', SHA-256)
       # and emits lowercase hex; this test pins our Erlang-side output
       # to the same bytes so the two halves of the system can talk to
       # each other.

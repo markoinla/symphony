@@ -2,12 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-> **Repository layout — two stacks in one repo.** This repo contains two distinct codebases:
+> **Repository layout.** This repo contains the Elixir/Phoenix Symphony orchestrator (`lib/`, `dashboard/`, `config/`, `test/`, `mix.exs`, the `WORKFLOW.md` family) plus the **`workers/oauth-proxy`** Cloudflare Worker (TypeScript) used for OAuth brokering.
 >
-> 1. **Elixir/Phoenix app** (repo root: `lib/`, `dashboard/`, `config/`, `test/`, `mix.exs`, the `WORKFLOW.md` family) — the original Symphony orchestrator. **This `CLAUDE.md` documents the Elixir app.**
-> 2. **Cloudflare Workers** (`workers/linear-agent`, `workers/sandbox-dispatcher`, `workers/oauth-proxy`) — TypeScript. `linear-agent` is the in-progress **replacement** for the Elixir `Orchestrator` + `Tracker` + `Linear.*` modules (migration SYM-386); new orchestration work belongs there, not in the Elixir app.
+> **`linear-agent` and `sandbox-dispatcher` have moved.** They now live in [`markoinla/linear-agent`](https://github.com/markoinla/linear-agent) — that repo owns their code, CI, ops scripts (`deploy-workers.sh`, `rotate-dispatch-secret.sh`, `smoke-dispatch.sh`, `debug-session.sh`, `debug-sandbox.sh`), and architecture/integration docs. The migration replaces the Elixir `Orchestrator` + `Tracker` + `Linear.*` modules (SYM-386); new orchestration work belongs there.
 >
-> Each worker directory has its own `CLAUDE.md` with its stack, commands, and conventions. **When working under `workers/`, follow that file — not this one.** The Elixir conventions below (mix, `@spec`, Ecto, `WORKFLOW.md` front matter) do **not** apply to the TypeScript workers.
+> `workers/oauth-proxy` has its own `CLAUDE.md`. **When working under `workers/oauth-proxy`, follow that file — not this one.** The Elixir conventions below (mix, `@spec`, Ecto, `WORKFLOW.md` front matter) do **not** apply to it.
 
 ## Project Overview
 
@@ -62,7 +61,7 @@ The core pipeline flows: **Orchestrator** → **AgentRunner** → **Workspace** 
 - `SymphonyElixir.Linear.*` — Linear GraphQL API client (polling, comments, state transitions, labels, OAuth, webhooks).
 - `SymphonyElixir.Tracker` — Abstract tracker interface with Linear and memory implementations.
 - `SymphonyElixir.Worker.*` — SSH worker support; workspaces can be local or executed on remote SSH hosts.
-- `SymphonyElixir.Cloudflare.DispatcherClient` — Talks to the `sandbox-dispatcher` Worker (see Cloudflare Workers ops below) for sandboxed run dispatch.
+- `SymphonyElixir.Cloudflare.DispatcherClient` — Talks to the `sandbox-dispatcher` Worker ([`markoinla/linear-agent`](https://github.com/markoinla/linear-agent)) for sandboxed run dispatch. Shared `DISPATCH_HMAC_SECRET`.
 
 **Workflow files:** `WORKFLOW.md` is the primary config, but Symphony also ships sibling workflows (`ENRICHMENT.md`, `EPIC_SPLITTER.md`, `MENTION.md`, `MERGING.md`, `REVIEW.md`, `TRIAGE.md`) at the repo root. Pass multiple paths or a directory via `--workflows <dir>` to run one orchestrator per workflow.
 
@@ -140,81 +139,37 @@ Logger metadata includes `workflow_name`, `issue_id`, `issue_identifier`, and `s
 
 ## Cloudflare Workers ops
 
-Two Workers under `workers/` share a `DISPATCH_HMAC_SECRET`:
-`sandbox-dispatcher` (verifies) and `linear-agent` (signs). They drift
-silently when `wrangler secret put` is run on one but not the other,
-or when a deploy that touches `wrangler.jsonc` resets the prod secret.
-Symptom: every Linear session 401s with `invalid_signature`.
+`linear-agent` + `sandbox-dispatcher` (and their deploy/smoke/rotate/debug
+scripts, integration docs, and failure-mode postmortem) live in
+[`markoinla/linear-agent`](https://github.com/markoinla/linear-agent).
+That repo owns prod deploys for both Workers — Symphony's GitHub Actions
+no longer deploys them.
 
-Always go through the helper scripts — they bake in `--env=""`, push
-to both Workers in one shot, and run a smoke gate after every deploy:
+What still lives in this repo is the **client side**:
 
-```bash
-workers/scripts/deploy-workers.sh                 # deploy both + smoke gate (use instead of `npm run deploy`)
-workers/scripts/deploy-workers.sh dispatcher      # just sandbox-dispatcher
-workers/scripts/deploy-workers.sh linear-agent    # just linear-agent
-workers/scripts/rotate-dispatch-secret.sh         # recover from a 401 storm (rotates + verifies)
-workers/scripts/smoke-dispatch.sh                 # standalone HMAC + SSE wire check
-workers/scripts/debug-session.sh <session-id>     # fetch linear-agent session row + event timeline
-workers/scripts/debug-sandbox.sh <run-id> [turn]  # inspect dispatcher sandbox/process/log tail
-```
+- `SymphonyElixir.Cloudflare.DispatcherClient` — HMAC-signed POST `/run`
+  caller; shares `DISPATCH_HMAC_SECRET` with the dispatcher Worker.
+- `mix symphony.baseline.edit` / `mix symphony.baseline.save` — engine
+  baseline editor that talks to the dispatcher over its public URL:
 
-The smoke check needs the linear-agent's `ADMIN_TOKEN`. Either
-`export LINEAR_AGENT_ADMIN_TOKEN=…` or write it to `.secrets/admin-token`
-(gitignored). Without it the smoke step skips with a warning rather
-than failing the deploy.
+  ```bash
+  export SYMPHONY_DISPATCHER_URL=https://sandbox.marko.la
+  export SYMPHONY_DISPATCHER_HMAC_SECRET=$(op item get twhncf7ryksvdjx424x74nbmiy --fields credential --reveal)
+  export DATABASE_URL=ecto://postgres:postgres@localhost/symphony_dev
 
-The debug scripts also use the same `ADMIN_TOKEN` source. Prefer them
-over direct `wrangler d1 execute` when debugging production runs:
+  mise exec -- mix symphony.baseline.edit --engine pi    # prints pty_url (browser, ~30 min TTL)
+  mise exec -- mix symphony.baseline.save --engine pi    # snapshots /home/symphony + destroys sandbox
+  ```
 
-```bash
-# Session-level view: issue, status, config snapshot, error, stderr,
-# dispatcher logs, and persisted normalized engine events.
-workers/scripts/debug-session.sh 1d32217a-3a90-4714-9def-63cbdbd6a270
+  The current baseline is restored into the edit sandbox first, so changes
+  are additive. `--version <tag>` on save is optional; existing tag is
+  preserved if omitted.
 
-# Dispatcher-level view: derived sandbox id, process id, process
-# metadata, and stdout/stderr tails if the sandbox/process still exists.
-workers/scripts/debug-sandbox.sh 1d32217a-3a90-4714-9def-63cbdbd6a270 1
-```
-
-Start with `debug-session` for any failed run. If the session is still
-running, stuck, or ended with `run_terminal_timeout`, immediately run
-`debug-sandbox` before cleanup/idle GC removes the process logs. A
-missing sandbox on an old failed session is expected; use the persisted
-session events to diagnose the historical run.
-
-Full failure-mode postmortem: `workers/docs/cloudflare_sandbox_integration.md:486-501`.
-
-### Editing an engine baseline snapshot
-
-All engines (`pi`, `claude`, `codex`) currently share one baseline snapshot — the `pi` row in D1 `engine_baselines`, which ships every CLI + login under `/home/symphony`. At dispatch time `workers/sandbox-dispatcher/src/baseline-alias.ts` aliases the requested engine to its baseline row; the engine adapter then picks which CLI to invoke. Edit that file to split engines onto their own snapshots. To edit interactively and resnapshot:
-
-```bash
-export SYMPHONY_DISPATCHER_URL=https://sandbox.marko.la
-export SYMPHONY_DISPATCHER_HMAC_SECRET=$(op item get twhncf7ryksvdjx424x74nbmiy --fields credential --reveal)
-export DATABASE_URL=ecto://postgres:postgres@localhost/symphony_dev
-
-mise exec -- mix symphony.baseline.edit --engine pi    # prints pty_url (browser, ~30 min TTL)
-# … make changes in the browser PTY (or via SSH, see below) …
-mise exec -- mix symphony.baseline.save --engine pi    # snapshots /home/symphony + destroys sandbox
-```
-
-The current baseline is restored into the edit sandbox first, so changes are additive. `--version <tag>` on save is optional; existing tag is preserved if omitted.
-
-### SSH into a running sandbox
-
-Alternative to the browser PTY when you want a normal shell, `scp`, etc. Works on any running sandbox (`baseline-edit-*` or `run-sym-*`).
-
-```bash
-cd workers/sandbox-dispatcher
-npx wrangler containers instances a03cbefb-2ff1-4d43-bc77-3afd96634d73 | grep <sandbox-name>
-npx wrangler containers ssh <instance-id>   # lands as root; snapshot at /home/symphony
-```
-
-Auth tunnels through Cloudflare account creds — no public port. Requirements:
-- ed25519 key only (Cloudflare doesn't accept RSA). The local key must be at `~/.ssh/id_ed25519` because `wrangler containers ssh` shells out to OpenSSH and **ignores ssh-agent**. Our dedicated key lives at `~/.ssh/symphony_sandbox_ed25519` symlinked from `~/.ssh/id_ed25519`.
-- `authorized_keys` is set on the container class in `workers/sandbox-dispatcher/wrangler.jsonc` (prod + `env.dev`) — same key authorizes every sandbox the dispatcher spins up.
-- Container instance must already be running. SSH does not wake idle containers. If you change `authorized_keys`, existing instances must be re-created (run `baseline.edit` again) to pick up the new key.
+For deploy scripts, secret rotation, sandbox SSH, the
+`DISPATCH_HMAC_SECRET` drift postmortem, and engine-baseline alias
+internals, see the
+[`linear-agent` repo's `workers/CLAUDE.md`](https://github.com/markoinla/linear-agent/blob/main/workers/CLAUDE.md)
+and `workers/docs/cloudflare_sandbox_integration.md`.
 
 ## Code Conventions
 
